@@ -150,14 +150,16 @@ function cellRGB(x, y) {
   return [r, g, b];
 }
 
-// A damaged block chips: small squares fly off in its current color
-function spawnChip(cx, cy, rgb) {
-  const css = 'rgb(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ')';
-  for (let n = 0; n < 3; n++) {
-    const a = Math.random() * Math.PI * 2;
-    const sp = 2 + Math.random() * 3.5; // cells/sec
-    S.particles.push({ x: cx, y: cy, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 2.5,
-                       life: 0.35 + Math.random() * 0.25, t: 0, dead: false,
+// Impact chips: 1-2 squares in the projectile's color, spraying forward
+// along the projectile's direction like debris from the impact.
+function spawnChip(cx, cy, css, vx, vy) {
+  const n = 1 + (Math.random() < 0.5 ? 1 : 0);
+  const baseA = Math.atan2(vy, vx);
+  for (let i = 0; i < n; i++) {
+    const a = baseA + (Math.random() - 0.5) * 1.1; // spread around impact direction
+    const sp = 3 + Math.random() * 3.5; // cells/sec
+    S.particles.push({ x: cx, y: cy, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+                       life: 0.3 + Math.random() * 0.2, t: 0, dead: false,
                        color: css, size: 5 + Math.random() * 4 });
     S.particlesSpawned++;
   }
@@ -293,7 +295,6 @@ function stepProjectile(p, dt) {
     const idx = cy * cfg.cols + cx;
     const cell = S.cells[idx];
     if (cell === WHITE) {
-      const rgb = cellRGB(cx, cy); // chip flies off in the block's current color
       S.hp[idx]--;
       S.hitBy[idx] = p.color;
       S.popT[idx] = 0; // start the hit-pop: instant 2x scale + full projectile color
@@ -302,7 +303,7 @@ function stepProjectile(p, dt) {
       const plen = Math.hypot(pdx, pdy) || 1;
       S.popDX[idx] = pdx / plen;
       S.popDY[idx] = pdy / plen;
-      spawnChip(cx + 0.5, cy + 0.5, rgb);
+      spawnChip(cx + 0.5, cy + 0.5, CELL_COLORS[p.color], p.vx, p.vy);
       p.dead = true;
       if (S.hp[idx] <= 0) {
         S.cells[idx] = p.color;
