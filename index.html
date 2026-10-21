@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Territory Incremental Survivors — prototype</title>
+<style>
+  :root {
+    --bg: #141824;
+    --panel: #1e2433;
+    --text: #dfe5f2;
+    --muted: #8b93a7;
+    --blue: #3b82f6;
+    --red: #ef4444;
+    --accent: #22d3ee;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    min-height: 100vh;
+  }
+  /* Vampire-survivors-esque XP bar across the top */
+  #xpbar {
+    position: relative;
+    height: 30px;
+    background: #0b0e16;
+    border-bottom: 1px solid #2a3145;
+    overflow: hidden;
+  }
+  #xpfill {
+    position: absolute; inset: 0;
+    width: 0%;
+    background: linear-gradient(180deg, #5aa2ff, #2f6fe4);
+    transition: width 120ms linear;
+  }
+  #xplabel {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 700; letter-spacing: 0.08em;
+    color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.7);
+    pointer-events: none;
+  }
+  #layout {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 16px;
+  }
+  #game {
+    border: 2px solid #2a3145;
+    border-radius: 8px;
+    background: #0b0e16;
+    max-width: calc(100vw - 340px);
+    height: auto;
+    image-rendering: pixelated;
+  }
+  #debug {
+    width: 290px;
+    flex: 0 0 290px;
+    background: var(--panel);
+    border: 1px solid #2a3145;
+    border-radius: 8px;
+    padding: 14px 14px 16px;
+  }
+  #debug h2 {
+    margin: 0 0 10px;
+    font-size: 15px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  #debug label {
+    display: block;
+    font-size: 12px;
+    color: var(--muted);
+    margin: 8px 0 2px;
+  }
+  #debug input {
+    width: 100%;
+    background: #12172a;
+    border: 1px solid #2a3145;
+    border-radius: 5px;
+    color: var(--text);
+    font-size: 13px;
+    padding: 6px 8px;
+  }
+  #debug input:focus { outline: 1px solid var(--accent); }
+  #d-restart {
+    width: 100%;
+    margin-top: 12px;
+    padding: 8px;
+    background: #2f6fe4;
+    border: none;
+    border-radius: 6px;
+    color: #fff;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  #d-restart:hover { background: #3b82f6; }
+  #d-stats {
+    margin-top: 12px;
+    font-size: 12px;
+    line-height: 1.7;
+    color: var(--muted);
+    border-top: 1px solid #2a3145;
+    padding-top: 10px;
+  }
+  #d-stats b { color: var(--text); }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; }
+  /* Level-up overlay */
+  #levelup {
+    position: fixed; inset: 0;
+    background: rgba(5, 8, 15, 0.78);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 10;
+  }
+  #levelup.hidden { display: none; }
+  .cards { text-align: center; }
+  .cards h2 {
+    color: #ffd75e;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin: 0 0 18px;
+    text-shadow: 0 2px 12px rgba(255, 215, 94, .35);
+  }
+  .cardrow { display: flex; gap: 16px; justify-content: center; }
+  .card {
+    width: 150px; height: 190px;
+    background: linear-gradient(180deg, #27314d, #1a2138);
+    border: 2px solid var(--blue);
+    border-radius: 10px;
+    color: var(--text);
+    cursor: pointer;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 10px;
+    font-size: 14px;
+    transition: transform 120ms ease, box-shadow 120ms ease;
+  }
+  .card:hover { transform: translateY(-6px); box-shadow: 0 10px 30px rgba(59,130,246,.35); }
+  .card b { font-size: 30px; color: #7db4ff; }
+  .card span { color: var(--muted); font-size: 12px; letter-spacing: .05em; text-transform: uppercase; }
+</style>
+</head>
+<body>
+
+<div id="xpbar">
+  <div id="xpfill"></div>
+  <div id="xplabel">LV 1</div>
+</div>
+
+<div id="layout">
+  <canvas id="game"></canvas>
+
+  <aside id="debug">
+    <h2>Debug</h2>
+    <label>Grid width (cells)
+      <input id="d-cols" type="number" min="8" max="120" step="1" value="48">
+    </label>
+    <label>Grid height (cells)
+      <input id="d-rows" type="number" min="8" max="120" step="1" value="36">
+    </label>
+    <label>Projectile speed (px/s)
+      <input id="d-speed" type="number" min="40" max="2000" step="10" value="260">
+    </label>
+    <label>Fire frequency (shots/s)
+      <input id="d-freq" type="number" min="0.1" max="20" step="0.1" value="1">
+    </label>
+    <label>Cannon turn arc (degrees, max 360)
+      <input id="d-arc" type="number" min="0" max="360" step="5" value="120">
+    </label>
+    <label>Empty cell chance (0–0.95)
+      <input id="d-empty" type="number" min="0" max="0.95" step="0.05" value="0.15">
+    </label>
+    <label>Level thresholds (XP per level, comma-separated)
+      <input id="d-thresh" type="text" value="15,40,80,140,220,320,450,600,800,1050">
+    </label>
+    <button id="d-restart">Restart game</button>
+    <div id="d-stats"></div>
+  </aside>
+</div>
+
+<div id="levelup" class="hidden">
+  <div class="cards">
+    <h2>Level up! Choose an upgrade</h2>
+    <div class="cardrow">
+      <button class="card" data-mult="1.10"><b>+10%</b><span>Fire rate</span></button>
+      <button class="card" data-mult="1.25"><b>+25%</b><span>Fire rate</span></button>
+      <button class="card" data-mult="1.50"><b>+50%</b><span>Fire rate</span></button>
+    </div>
+  </div>
+</div>
+
+<script src="game.js"></script>
+</body>
+</html>
