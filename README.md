@@ -3,8 +3,9 @@
 Prototype: **Color Smash**-style territory painting meets **Vampire Survivors**-style
 incremental leveling. A blue player cannon and a red enemy cannon sweep their aim
 arcs and fire projectiles that paint white cells their color (grey empty cells are
-passed through). Every cell painted blue earns 1 XP; leveling up offers a choice of
-3 fire-rate upgrade cards.
+passed through). Painting a cell blue can drop a **coin** — tap it and it zips up
+to the coin counter in the top-left with a satisfying pop, granting 1 XP (still
+called XP for now). Leveling up offers a choice of 3 fire-rate upgrade cards.
 
 ## Run it
 
@@ -22,6 +23,7 @@ restarts the game:
 - Fire frequency (shots/s, applies to both cannons; level-up cards multiply the player's)
 - Cannon turn arc (degrees, max 360 = continuous spin)
 - Empty-cell chance (grey cells that projectiles pass through)
+- Coin drop chance (probability per blue conversion)
 - Level thresholds (XP per level, comma-separated)
 
 The panel also shows live stats: blue/red/white/empty cell counts, effective fire

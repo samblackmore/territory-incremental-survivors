@@ -9,6 +9,19 @@ const CELL_COLORS = ['#eef1f6', '#3d4454', '#3b82f6', '#ef4444'];
 
 const CELL_PX = 16;                 // render size of one cell
 const TURN_RATE = (Math.PI * 2) / 3; // cannon sweep speed: 120 deg/s
+const COIN_FLY_DUR = 0.45;           // seconds for a tapped coin to zip to the corner
+const CHIP_CX = 41, CHIP_CY = 19;    // coin-counter chip center, in canvas px
+
+// Rounded-rect path helper (not all targets have ctx.roundRect)
+function rr(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
 
 // ---- DOM ----
 const canvas = document.getElementById('game');
@@ -24,6 +37,7 @@ const inSpeed  = document.getElementById('d-speed');
 const inFreq   = document.getElementById('d-freq');
 const inArc    = document.getElementById('d-arc');
 const inEmpty  = document.getElementById('d-empty');
+const inCoin   = document.getElementById('d-coin');
 const inThresh = document.getElementById('d-thresh');
 
 // ---- Config (from debug panel; any change restarts the game) ----
@@ -48,12 +62,14 @@ function readDebug() {
     freq: clampNum(inFreq.value, 0.1, 20, 1),            // shots/s (both cannons)
     arc: clampNum(inArc.value, 0, 360, 120),             // degrees
     emptyChance: clampNum(inEmpty.value, 0, 0.95, 0.15),
+    coinChance: clampNum(inCoin.value, 0, 1, 0.3),          // coin drop per blue conversion
     thresholds: thresholds.length ? thresholds : [15],
   };
   // reflect clamped values back into the panel
   inCols.value = cols; inRows.value = rows;
   inSpeed.value = cfg.projSpeed; inFreq.value = cfg.freq;
   inArc.value = cfg.arc; inEmpty.value = cfg.emptyChance;
+  inCoin.value = cfg.coinChance;
   inThresh.value = cfg.thresholds.join(',');
 }
 
@@ -83,7 +99,8 @@ function newGame() {
   const n = cfg.cols * cfg.rows;
   const cells = new Uint8Array(n); // all WHITE
   S = { cells, projs: [], cannons: [], xp: 0, level: 1, pending: 0,
-        freqMult: 1, paused: false, frame: 0 };
+        freqMult: 1, paused: false, frame: 0,
+        coins: [], floaters: [], coinsCollected: 0, chipPulse: 0, time: 0 };
 
   // Scatter empty (grey) cells
   for (let i = 0; i < n; i++) {
@@ -132,7 +149,14 @@ function stepProjectile(p, dt) {
     if (cell === WHITE) {
       S.cells[idx] = p.color;
       p.dead = true;
-      if (p.color === BLUE) { S.xp++; checkLevel(); }
+      if (p.color === BLUE && Math.random() < cfg.coinChance) {
+        S.coins.push({ x: cx + 0.5, y: cy + 0.5, state: 'idle',
+                       phase: Math.random() * 6.283, sx: 0, sy: 0, t: 0, dead: false });
+        if (S.coins.length > 800) { // safety valve: drop oldest idle coin
+          const i = S.coins.findIndex(c => c.state === 'idle');
+          if (i >= 0) S.coins.splice(i, 1);
+        }
+      }
       return;
     }
     if (cell === EMPTY || cell === p.color) continue; // pass through grey + own color
@@ -189,6 +213,30 @@ function update(dt) {
   for (const p of S.projs) stepProjectile(p, dt);
   if (S.projs.length > 4000) S.projs.splice(0, S.projs.length - 4000); // safety valve
   S.projs = S.projs.filter(p => !p.dead);
+
+  // Tapped coins zip to the top-left chip (accelerating = satisfying)
+  S.time += dt;
+  const TX = CHIP_CX / CELL_PX, TY = CHIP_CY / CELL_PX;
+  for (const c of S.coins) {
+    if (c.state !== 'fly') continue;
+    c.t += dt;
+    const k = Math.min(1, c.t / COIN_FLY_DUR);
+    const e = k * k;
+    c.x = c.sx + (TX - c.sx) * e;
+    c.y = c.sy + (TY - c.sy) * e;
+    if (k >= 1) {
+      c.dead = true;
+      S.xp++;
+      S.coinsCollected++;
+      S.chipPulse = 1; // the "blurp": chip pops
+      S.floaters.push({ x: CHIP_CX + 30, y: CHIP_CY, t: 0 });
+      checkLevel();
+    }
+  }
+  S.coins = S.coins.filter(c => !c.dead);
+  for (const f of S.floaters) f.t += dt;
+  S.floaters = S.floaters.filter(f => f.t < 0.7);
+  S.chipPulse = Math.max(0, S.chipPulse - dt * 3);
 }
 
 // ---- Render ----
@@ -212,6 +260,20 @@ function render() {
     ctx.strokeStyle = 'rgba(255,255,255,.85)';
     ctx.stroke();
   }
+  // Coins (idle ones pulse gently so they beg to be tapped)
+  for (const c of S.coins) {
+    const px = c.x * CELL_PX, py = c.y * CELL_PX;
+    let r = 5.5;
+    if (c.state === 'idle') r += Math.sin(S.time * 4 + c.phase) * 1.2;
+    else r *= 1 - 0.4 * Math.min(1, c.t / COIN_FLY_DUR);
+    ctx.beginPath(); ctx.arc(px, py, r + 2.5, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255, 200, 60, 0.22)'; ctx.fill(); // glow
+    ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2);
+    ctx.fillStyle = '#f5b301'; ctx.fill();
+    ctx.lineWidth = 1.5; ctx.strokeStyle = '#8a5b00'; ctx.stroke();
+    ctx.beginPath(); ctx.arc(px - r * 0.3, py - r * 0.3, r * 0.28, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fill(); // shine
+  }
   // Cannons (rectangles, like the spec)
   for (const c of S.cannons) {
     ctx.save();
@@ -225,6 +287,36 @@ function render() {
     ctx.rect(-4, -6, 26, 12); // the cannon rectangle, pointing along aim
     ctx.fill(); ctx.stroke();
     ctx.restore();
+  }
+  // Coin-counter chip, top-left: the zip target. Pops on collect.
+  const pulse = S.chipPulse;
+  const chw = 76, chh = 26;
+  ctx.save();
+  ctx.translate(CHIP_CX, CHIP_CY);
+  const cs = 1 + 0.3 * pulse;
+  ctx.scale(cs, cs);
+  ctx.translate(-CHIP_CX, -CHIP_CY);
+  ctx.fillStyle = 'rgba(10, 13, 22, 0.85)';
+  rr(CHIP_CX - chw / 2, CHIP_CY - chh / 2, chw, chh, 8); ctx.fill();
+  ctx.lineWidth = 1.5; ctx.strokeStyle = '#2a3145';
+  rr(CHIP_CX - chw / 2, CHIP_CY - chh / 2, chw, chh, 8); ctx.stroke();
+  ctx.beginPath(); ctx.arc(CHIP_CX - chw / 2 + 14, CHIP_CY, 7, 0, Math.PI * 2);
+  ctx.fillStyle = '#f5b301'; ctx.fill();
+  ctx.lineWidth = 1.5; ctx.strokeStyle = '#8a5b00'; ctx.stroke();
+  ctx.fillStyle = '#dfe5f2';
+  ctx.font = 'bold 13px system-ui, sans-serif';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('× ' + S.coinsCollected, CHIP_CX - chw / 2 + 26, CHIP_CY + 1);
+  ctx.restore();
+  // "+1" floaters
+  for (const f of S.floaters) {
+    const k = f.t / 0.7;
+    ctx.globalAlpha = 1 - k;
+    ctx.fillStyle = '#ffd75e';
+    ctx.font = 'bold 14px system-ui, sans-serif';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('+1', f.x, f.y - k * 26);
+    ctx.globalAlpha = 1;
   }
 }
 
@@ -260,7 +352,8 @@ function updateHud() {
     `<div><span class="swatch" style="background:#eef1f6"></span>White cells: <b>${white}</b></div>` +
     `<div><span class="swatch" style="background:#3d4454"></span>Empty cells: <b>${empty}</b></div>` +
     `<div>Player fire rate: <b>${effFreq}/s</b> (×${S.freqMult.toFixed(2)})</div>` +
-    `<div>Projectiles alive: <b>${S.projs.length}</b></div>`;
+    `<div>Projectiles alive: <b>${S.projs.length}</b></div>` +
+    `<div>Coins: <b>${S.coins.length}</b> on field · <b>${S.coinsCollected}</b> collected</div>`;
 }
 
 // ---- Main loop ----
@@ -276,10 +369,26 @@ function frame(now) {
 }
 
 // ---- Debug wiring: any change restarts the game ----
-[inCols, inRows, inSpeed, inFreq, inArc, inEmpty, inThresh].forEach(el => {
+[inCols, inRows, inSpeed, inFreq, inArc, inEmpty, inCoin, inThresh].forEach(el => {
   el.addEventListener('change', newGame);
 });
 document.getElementById('d-restart').addEventListener('click', newGame);
+
+// ---- Coin tapping: topmost idle coin within tap radius starts its flight ----
+canvas.addEventListener('pointerdown', (e) => {
+  const r = canvas.getBoundingClientRect();
+  const cx = (e.clientX - r.left) * (canvas.width / r.width) / CELL_PX;
+  const cy = (e.clientY - r.top) * (canvas.height / r.height) / CELL_PX;
+  for (let i = S.coins.length - 1; i >= 0; i--) {
+    const c = S.coins[i];
+    if (c.state !== 'idle') continue;
+    const dx = c.x - cx, dy = c.y - cy;
+    if (dx * dx + dy * dy < 0.81) { // 0.9-cell tap radius
+      c.state = 'fly'; c.sx = c.x; c.sy = c.y; c.t = 0;
+      break;
+    }
+  }
+});
 
 // ---- Mobile: collapsible debug panel (button only visible under 720px) ----
 const debugToggle = document.getElementById('debug-toggle');
