@@ -36,9 +36,112 @@ const inRows   = document.getElementById('d-rows');
 const inSpeed  = document.getElementById('d-speed');
 const inFreq   = document.getElementById('d-freq');
 const inArc    = document.getElementById('d-arc');
-const inEmpty  = document.getElementById('d-empty');
+const inCave   = document.getElementById('d-cave');
+const inSeed   = document.getElementById('d-seed');
 const inCoin   = document.getElementById('d-coin');
 const inThresh = document.getElementById('d-thresh');
+
+// ---- Seeded RNG, smooth value noise (Perlin-style), cave automata ----
+function mulberry32(a) {
+  return function() {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function makeNoise2D(rng) {
+  const p = Array.from({ length: 256 }, (_, i) => i);
+  for (let i = 255; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [p[i], p[j]] = [p[j], p[i]];
+  }
+  const perm = new Uint8Array(512);
+  for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
+  const fade = t => t * t * (3 - 2 * t);
+  const val = (ix, iy) => perm[(perm[ix & 255] + (iy & 255)) & 511] / 255;
+  function noise(x, y) {
+    const X = Math.floor(x), Y = Math.floor(y);
+    const xf = x - X, yf = y - Y;
+    const u = fade(xf), v = fade(yf);
+    const a = val(X, Y), b = val(X + 1, Y), c = val(X, Y + 1), d = val(X + 1, Y + 1);
+    return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+  }
+  return (x, y) => { // 3-octave fbm, normalized to ~[0,1]
+    let v = 0, amp = 0.5, f = 1, tot = 0;
+    for (let o = 0; o < 3; o++) { v += noise(x * f, y * f) * amp; tot += amp; amp *= 0.5; f *= 2.03; }
+    return v / tot;
+  };
+}
+
+// Cellular-automata caves: blobby voids instead of per-cell speckle
+function genCaves(cols, rows, fill, rng) {
+  let cur = new Uint8Array(cols * rows);
+  for (let i = 0; i < cur.length; i++) cur[i] = rng() < fill ? 1 : 0;
+  for (let it = 0; it < 5; it++) {
+    const nxt = new Uint8Array(cols * rows);
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        let n = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (!dx && !dy) continue;
+            const nx = x + dx, ny = y + dy;
+            if (nx >= 0 && ny >= 0 && nx < cols && ny < rows && cur[ny * cols + nx]) n++;
+          }
+        }
+        const was = cur[y * cols + x] === 1;
+        nxt[y * cols + x] = (was ? n >= 4 : n >= 5) ? 1 : 0;
+      }
+    }
+    cur = nxt;
+  }
+  return cur;
+}
+
+// ---- Block colors: grey gradient (weak -> strong), tinted toward damage ----
+const GREY_LIGHT = [238, 241, 246]; // ~3 HP
+const GREY_DARK = [88, 96, 114];    // ~10 HP
+const GREYS = [];
+for (let m = 3; m <= 10; m++) {
+  const t = (m - 3) / 7;
+  GREYS[m] = [0, 1, 2].map(j => Math.round(GREY_LIGHT[j] + (GREY_DARK[j] - GREY_LIGHT[j]) * t));
+}
+const BLUE_RGB = [59, 130, 246];
+const RED_RGB = [239, 68, 68];
+const CAVE_CSS = '#222839';
+const CAVE_RGB = [34, 40, 57];
+
+function cellRGB(x, y) {
+  const i = y * cfg.cols + x;
+  const st = S.cells[i];
+  if (st === BLUE) return BLUE_RGB;
+  if (st === RED) return RED_RGB;
+  if (st === EMPTY) return CAVE_RGB;
+  const max = S.maxhp[i] || 3, hpv = S.hp[i];
+  const base = GREYS[max];
+  if (hpv >= max) return base;
+  const ac = S.hitBy[i] === RED ? RED_RGB : BLUE_RGB;
+  const k = (1 - hpv / max) * 0.9;
+  return [Math.round(base[0] + (ac[0] - base[0]) * k),
+          Math.round(base[1] + (ac[1] - base[1]) * k),
+          Math.round(base[2] + (ac[2] - base[2]) * k)];
+}
+
+// A damaged block chips: small squares fly off in its current color
+function spawnChip(cx, cy, rgb) {
+  const css = 'rgb(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ')';
+  for (let n = 0; n < 3; n++) {
+    const a = Math.random() * Math.PI * 2;
+    const sp = 2 + Math.random() * 3.5; // cells/sec
+    S.particles.push({ x: cx, y: cy, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 2.5,
+                       life: 0.35 + Math.random() * 0.25, t: 0, dead: false,
+                       color: css, size: 2.5 + Math.random() * 2 });
+    S.particlesSpawned++;
+  }
+  if (S.particles.length > 600) S.particles.splice(0, S.particles.length - 600);
+}
 
 // ---- Config (from debug panel; any change restarts the game) ----
 let cfg = {};
@@ -61,14 +164,14 @@ function readDebug() {
     projSpeed: clampNum(inSpeed.value, 40, 2000, 260),   // px/s
     freq: clampNum(inFreq.value, 0.1, 20, 1),            // shots/s (both cannons)
     arc: clampNum(inArc.value, 0, 360, 120),             // degrees
-    emptyChance: clampNum(inEmpty.value, 0, 0.95, 0.15),
+    caveChance: clampNum(inCave.value, 0, 0.95, 0.38),      // CA cave fill
     coinChance: clampNum(inCoin.value, 0, 1, 0.3),          // coin drop per blue conversion
     thresholds: thresholds.length ? thresholds : [15],
   };
   // reflect clamped values back into the panel
   inCols.value = cols; inRows.value = rows;
   inSpeed.value = cfg.projSpeed; inFreq.value = cfg.freq;
-  inArc.value = cfg.arc; inEmpty.value = cfg.emptyChance;
+  inArc.value = cfg.arc; inCave.value = cfg.caveChance;
   inCoin.value = cfg.coinChance;
   inThresh.value = cfg.thresholds.join(',');
 }
@@ -88,7 +191,9 @@ function paintBlob(cx, cy, color) {
     for (let dx = -1; dx <= 1; dx++) {
       const x = cx + dx, y = cy + dy;
       if (x >= 0 && y >= 0 && x < cfg.cols && y < cfg.rows) {
-        S.cells[y * cfg.cols + x] = color;
+        const i = y * cfg.cols + x;
+        S.cells[i] = color;
+        S.maxhp[i] = 10; S.hp[i] = 10; S.hitBy[i] = 0;
       }
     }
   }
@@ -96,15 +201,32 @@ function paintBlob(cx, cy, color) {
 
 function newGame() {
   readDebug();
-  const n = cfg.cols * cfg.rows;
-  const cells = new Uint8Array(n); // all WHITE
-  S = { cells, projs: [], cannons: [], xp: 0, level: 1, pending: 0,
-        freqMult: 1, paused: false, frame: 0,
-        coins: [], floaters: [], coinsCollected: 0, chipPulse: 0, time: 0 };
+  const seedStr = inSeed.value.trim();
+  const seed = seedStr === '' ? (Math.random() * 1e9) | 0 : parseInt(seedStr, 10) || 0;
+  const rng = mulberry32(seed);
 
-  // Scatter empty (grey) cells
-  for (let i = 0; i < n; i++) {
-    if (Math.random() < cfg.emptyChance) cells[i] = EMPTY;
+  const n = cfg.cols * cfg.rows;
+  const cells = new Uint8Array(n);
+  const hp = new Uint8Array(n);
+  const maxhp = new Uint8Array(n);
+  const hitBy = new Uint8Array(n);
+  S = { cells, hp, maxhp, hitBy, projs: [], cannons: [], xp: 0, level: 1, pending: 0,
+        freqMult: 1, paused: false, frame: 0, seed,
+        coins: [], floaters: [], coinsCollected: 0, chipPulse: 0, time: 0,
+        particles: [], particlesSpawned: 0 };
+
+  // Caves first (cellular-automata blobs), then HP from a smooth noise gradient:
+  // white ~3 hits ... dark grey ~10 hits
+  const cave = genCaves(cfg.cols, cfg.rows, cfg.caveChance, rng);
+  const noise = makeNoise2D(rng);
+  for (let y = 0; y < cfg.rows; y++) {
+    for (let x = 0; x < cfg.cols; x++) {
+      const i = y * cfg.cols + x;
+      if (cave[i]) { cells[i] = EMPTY; continue; }
+      cells[i] = WHITE;
+      const m = 3 + Math.round(noise((x / cfg.cols) * 3.5, (y / cfg.rows) * 3.5) * 7);
+      maxhp[i] = m; hp[i] = m;
+    }
   }
 
   // Player cannon (blue) near bottom-left, enemy (red) near top-right
@@ -147,14 +269,20 @@ function stepProjectile(p, dt) {
     const idx = cy * cfg.cols + cx;
     const cell = S.cells[idx];
     if (cell === WHITE) {
-      S.cells[idx] = p.color;
+      const rgb = cellRGB(cx, cy); // chip flies off in the block's current color
+      S.hp[idx]--;
+      S.hitBy[idx] = p.color;
+      spawnChip(cx + 0.5, cy + 0.5, rgb);
       p.dead = true;
-      if (p.color === BLUE && Math.random() < cfg.coinChance) {
-        S.coins.push({ x: cx + 0.5, y: cy + 0.5, state: 'idle',
-                       phase: Math.random() * 6.283, sx: 0, sy: 0, t: 0, dead: false });
-        if (S.coins.length > 800) { // safety valve: drop oldest idle coin
-          const i = S.coins.findIndex(c => c.state === 'idle');
-          if (i >= 0) S.coins.splice(i, 1);
+      if (S.hp[idx] <= 0) {
+        S.cells[idx] = p.color;
+        if (p.color === BLUE && Math.random() < cfg.coinChance) {
+          S.coins.push({ x: cx + 0.5, y: cy + 0.5, state: 'idle',
+                         phase: Math.random() * 6.283, sx: 0, sy: 0, t: 0, dead: false });
+          if (S.coins.length > 800) { // safety valve: drop oldest idle coin
+            const i = S.coins.findIndex(c => c.state === 'idle');
+            if (i >= 0) S.coins.splice(i, 1);
+          }
         }
       }
       return;
@@ -237,6 +365,16 @@ function update(dt) {
   for (const f of S.floaters) f.t += dt;
   S.floaters = S.floaters.filter(f => f.t < 0.7);
   S.chipPulse = Math.max(0, S.chipPulse - dt * 3);
+
+  // Chip particles: fly, gravity, fade
+  for (const pt of S.particles) {
+    pt.t += dt;
+    pt.x += pt.vx * dt;
+    pt.y += pt.vy * dt;
+    pt.vy += 9 * dt;
+    if (pt.t >= pt.life) pt.dead = true;
+  }
+  S.particles = S.particles.filter(p => !p.dead);
 }
 
 // ---- Render ----
@@ -246,7 +384,14 @@ function render() {
   const w = cfg.cols, h = cfg.rows;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      ctx.fillStyle = CELL_COLORS[S.cells[y * w + x]];
+      const st = S.cells[y * w + x];
+      if (st === BLUE) ctx.fillStyle = CELL_COLORS[BLUE];
+      else if (st === RED) ctx.fillStyle = CELL_COLORS[RED];
+      else if (st === EMPTY) ctx.fillStyle = CAVE_CSS;
+      else {
+        const c = cellRGB(x, y);
+        ctx.fillStyle = 'rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')';
+      }
       ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX);
     }
   }
@@ -273,6 +418,14 @@ function render() {
     ctx.lineWidth = 1.5; ctx.strokeStyle = '#8a5b00'; ctx.stroke();
     ctx.beginPath(); ctx.arc(px - r * 0.3, py - r * 0.3, r * 0.28, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fill(); // shine
+  }
+  // Chip particles
+  for (const pt of S.particles) {
+    ctx.globalAlpha = Math.max(0, 1 - pt.t / pt.life);
+    ctx.fillStyle = pt.color;
+    const s = pt.size;
+    ctx.fillRect(pt.x * CELL_PX - s / 2, pt.y * CELL_PX - s / 2, s, s);
+    ctx.globalAlpha = 1;
   }
   // Cannons (rectangles, like the spec)
   for (const c of S.cannons) {
@@ -350,7 +503,8 @@ function updateHud() {
     `<div><span class="swatch" style="background:#3b82f6"></span>Blue cells: <b>${blue}</b></div>` +
     `<div><span class="swatch" style="background:#ef4444"></span>Red cells: <b>${red}</b></div>` +
     `<div><span class="swatch" style="background:#eef1f6"></span>White cells: <b>${white}</b></div>` +
-    `<div><span class="swatch" style="background:#3d4454"></span>Empty cells: <b>${empty}</b></div>` +
+    `<div><span class="swatch" style="background:#222839"></span>Cave cells: <b>${empty}</b></div>` +
+    `<div>Map seed: <b>${S.seed}</b></div>` +
     `<div>Player fire rate: <b>${effFreq}/s</b> (×${S.freqMult.toFixed(2)})</div>` +
     `<div>Projectiles alive: <b>${S.projs.length}</b></div>` +
     `<div>Coins: <b>${S.coins.length}</b> on field · <b>${S.coinsCollected}</b> collected</div>`;
@@ -369,7 +523,7 @@ function frame(now) {
 }
 
 // ---- Debug wiring: any change restarts the game ----
-[inCols, inRows, inSpeed, inFreq, inArc, inEmpty, inCoin, inThresh].forEach(el => {
+[inCols, inRows, inSpeed, inFreq, inArc, inCave, inCoin, inSeed, inThresh].forEach(el => {
   el.addEventListener('change', newGame);
 });
 document.getElementById('d-restart').addEventListener('click', newGame);
