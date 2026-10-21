@@ -13,6 +13,9 @@ const COIN_FLY_DUR = 0.45;           // seconds for a tapped coin to zip to the 
 const POP_HOLD = 0.05;               // big square holds this long: the hit reads as instant
 const POP_DUR = 0.22;                // ...then scale 2x -> 1x lerps down over this long
 const POP_PUSH = 0.4;                // knockback offset at full pop, in cells
+const RIPPLE_AMP = 0.35;             // neighbor shockwave intensity vs a direct hit
+const RING_DUR = 0.3;                // conversion shockwave ring lifetime (s)
+const TRAIL_T = 0.04;                // projectile tracer trail length (s)
 const CHIP_CX = 41, CHIP_CY = 19;    // coin-counter chip center, in canvas px
 
 // Rounded-rect path helper (not all targets have ctx.roundRect)
@@ -116,13 +119,14 @@ const RED_RGB = [239, 68, 68];
 const CAVE_CSS = '#222839';
 const CAVE_RGB = [34, 40, 57];
 
-// Hit-pop envelope: full 1 during the hold (instant big square), then lerp to 0
+// Hit-pop envelope: full amp during the hold (instant big square), then lerp to 0
 function popFactor(i) {
   const t = S.popT[i];
   if (t < 0) return 0;
-  if (t < POP_HOLD) return 1;
+  const amp = S.popAmp[i];
+  if (t < POP_HOLD) return amp;
   const k = 1 - (t - POP_HOLD) / POP_DUR;
-  return k > 0 ? k : 0;
+  return k > 0 ? amp * k : 0;
 }
 
 function cellRGB(x, y) {
@@ -142,12 +146,28 @@ function cellRGB(x, y) {
     b = Math.round(b + (ac[2] - b) * k);
   }
   const f = popFactor(i);
-  if (f > 0) { // hit flash: full projectile color, lerping back with the scale
-    r = Math.round(r + (ac[0] - r) * f);
-    g = Math.round(g + (ac[1] - g) * f);
-    b = Math.round(b + (ac[2] - b) * f);
+  if (f > 0) { // hit flash in the attacker's color, lerping back with the scale
+    const fc = S.popCol[i] === RED ? RED_RGB : BLUE_RGB;
+    r = Math.round(r + (fc[0] - r) * f);
+    g = Math.round(g + (fc[1] - g) * f);
+    b = Math.round(b + (fc[2] - b) * f);
   }
   return [r, g, b];
+}
+
+// Conversion burst: debris in every direction + an expanding shockwave ring
+function spawnBurst(cx, cy, css) {
+  for (let i = 0; i < 6; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const sp = 4 + Math.random() * 4;
+    S.particles.push({ x: cx, y: cy, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+                       life: 0.4 + Math.random() * 0.25, t: 0, dead: false,
+                       color: css, size: 4 + Math.random() * 3 });
+    S.particlesSpawned++;
+  }
+  S.rings.push({ x: cx, y: cy, t: 0, css, dead: false });
+  if (S.particles.length > 600) S.particles.splice(0, S.particles.length - 600);
+  if (S.rings.length > 60) S.rings.splice(0, S.rings.length - 60);
 }
 
 // Impact chips: 1-2 squares in the projectile's color, spraying forward
@@ -234,12 +254,14 @@ function newGame() {
   const maxhp = new Uint8Array(n);
   const hitBy = new Uint8Array(n);
   const popT = new Float32Array(n).fill(-1); // time since hit (-1 = idle); drives the pop envelope
+  const popAmp = new Float32Array(n); // pop intensity: 1 = direct hit, RIPPLE_AMP = neighbor shockwave
+  const popCol = new Uint8Array(n); // flash color for the pop (the attacker)
   const popDX = new Float32Array(n); // knockback direction (unit vector), set at impact
   const popDY = new Float32Array(n);
-  S = { cells, hp, maxhp, hitBy, popT, popDX, popDY, projs: [], cannons: [], xp: 0, level: 1, pending: 0,
+  S = { cells, hp, maxhp, hitBy, popT, popAmp, popCol, popDX, popDY, projs: [], cannons: [], xp: 0, level: 1, pending: 0,
         freqMult: 1, paused: false, frame: 0, seed,
         coins: [], floaters: [], coinsCollected: 0, chipPulse: 0, time: 0,
-        particles: [], particlesSpawned: 0 };
+        particles: [], particlesSpawned: 0, rings: [] };
 
   // Caves first (cellular-automata blobs), then HP from a smooth noise gradient:
   // white ~3 hits ... dark grey ~10 hits
@@ -298,15 +320,35 @@ function stepProjectile(p, dt) {
       S.hp[idx]--;
       S.hitBy[idx] = p.color;
       S.popT[idx] = 0; // start the hit-pop: instant 2x scale + full projectile color
+      S.popAmp[idx] = 1;
+      S.popCol[idx] = p.color;
       // knockback: push the block away from the projectile's entry point
       const pdx = (cx + 0.5) - p.x, pdy = (cy + 0.5) - p.y;
       const plen = Math.hypot(pdx, pdy) || 1;
       S.popDX[idx] = pdx / plen;
       S.popDY[idx] = pdy / plen;
+      // shockwave ripple: nudge the 8 neighbors radially away from the impact
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (!dx && !dy) continue;
+          const nx = cx + dx, ny = cy + dy;
+          if (nx < 0 || ny < 0 || nx >= cfg.cols || ny >= cfg.rows) continue;
+          const ni = ny * cfg.cols + nx;
+          if (S.cells[ni] !== WHITE) continue;
+          if (S.popT[ni] >= 0 && S.popAmp[ni] >= RIPPLE_AMP) continue; // never downgrade a real hit
+          S.popT[ni] = 0;
+          S.popAmp[ni] = RIPPLE_AMP;
+          S.popCol[ni] = p.color;
+          const rl = Math.hypot(dx, dy);
+          S.popDX[ni] = dx / rl;
+          S.popDY[ni] = dy / rl;
+        }
+      }
       spawnChip(cx + 0.5, cy + 0.5, CELL_COLORS[p.color], p.vx, p.vy);
       p.dead = true;
       if (S.hp[idx] <= 0) {
         S.cells[idx] = p.color;
+        spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[p.color]); // the block cracks: debris + ring
         if (p.color === BLUE && Math.random() < cfg.coinChance) {
           S.coins.push({ x: cx + 0.5, y: cy + 0.5, state: 'idle',
                          phase: Math.random() * 6.283, sx: 0, sy: 0, t: 0, dead: false });
@@ -413,6 +455,13 @@ function update(dt) {
     if (pt.t >= pt.life) pt.dead = true;
   }
   S.particles = S.particles.filter(p => !p.dead);
+
+  // Shockwave rings: expand and fade
+  for (const r of S.rings) {
+    r.t += dt;
+    if (r.t >= RING_DUR) r.dead = true;
+  }
+  S.rings = S.rings.filter(r => !r.dead);
 }
 
 // Draw one WHITE (terrain) cell with its hit-pop scale; popped cells are drawn
@@ -457,10 +506,20 @@ function render() {
       if (S.cells[i] === WHITE && S.popT[i] >= 0) drawWhiteCell(x, y);
     }
   }
-  // Projectiles
+  // Projectiles (with tracer trails)
+  ctx.lineCap = 'round';
   for (const p of S.projs) {
+    const px = p.x * CELL_PX, py = p.y * CELL_PX;
+    ctx.globalAlpha = 0.3;
+    ctx.strokeStyle = CELL_COLORS[p.color];
+    ctx.lineWidth = 5;
     ctx.beginPath();
-    ctx.arc(p.x * CELL_PX, p.y * CELL_PX, 4.5, 0, Math.PI * 2);
+    ctx.moveTo((p.x - p.vx * TRAIL_T) * CELL_PX, (p.y - p.vy * TRAIL_T) * CELL_PX);
+    ctx.lineTo(px, py);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.beginPath();
+    ctx.arc(px, py, 4.5, 0, Math.PI * 2);
     ctx.fillStyle = CELL_COLORS[p.color];
     ctx.fill();
     ctx.lineWidth = 1.5;
@@ -487,6 +546,17 @@ function render() {
     ctx.fillStyle = pt.color;
     const s = pt.size;
     ctx.fillRect(pt.x * CELL_PX - s / 2, pt.y * CELL_PX - s / 2, s, s);
+    ctx.globalAlpha = 1;
+  }
+  // Shockwave rings
+  for (const r of S.rings) {
+    const k = r.t / RING_DUR;
+    ctx.globalAlpha = Math.max(0, 1 - k);
+    ctx.strokeStyle = r.css;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(r.x * CELL_PX, r.y * CELL_PX, 4 + k * CELL_PX * 1.4, 0, Math.PI * 2);
+    ctx.stroke();
     ctx.globalAlpha = 1;
   }
   // Cannons (rectangles, like the spec)
