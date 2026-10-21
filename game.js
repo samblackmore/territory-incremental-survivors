@@ -10,6 +10,7 @@ const CELL_COLORS = ['#eef1f6', '#3d4454', '#3b82f6', '#ef4444'];
 const CELL_PX = 16;                 // render size of one cell
 const TURN_RATE = (Math.PI * 2) / 3; // cannon sweep speed: 120 deg/s
 const COIN_FLY_DUR = 0.45;           // seconds for a tapped coin to zip to the corner
+const POP_DUR = 0.22;                // seconds for a hit block to shrink 2x -> 1x
 const CHIP_CX = 41, CHIP_CY = 19;    // coin-counter chip center, in canvas px
 
 // Rounded-rect path helper (not all targets have ctx.roundRect)
@@ -121,12 +122,21 @@ function cellRGB(x, y) {
   if (st === EMPTY) return CAVE_RGB;
   const max = S.maxhp[i] || 3, hpv = S.hp[i];
   const base = GREYS[max];
-  if (hpv >= max) return base;
+  let r = base[0], g = base[1], b = base[2];
   const ac = S.hitBy[i] === RED ? RED_RGB : BLUE_RGB;
-  const k = (1 - hpv / max) * 0.9;
-  return [Math.round(base[0] + (ac[0] - base[0]) * k),
-          Math.round(base[1] + (ac[1] - base[1]) * k),
-          Math.round(base[2] + (ac[2] - base[2]) * k)];
+  if (hpv < max) { // progressive damage tint toward last hitter
+    const k = (1 - hpv / max) * 0.9;
+    r = Math.round(r + (ac[0] - r) * k);
+    g = Math.round(g + (ac[1] - g) * k);
+    b = Math.round(b + (ac[2] - b) * k);
+  }
+  const pop = S.pop[i];
+  if (pop > 0) { // hit flash: full projectile color, lerping back with the scale
+    r = Math.round(r + (ac[0] - r) * pop);
+    g = Math.round(g + (ac[1] - g) * pop);
+    b = Math.round(b + (ac[2] - b) * pop);
+  }
+  return [r, g, b];
 }
 
 // A damaged block chips: small squares fly off in its current color
@@ -137,7 +147,7 @@ function spawnChip(cx, cy, rgb) {
     const sp = 2 + Math.random() * 3.5; // cells/sec
     S.particles.push({ x: cx, y: cy, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 2.5,
                        life: 0.35 + Math.random() * 0.25, t: 0, dead: false,
-                       color: css, size: 2.5 + Math.random() * 2 });
+                       color: css, size: 5 + Math.random() * 4 });
     S.particlesSpawned++;
   }
   if (S.particles.length > 600) S.particles.splice(0, S.particles.length - 600);
@@ -210,7 +220,8 @@ function newGame() {
   const hp = new Uint8Array(n);
   const maxhp = new Uint8Array(n);
   const hitBy = new Uint8Array(n);
-  S = { cells, hp, maxhp, hitBy, projs: [], cannons: [], xp: 0, level: 1, pending: 0,
+  const pop = new Float32Array(n); // hit feedback: 1 -> 0, scale 2x -> 1x + color flash
+  S = { cells, hp, maxhp, hitBy, pop, projs: [], cannons: [], xp: 0, level: 1, pending: 0,
         freqMult: 1, paused: false, frame: 0, seed,
         coins: [], floaters: [], coinsCollected: 0, chipPulse: 0, time: 0,
         particles: [], particlesSpawned: 0 };
@@ -272,6 +283,7 @@ function stepProjectile(p, dt) {
       const rgb = cellRGB(cx, cy); // chip flies off in the block's current color
       S.hp[idx]--;
       S.hitBy[idx] = p.color;
+      S.pop[idx] = 1; // start the hit-pop: 2x scale + full projectile color
       spawnChip(cx + 0.5, cy + 0.5, rgb);
       p.dead = true;
       if (S.hp[idx] <= 0) {
@@ -366,6 +378,12 @@ function update(dt) {
   S.floaters = S.floaters.filter(f => f.t < 0.7);
   S.chipPulse = Math.max(0, S.chipPulse - dt * 3);
 
+  // Hit-pops decay: scale 2x -> 1x, flash -> damaged color, same lerp
+  const popDecay = dt / POP_DUR;
+  for (let i = 0; i < S.pop.length; i++) {
+    if (S.pop[i] > 0) S.pop[i] = Math.max(0, S.pop[i] - popDecay);
+  }
+
   // Chip particles: fly, gravity, fade
   for (const pt of S.particles) {
     pt.t += dt;
@@ -385,14 +403,21 @@ function render() {
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const st = S.cells[y * w + x];
-      if (st === BLUE) ctx.fillStyle = CELL_COLORS[BLUE];
-      else if (st === RED) ctx.fillStyle = CELL_COLORS[RED];
-      else if (st === EMPTY) ctx.fillStyle = CAVE_CSS;
+      if (st === BLUE) { ctx.fillStyle = CELL_COLORS[BLUE]; ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX); }
+      else if (st === RED) { ctx.fillStyle = CELL_COLORS[RED]; ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX); }
+      else if (st === EMPTY) { ctx.fillStyle = CAVE_CSS; ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX); }
       else {
         const c = cellRGB(x, y);
         ctx.fillStyle = 'rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')';
+        const pop = S.pop[y * w + x];
+        if (pop > 0) { // hit-pop: scaled about the cell center, overlapping neighbors
+          const s = CELL_PX * (1 + pop);
+          const ox = x * CELL_PX + CELL_PX / 2, oy = y * CELL_PX + CELL_PX / 2;
+          ctx.fillRect(ox - s / 2, oy - s / 2, s, s);
+        } else {
+          ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX);
+        }
       }
-      ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX);
     }
   }
   // Projectiles
