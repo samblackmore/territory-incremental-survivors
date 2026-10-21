@@ -395,6 +395,21 @@ function update(dt) {
   S.particles = S.particles.filter(p => !p.dead);
 }
 
+// Draw one WHITE (terrain) cell with its hit-pop scale; popped cells are drawn
+// in a second pass so the enlarged square sits in front of its neighbors.
+function drawWhiteCell(x, y) {
+  const c = cellRGB(x, y);
+  ctx.fillStyle = 'rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')';
+  const pop = S.pop[y * cfg.cols + x];
+  if (pop > 0) { // hit-pop: scaled about the cell center, overlapping neighbors
+    const s = CELL_PX * (1 + pop);
+    const ox = x * CELL_PX + CELL_PX / 2, oy = y * CELL_PX + CELL_PX / 2;
+    ctx.fillRect(ox - s / 2, oy - s / 2, s, s);
+  } else {
+    ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX);
+  }
+}
+
 // ---- Render ----
 function render() {
   ctx.fillStyle = '#0b0e16';
@@ -402,22 +417,19 @@ function render() {
   const w = cfg.cols, h = cfg.rows;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      const st = S.cells[y * w + x];
+      const i = y * w + x;
+      const st = S.cells[i];
       if (st === BLUE) { ctx.fillStyle = CELL_COLORS[BLUE]; ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX); }
       else if (st === RED) { ctx.fillStyle = CELL_COLORS[RED]; ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX); }
       else if (st === EMPTY) { ctx.fillStyle = CAVE_CSS; ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX); }
-      else {
-        const c = cellRGB(x, y);
-        ctx.fillStyle = 'rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')';
-        const pop = S.pop[y * w + x];
-        if (pop > 0) { // hit-pop: scaled about the cell center, overlapping neighbors
-          const s = CELL_PX * (1 + pop);
-          const ox = x * CELL_PX + CELL_PX / 2, oy = y * CELL_PX + CELL_PX / 2;
-          ctx.fillRect(ox - s / 2, oy - s / 2, s, s);
-        } else {
-          ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX);
-        }
-      }
+      else if (S.pop[i] <= 0) drawWhiteCell(x, y); // popped cells draw in the pass below
+    }
+  }
+  // Popped (enlarged) cells render last, in front of surrounding squares
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (S.cells[i] === WHITE && S.pop[i] > 0) drawWhiteCell(x, y);
     }
   }
   // Projectiles
