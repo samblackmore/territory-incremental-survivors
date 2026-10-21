@@ -10,7 +10,8 @@ const CELL_COLORS = ['#eef1f6', '#3d4454', '#3b82f6', '#ef4444'];
 const CELL_PX = 16;                 // render size of one cell
 const TURN_RATE = (Math.PI * 2) / 3; // cannon sweep speed: 120 deg/s
 const COIN_FLY_DUR = 0.45;           // seconds for a tapped coin to zip to the corner
-const POP_DUR = 0.22;                // seconds for a hit block to shrink 2x -> 1x
+const POP_HOLD = 0.05;               // big square holds this long: the hit reads as instant
+const POP_DUR = 0.22;                // ...then scale 2x -> 1x lerps down over this long
 const POP_PUSH = 0.4;                // knockback offset at full pop, in cells
 const CHIP_CX = 41, CHIP_CY = 19;    // coin-counter chip center, in canvas px
 
@@ -115,6 +116,15 @@ const RED_RGB = [239, 68, 68];
 const CAVE_CSS = '#222839';
 const CAVE_RGB = [34, 40, 57];
 
+// Hit-pop envelope: full 1 during the hold (instant big square), then lerp to 0
+function popFactor(i) {
+  const t = S.popT[i];
+  if (t < 0) return 0;
+  if (t < POP_HOLD) return 1;
+  const k = 1 - (t - POP_HOLD) / POP_DUR;
+  return k > 0 ? k : 0;
+}
+
 function cellRGB(x, y) {
   const i = y * cfg.cols + x;
   const st = S.cells[i];
@@ -131,11 +141,11 @@ function cellRGB(x, y) {
     g = Math.round(g + (ac[1] - g) * k);
     b = Math.round(b + (ac[2] - b) * k);
   }
-  const pop = S.pop[i];
-  if (pop > 0) { // hit flash: full projectile color, lerping back with the scale
-    r = Math.round(r + (ac[0] - r) * pop);
-    g = Math.round(g + (ac[1] - g) * pop);
-    b = Math.round(b + (ac[2] - b) * pop);
+  const f = popFactor(i);
+  if (f > 0) { // hit flash: full projectile color, lerping back with the scale
+    r = Math.round(r + (ac[0] - r) * f);
+    g = Math.round(g + (ac[1] - g) * f);
+    b = Math.round(b + (ac[2] - b) * f);
   }
   return [r, g, b];
 }
@@ -221,10 +231,10 @@ function newGame() {
   const hp = new Uint8Array(n);
   const maxhp = new Uint8Array(n);
   const hitBy = new Uint8Array(n);
-  const pop = new Float32Array(n); // hit feedback: 1 -> 0, scale 2x -> 1x + color flash
+  const popT = new Float32Array(n).fill(-1); // time since hit (-1 = idle); drives the pop envelope
   const popDX = new Float32Array(n); // knockback direction (unit vector), set at impact
   const popDY = new Float32Array(n);
-  S = { cells, hp, maxhp, hitBy, pop, popDX, popDY, projs: [], cannons: [], xp: 0, level: 1, pending: 0,
+  S = { cells, hp, maxhp, hitBy, popT, popDX, popDY, projs: [], cannons: [], xp: 0, level: 1, pending: 0,
         freqMult: 1, paused: false, frame: 0, seed,
         coins: [], floaters: [], coinsCollected: 0, chipPulse: 0, time: 0,
         particles: [], particlesSpawned: 0 };
@@ -286,7 +296,7 @@ function stepProjectile(p, dt) {
       const rgb = cellRGB(cx, cy); // chip flies off in the block's current color
       S.hp[idx]--;
       S.hitBy[idx] = p.color;
-      S.pop[idx] = 1; // start the hit-pop: 2x scale + full projectile color
+      S.popT[idx] = 0; // start the hit-pop: instant 2x scale + full projectile color
       // knockback: push the block away from the projectile's entry point
       const pdx = (cx + 0.5) - p.x, pdy = (cy + 0.5) - p.y;
       const plen = Math.hypot(pdx, pdy) || 1;
@@ -386,10 +396,11 @@ function update(dt) {
   S.floaters = S.floaters.filter(f => f.t < 0.7);
   S.chipPulse = Math.max(0, S.chipPulse - dt * 3);
 
-  // Hit-pops decay: scale 2x -> 1x, flash -> damaged color, same lerp
-  const popDecay = dt / POP_DUR;
-  for (let i = 0; i < S.pop.length; i++) {
-    if (S.pop[i] > 0) S.pop[i] = Math.max(0, S.pop[i] - popDecay);
+  // Hit-pop clock: holds full size briefly (impact reads as instant), then lerps down
+  const popEnd = POP_HOLD + POP_DUR;
+  for (let i = 0; i < S.popT.length; i++) {
+    const t = S.popT[i];
+    if (t >= 0) S.popT[i] = t + dt >= popEnd ? -1 : t + dt;
   }
 
   // Chip particles: fly, gravity, fade
@@ -409,12 +420,12 @@ function drawWhiteCell(x, y) {
   const i = y * cfg.cols + x;
   const c = cellRGB(x, y);
   ctx.fillStyle = 'rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')';
-  const pop = S.pop[i];
-  if (pop > 0) {
-    // hit-pop: 2x scale about the cell center, shoved along the knockback
-    // direction; both lerp back to normal as pop -> 0
-    const s = CELL_PX * (1 + pop);
-    const push = POP_PUSH * CELL_PX * pop;
+  const f = popFactor(i);
+  if (f > 0) {
+    // hit-pop: instant 2x scale about the cell center, shoved along the
+    // knockback direction; scale, offset and flash all lerp back as f -> 0
+    const s = CELL_PX * (1 + f);
+    const push = POP_PUSH * CELL_PX * f;
     const ox = x * CELL_PX + CELL_PX / 2 + S.popDX[i] * push;
     const oy = y * CELL_PX + CELL_PX / 2 + S.popDY[i] * push;
     ctx.fillRect(ox - s / 2, oy - s / 2, s, s);
@@ -435,14 +446,14 @@ function render() {
       if (st === BLUE) { ctx.fillStyle = CELL_COLORS[BLUE]; ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX); }
       else if (st === RED) { ctx.fillStyle = CELL_COLORS[RED]; ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX); }
       else if (st === EMPTY) { ctx.fillStyle = CAVE_CSS; ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX); }
-      else if (S.pop[i] <= 0) drawWhiteCell(x, y); // popped cells draw in the pass below
+      else if (S.popT[i] < 0) drawWhiteCell(x, y); // popped cells draw in the pass below
     }
   }
   // Popped (enlarged) cells render last, in front of surrounding squares
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const i = y * w + x;
-      if (S.cells[i] === WHITE && S.pop[i] > 0) drawWhiteCell(x, y);
+      if (S.cells[i] === WHITE && S.popT[i] >= 0) drawWhiteCell(x, y);
     }
   }
   // Projectiles
