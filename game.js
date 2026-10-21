@@ -10,13 +10,10 @@ const CELL_COLORS = ['#eef1f6', '#3d4454', '#3b82f6', '#ef4444'];
 const CELL_PX = 16;                 // render size of one cell
 const TURN_RATE = (Math.PI * 2) / 3; // cannon sweep speed: 120 deg/s
 const COIN_FLY_DUR = 0.45;           // seconds for a tapped coin to zip to the corner
-const POP_HOLD = 0.05;               // big square holds this long: the hit reads as instant
-const POP_DUR = 0.22;                // ...then scale 2x -> 1x lerps down over this long
-const POP_PUSH = 0.4;                // knockback offset at full pop, in cells
-const RIPPLE_AMP = 0.35;             // neighbor shockwave intensity vs a direct hit
 const RING_DUR = 0.3;                // conversion shockwave ring lifetime (s)
-const TRAIL_T = 0.04;                // projectile tracer trail length (s)
 const CHIP_CX = 41, CHIP_CY = 19;    // coin-counter chip center, in canvas px
+// (hit-feel knobs live in cfg via the debug panel: popHold, popDur, popPush,
+// rippleAmp, trailT)
 
 // Rounded-rect path helper (not all targets have ctx.roundRect)
 function rr(x, y, w, h, r) {
@@ -46,6 +43,11 @@ const inCave   = document.getElementById('d-cave');
 const inSeed   = document.getElementById('d-seed');
 const inCoin   = document.getElementById('d-coin');
 const inThresh = document.getElementById('d-thresh');
+const inPopHold = document.getElementById('d-pophold');
+const inPopDur  = document.getElementById('d-popdur');
+const inPopPush = document.getElementById('d-poppush');
+const inRipple  = document.getElementById('d-ripple');
+const inTrail   = document.getElementById('d-trail');
 
 // ---- Seeded RNG, smooth value noise (Perlin-style), cave automata ----
 function mulberry32(a) {
@@ -124,8 +126,8 @@ function popFactor(i) {
   const t = S.popT[i];
   if (t < 0) return 0;
   const amp = S.popAmp[i];
-  if (t < POP_HOLD) return amp;
-  const k = 1 - (t - POP_HOLD) / POP_DUR;
+  if (t < cfg.popHold) return amp;
+  const k = 1 - (t - cfg.popHold) / cfg.popDur;
   return k > 0 ? amp * k : 0;
 }
 
@@ -209,6 +211,11 @@ function readDebug() {
     arc: clampNum(inArc.value, 0, 360, 120),             // degrees
     caveChance: clampNum(inCave.value, 0, 0.95, 0.38),      // CA cave fill
     coinChance: clampNum(inCoin.value, 0, 1, 0.3),          // coin drop per blue conversion
+    popHold: clampNum(inPopHold.value, 0, 0.5, 0.05),        // big square hold time (s)
+    popDur: clampNum(inPopDur.value, 0.05, 1, 0.22),         // pop shrink time (s)
+    popPush: clampNum(inPopPush.value, 0, 1.5, 0.4),         // knockback push (cells)
+    rippleAmp: clampNum(inRipple.value, 0, 1, 0.35),         // neighbor shockwave strength
+    trailT: clampNum(inTrail.value, 0, 0.2, 0.04),           // projectile trail (s)
     thresholds: thresholds.length ? thresholds : [15],
   };
   // reflect clamped values back into the panel
@@ -216,6 +223,9 @@ function readDebug() {
   inSpeed.value = cfg.projSpeed; inFreq.value = cfg.freq;
   inArc.value = cfg.arc; inCave.value = cfg.caveChance;
   inCoin.value = cfg.coinChance;
+  inPopHold.value = cfg.popHold; inPopDur.value = cfg.popDur;
+  inPopPush.value = cfg.popPush; inRipple.value = cfg.rippleAmp;
+  inTrail.value = cfg.trailT;
   inThresh.value = cfg.thresholds.join(',');
 }
 
@@ -335,9 +345,9 @@ function stepProjectile(p, dt) {
           if (nx < 0 || ny < 0 || nx >= cfg.cols || ny >= cfg.rows) continue;
           const ni = ny * cfg.cols + nx;
           if (S.cells[ni] !== WHITE) continue;
-          if (S.popT[ni] >= 0 && S.popAmp[ni] >= RIPPLE_AMP) continue; // never downgrade a real hit
+          if (S.popT[ni] >= 0 && S.popAmp[ni] >= cfg.rippleAmp) continue; // never downgrade a real hit
           S.popT[ni] = 0;
-          S.popAmp[ni] = RIPPLE_AMP;
+          S.popAmp[ni] = cfg.rippleAmp;
           S.popCol[ni] = p.color;
           const rl = Math.hypot(dx, dy);
           S.popDX[ni] = dx / rl;
@@ -440,7 +450,7 @@ function update(dt) {
   S.chipPulse = Math.max(0, S.chipPulse - dt * 3);
 
   // Hit-pop clock: holds full size briefly (impact reads as instant), then lerps down
-  const popEnd = POP_HOLD + POP_DUR;
+  const popEnd = cfg.popHold + cfg.popDur;
   for (let i = 0; i < S.popT.length; i++) {
     const t = S.popT[i];
     if (t >= 0) S.popT[i] = t + dt >= popEnd ? -1 : t + dt;
@@ -475,7 +485,7 @@ function drawWhiteCell(x, y) {
     // hit-pop: instant 2x scale about the cell center, shoved along the
     // knockback direction; scale, offset and flash all lerp back as f -> 0
     const s = CELL_PX * (1 + f);
-    const push = POP_PUSH * CELL_PX * f;
+    const push = cfg.popPush * CELL_PX * f;
     const ox = x * CELL_PX + CELL_PX / 2 + S.popDX[i] * push;
     const oy = y * CELL_PX + CELL_PX / 2 + S.popDY[i] * push;
     ctx.fillRect(ox - s / 2, oy - s / 2, s, s);
@@ -514,7 +524,7 @@ function render() {
     ctx.strokeStyle = CELL_COLORS[p.color];
     ctx.lineWidth = 5;
     ctx.beginPath();
-    ctx.moveTo((p.x - p.vx * TRAIL_T) * CELL_PX, (p.y - p.vy * TRAIL_T) * CELL_PX);
+    ctx.moveTo((p.x - p.vx * cfg.trailT) * CELL_PX, (p.y - p.vy * cfg.trailT) * CELL_PX);
     ctx.lineTo(px, py);
     ctx.stroke();
     ctx.globalAlpha = 1;
@@ -655,7 +665,8 @@ function frame(now) {
 }
 
 // ---- Debug wiring: any change restarts the game ----
-[inCols, inRows, inSpeed, inFreq, inArc, inCave, inCoin, inSeed, inThresh].forEach(el => {
+[inCols, inRows, inSpeed, inFreq, inArc, inCave, inCoin, inSeed, inThresh,
+ inPopHold, inPopDur, inPopPush, inRipple, inTrail].forEach(el => {
   el.addEventListener('change', newGame);
 });
 document.getElementById('d-restart').addEventListener('click', newGame);

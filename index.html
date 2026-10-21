@@ -97,6 +97,13 @@
     text-transform: uppercase;
     color: var(--accent);
   }
+  #debug h3 {
+    margin: 14px 0 2px;
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
   #debug label {
     display: block;
     font-size: 12px;
@@ -209,6 +216,22 @@
     </label>
     <label>Level thresholds (XP per level, comma-separated)
       <input id="d-thresh" type="text" value="15,40,80,140,220,320,450,600,800,1050">
+    </label>
+    <h3>Hit feel</h3>
+    <label>Pop hold at full size (s)
+      <input id="d-pophold" type="number" min="0" max="0.5" step="0.01" value="0.05">
+    </label>
+    <label>Pop shrink time (s)
+      <input id="d-popdur" type="number" min="0.05" max="1" step="0.01" value="0.22">
+    </label>
+    <label>Knockback push (cells)
+      <input id="d-poppush" type="number" min="0" max="1.5" step="0.05" value="0.4">
+    </label>
+    <label>Neighbor ripple strength (0–1)
+      <input id="d-ripple" type="number" min="0" max="1" step="0.05" value="0.35">
+    </label>
+    <label>Projectile trail (s)
+      <input id="d-trail" type="number" min="0" max="0.2" step="0.01" value="0.04">
     </label>
     <button id="d-restart">Restart game</button>
     <div id="d-stats"></div>
