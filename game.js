@@ -11,6 +11,7 @@ const CELL_PX = 16;                 // render size of one cell
 const TURN_RATE = (Math.PI * 2) / 3; // cannon sweep speed: 120 deg/s
 const COIN_FLY_DUR = 0.45;           // seconds for a tapped coin to zip to the corner
 const POP_DUR = 0.22;                // seconds for a hit block to shrink 2x -> 1x
+const POP_PUSH = 0.4;                // knockback offset at full pop, in cells
 const CHIP_CX = 41, CHIP_CY = 19;    // coin-counter chip center, in canvas px
 
 // Rounded-rect path helper (not all targets have ctx.roundRect)
@@ -221,7 +222,9 @@ function newGame() {
   const maxhp = new Uint8Array(n);
   const hitBy = new Uint8Array(n);
   const pop = new Float32Array(n); // hit feedback: 1 -> 0, scale 2x -> 1x + color flash
-  S = { cells, hp, maxhp, hitBy, pop, projs: [], cannons: [], xp: 0, level: 1, pending: 0,
+  const popDX = new Float32Array(n); // knockback direction (unit vector), set at impact
+  const popDY = new Float32Array(n);
+  S = { cells, hp, maxhp, hitBy, pop, popDX, popDY, projs: [], cannons: [], xp: 0, level: 1, pending: 0,
         freqMult: 1, paused: false, frame: 0, seed,
         coins: [], floaters: [], coinsCollected: 0, chipPulse: 0, time: 0,
         particles: [], particlesSpawned: 0 };
@@ -284,6 +287,11 @@ function stepProjectile(p, dt) {
       S.hp[idx]--;
       S.hitBy[idx] = p.color;
       S.pop[idx] = 1; // start the hit-pop: 2x scale + full projectile color
+      // knockback: push the block away from the projectile's entry point
+      const pdx = (cx + 0.5) - p.x, pdy = (cy + 0.5) - p.y;
+      const plen = Math.hypot(pdx, pdy) || 1;
+      S.popDX[idx] = pdx / plen;
+      S.popDY[idx] = pdy / plen;
       spawnChip(cx + 0.5, cy + 0.5, rgb);
       p.dead = true;
       if (S.hp[idx] <= 0) {
@@ -398,12 +406,17 @@ function update(dt) {
 // Draw one WHITE (terrain) cell with its hit-pop scale; popped cells are drawn
 // in a second pass so the enlarged square sits in front of its neighbors.
 function drawWhiteCell(x, y) {
+  const i = y * cfg.cols + x;
   const c = cellRGB(x, y);
   ctx.fillStyle = 'rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')';
-  const pop = S.pop[y * cfg.cols + x];
-  if (pop > 0) { // hit-pop: scaled about the cell center, overlapping neighbors
+  const pop = S.pop[i];
+  if (pop > 0) {
+    // hit-pop: 2x scale about the cell center, shoved along the knockback
+    // direction; both lerp back to normal as pop -> 0
     const s = CELL_PX * (1 + pop);
-    const ox = x * CELL_PX + CELL_PX / 2, oy = y * CELL_PX + CELL_PX / 2;
+    const push = POP_PUSH * CELL_PX * pop;
+    const ox = x * CELL_PX + CELL_PX / 2 + S.popDX[i] * push;
+    const oy = y * CELL_PX + CELL_PX / 2 + S.popDY[i] * push;
     ctx.fillRect(ox - s / 2, oy - s / 2, s, s);
   } else {
     ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX);
