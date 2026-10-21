@@ -57,6 +57,30 @@
     height: auto;
     image-rendering: pixelated;
   }
+  #debug-toggle {
+    display: none;
+    width: 100%;
+    padding: 10px;
+    background: var(--panel);
+    border: 1px solid #2a3145;
+    border-radius: 8px;
+    color: var(--accent);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+  /* Narrow screens: stack canvas above the debug panel, full width */
+  @media (max-width: 720px) {
+    #layout { flex-direction: column; padding: 12px; gap: 12px; }
+    #game { width: 100%; max-width: 100%; }
+    #debug { width: 100%; flex: none; }
+    #debug.collapsed { display: none; }
+    #debug-toggle { display: block; }
+    .cardrow { flex-wrap: wrap; }
+    .card { width: 130px; height: 170px; }
+  }
   #debug {
     width: 290px;
     flex: 0 0 290px;
@@ -153,6 +177,7 @@
 </div>
 
 <div id="layout">
+  <button id="debug-toggle">Toggle debug panel</button>
   <canvas id="game"></canvas>
 
   <aside id="debug">

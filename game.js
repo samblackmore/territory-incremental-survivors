@@ -281,5 +281,12 @@ function frame(now) {
 });
 document.getElementById('d-restart').addEventListener('click', newGame);
 
+// ---- Mobile: collapsible debug panel (button only visible under 720px) ----
+const debugToggle = document.getElementById('debug-toggle');
+const debugPanel = document.getElementById('debug');
+if (debugToggle && debugPanel) {
+  debugToggle.addEventListener('click', () => debugPanel.classList.toggle('collapsed'));
+}
+
 newGame();
 requestAnimationFrame(frame);
