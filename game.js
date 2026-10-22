@@ -592,13 +592,33 @@ function fireLaser(t) {
   damageBlock(tgt.i, TURRET.laser.dmg + S.dmgBonus, t.color,
               t.x + 0.5, t.y + 0.5, tgt.x - t.x, tgt.y - t.y);
 }
-// Mint: doesn't shoot. Drops a coin beside itself on a timer.
+// Mint: doesn't shoot. Drops a coin onto the nearest empty grid cell with no
+// coin already on it (never on a turret) — coins spread into a field around
+// the mint, never overlapping. Skips the drop if the field is full.
+function coinAt(cx, cy) {
+  for (const c of S.coins) {
+    if (c.dead) continue;
+    if (Math.floor(c.x) === cx && Math.floor(c.y) === cy) return true;
+  }
+  return false;
+}
 function mintCoin(t) {
   if (S.coins.length >= 800) return;
-  S.coins.push({ x: t.x + 0.5 + (Math.random() - 0.5) * 1.5,
-                 y: t.y + 0.5 + (Math.random() - 0.5) * 1.5,
-                 state: 'idle', phase: Math.random() * 6.283,
-                 sx: 0, sy: 0, t: 0, dead: false });
+  const R = 6; // the mint's field radius, in cells
+  let bx = -1, by = -1, bd = Infinity;
+  for (let dy = -R; dy <= R; dy++) {
+    for (let dx = -R; dx <= R; dx++) {
+      const nx = t.x + dx, ny = t.y + dy;
+      if (nx < 0 || ny < 0 || nx >= cfg.cols || ny >= cfg.rows) continue;
+      if (S.cells[ny * cfg.cols + nx] !== EMPTY) continue;
+      if (turretAt(nx, ny) || coinAt(nx, ny)) continue;
+      const d = dx * dx + dy * dy;
+      if (d < bd) { bd = d; bx = nx; by = ny; }
+    }
+  }
+  if (bx < 0) return; // field's full: no drop
+  S.coins.push({ x: bx + 0.5, y: by + 0.5, state: 'idle',
+                 phase: Math.random() * 6.283, sx: 0, sy: 0, t: 0, dead: false });
 }
 
 function stepProjectile(p, dt) {
@@ -705,19 +725,31 @@ function checkLevel() {
 }
 
 // Card pool: 4 turret cards (placement = the skill expression) + 5 upgrades.
+// `needs` gates an upgrade on owning a turret it actually affects — no
+// steering card before you've got a rocket.
 const CARD_POOL = [
   { kind: 'turret', type: 'cannon', title: 'Cannon', sub: 'New turret' },
   { kind: 'turret', type: 'rocket', title: 'Rocket', sub: 'Homing missiles' },
   { kind: 'turret', type: 'laser', title: 'Laser', sub: 'Snipes weak blocks' },
   { kind: 'turret', type: 'mint', title: 'Mint', sub: '+1 coin / 15s' },
   { kind: 'freq', mult: 1.25, title: '+25%', sub: 'Fire rate' },
-  { kind: 'damage', add: 1, title: '+1', sub: 'Damage' },
-  { kind: 'bounce', add: 0.25, title: '+25%', sub: 'Bounce chance' },
+  { kind: 'damage', add: 1, title: '+1', sub: 'Damage', needs: ['cannon', 'rocket', 'laser'] },
+  { kind: 'bounce', add: 0.25, title: '+25%', sub: 'Bounce chance', needs: ['cannon'] },
   { kind: 'suction', mult: 0.75, title: '−25%', sub: 'Suction time' },
-  { kind: 'steer', mult: 1.3, title: '+30%', sub: 'Missile steering' },
+  { kind: 'steer', mult: 1.3, title: '+30%', sub: 'Missile steering', needs: ['rocket'] },
 ];
+function hasTurretTypes(types) {
+  for (const t of S.turrets) {
+    if (t.dead || t.color !== BLUE) continue;
+    if (types.includes(t.type)) return true;
+  }
+  return false;
+}
+function availableCards() {
+  return CARD_POOL.filter(c => !c.needs || hasTurretTypes(c.needs));
+}
 function offerCards() {
-  const pool = CARD_POOL.slice();
+  const pool = availableCards().slice();
   const els = document.querySelectorAll('.card');
   for (let k = 0; k < els.length && pool.length; k++) {
     const p = pool.splice((Math.random() * pool.length) | 0, 1)[0];
@@ -775,6 +807,7 @@ function enterPlacement(type) {  S.placing = { type };
   placebanner.classList.remove('hidden');
 }
 function placeTurretAt(sx, sy) {
+  const type = S.placing.type;
   const wpt = screenToWorld(sx, sy);
   let cx = Math.floor(wpt.x / CELL_PX), cy = Math.floor(wpt.y / CELL_PX);
   cx = Math.max(0, Math.min(cfg.cols - 1, cx));
@@ -784,8 +817,13 @@ function placeTurretAt(sx, sy) {
     S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
     return;
   }
+  if (type === 'mint' && S.cells[cy * cfg.cols + cx] !== EMPTY) {
+    // The mint needs open ground: its coins spread onto empty grid cells.
+    S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
+    return;
+  }
   S.cells[cy * cfg.cols + cx] = EMPTY; // clear a pad
-  S.turrets.push(mkTurret(cx, cy, BLUE, S.placing.type));
+  S.turrets.push(mkTurret(cx, cy, BLUE, type));
   spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[BLUE]);
   S.placing = null;
   placebanner.classList.add('hidden');
