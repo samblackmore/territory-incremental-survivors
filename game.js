@@ -64,13 +64,12 @@ function minZoom() {
   if (!view.w || !view.h || !cfg.cols) return 1;
   return view.h / (cfg.rows * CELL_PX);
 }
+const START_ZOOM_MULT = 3; // new games start this far in (x min zoom), on the player
 function resetCamera() {
-  cam.zoom = minZoom();
-  cam.y = (cfg.rows * CELL_PX) / 2; // pinned: no vertical slack at min zoom
-  // Frame the player's cannon horizontally (on narrow screens the full width
-  // doesn't fit, and the cannon is the interesting thing to land on)
-  const W = cfg.cols * CELL_PX;
-  cam.x = S.cannons.length ? S.cannons[0].x * CELL_PX : W / 2;
+  cam.zoom = minZoom() * START_ZOOM_MULT;
+  const p = S.cannons.length ? S.cannons[0] : null; // the player's (blue) cannon
+  cam.x = p ? p.x * CELL_PX : (cfg.cols * CELL_PX) / 2;
+  cam.y = p ? p.y * CELL_PX : (cfg.rows * CELL_PX) / 2;
   clampCamera();
 }
 function clampCamera() {
