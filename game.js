@@ -222,7 +222,7 @@ function readDebug() {
     popDur: clampNum(inPopDur.value, 0.05, 1, 0.1),          // pop shrink time (s)
     popPush: clampNum(inPopPush.value, 0, 1.5, 0.2),         // knockback push (cells)
     rippleAmp: clampNum(inRipple.value, 0, 1, 0.1),          // neighbor shockwave strength
-    trailT: clampNum(inTrail.value, 0, 0.2, 0.1),            // projectile trail (s)
+    trailT: clampNum(inTrail.value, 0, 1, 0.1),               // projectile trail (s)
     gravity: clampNum(inGravity.value, 0, 40, 9),            // particle gravity (cells/s^2)
     thresholds: thresholds.length ? thresholds : [15],
   };
