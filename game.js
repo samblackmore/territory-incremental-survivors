@@ -59,10 +59,11 @@ let dpr = 1;
 const cam = { x: 0, y: 0, zoom: 1 }; // x/y: world px at screen center; zoom: CSS px per world px
 
 function minZoom() {
-  // Outermost zoom: the map height fills the screen height exactly, so there
-  // is never black space above/below the map. Width may crop on narrow screens.
+  // Outermost zoom: the whole map fits on screen (width binds on portrait
+  // phones, height on landscape). Portrait pays for the overview with bars
+  // above/below; pinch in for the cropped, bar-free view.
   if (!view.w || !view.h || !cfg.cols) return 1;
-  return view.h / (cfg.rows * CELL_PX);
+  return Math.min(view.w / (cfg.cols * CELL_PX), view.h / (cfg.rows * CELL_PX));
 }
 const START_ZOOM_MULT = 3; // new games start this far in (x min zoom), on the player
 function resetCamera() {
