@@ -499,58 +499,54 @@ function newGame() {
 
 // ---- Fog of war --------------------------------------------------------
 // 0 = clear, 1 = half (smooth transition), 2 = full (black).
-// Initial reveal: every cave containing a blue turret, plus fogDist cells
-// beyond the cave boundary. Fog only ever clears, never closes back in.
+// Reveal sources: every cave containing a blue turret (flood-filled through
+// EMPTY, plus fogDist beyond the boundary) and a fogDist radius around each
+// lantern. Recomputed whenever the cave changes (a block is excavated) or a
+// lantern is placed. Fog only ever clears, never closes back in.
 function computeFog() {
-  const n = cfg.cols * cfg.rows;
-  S.fog.fill(2);
+  const W = cfg.cols, H = cfg.rows, n = W * H;
+  const nf = new Uint8Array(n).fill(2);
+  const R = cfg.fogDist, R2 = R * R, R12 = (R + 1) * (R + 1);
+  const revealDisc = (cx, cy) => {
+    for (let dy = -(R + 1); dy <= R + 1; dy++) {
+      for (let dx = -(R + 1); dx <= R + 1; dx++) {
+        const d2 = dx * dx + dy * dy;
+        if (d2 > R12) continue;
+        const nx = cx + dx, ny = cy + dy;
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+        const ni = ny * W + nx;
+        if (d2 <= R2) nf[ni] = 0;
+        else if (nf[ni] === 2) nf[ni] = 1;
+      }
+    }
+  };
   // Home caves: flood-fill EMPTY from each living blue turret.
   const home = new Uint8Array(n);
   const stack = [];
   for (const t of S.turrets) {
     if (t.dead || t.color !== BLUE) continue;
-    const i = t.y * cfg.cols + t.x;
+    const i = t.y * W + t.x;
     if (S.cells[i] === EMPTY && !home[i]) { home[i] = 1; stack.push(i); }
   }
   const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
   while (stack.length) {
     const i = stack.pop();
-    const x = i % cfg.cols, y = (i / cfg.cols) | 0;
+    revealDisc(i % W, (i / W) | 0);
+    const x = i % W, y = (i / W) | 0;
     for (const [dx, dy] of DIRS) {
       const nx = x + dx, ny = y + dy;
-      if (nx < 0 || ny < 0 || nx >= cfg.cols || ny >= cfg.rows) continue;
-      const ni = ny * cfg.cols + nx;
+      if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+      const ni = ny * W + nx;
       if (S.cells[ni] === EMPTY && !home[ni]) { home[ni] = 1; stack.push(ni); }
     }
   }
-  // Multi-source Euclidean distance from the home region.
-  const homeCells = [];
-  for (let i = 0; i < n; i++) if (home[i]) homeCells.push(i);
-  for (let y = 0; y < cfg.rows; y++) {
-    for (let x = 0; x < cfg.cols; x++) {
-      let bd = Infinity;
-      for (const hi of homeCells) {
-        const hx = hi % cfg.cols, hy = (hi / cfg.cols) | 0;
-        const d = Math.hypot(x - hx, y - hy);
-        if (d < bd) bd = d;
-      }
-      const i = y * cfg.cols + x;
-      if (bd <= cfg.fogDist) S.fog[i] = 0;
-      else if (bd <= cfg.fogDist + 1) S.fog[i] = 1;
-    }
+  // Lanterns push back the dark in a radius.
+  for (const t of S.turrets) {
+    if (t.dead || t.type !== 'lantern') continue;
+    revealDisc(t.x, t.y);
   }
-}
-// Lantern reveal: clear fog in radius r (plus a half-fog smoothing ring).
-// Only ever clears — fog never closes back in.
-function revealFog(cx, cy, r) {
-  for (let y = 0; y < cfg.rows; y++) {
-    for (let x = 0; x < cfg.cols; x++) {
-      const d = Math.hypot(x - cx, y - cy);
-      const i = y * cfg.cols + x;
-      if (d <= r) S.fog[i] = 0;
-      else if (d <= r + 1 && S.fog[i] === 2) S.fog[i] = 1;
-    }
-  }
+  // Merge: fog only ever clears.
+  for (let i = 0; i < n; i++) if (nf[i] < S.fog[i]) S.fog[i] = nf[i];
 }
 
 // ---- Waves: red deploys over time, mid-map. Clear them all -> jackpot. ----
@@ -820,6 +816,7 @@ function damageBlock(idx, dmg, color, sx, sy, vx, vy) {
   S.cells[idx] = EMPTY; // excavated: the block is gone, not painted over
   S.destroyed++;
   if (color === BLUE) S.destroyedBlue++;
+  computeFog(); // the cave grew: push the fog boundary out
   spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[color]); // the block cracks: debris + ring
   if (color === BLUE && Math.random() < cfg.coinChance) {
     S.coins.push({ x: cx + 0.5, y: cy + 0.5, state: 'idle',
@@ -961,7 +958,7 @@ function placeTurretAt(sx, sy) {
   }
   S.turrets.push(mkTurret(cx, cy, BLUE, type));
   spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[BLUE]);
-  if (type === 'lantern') revealFog(cx, cy, cfg.fogDist); // the lantern pushes back the dark
+  if (type === 'lantern') computeFog(); // the lantern pushes back the dark
   S.placing = null;
   placebanner.classList.add('hidden');
   if (!S.runOver) {
