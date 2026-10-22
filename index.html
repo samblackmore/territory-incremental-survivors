@@ -290,6 +290,17 @@
     <label>Particle gravity (cells/s²)
       <input id="d-gravity" type="number" min="0" max="40" step="1" value="9">
     </label>
+    <h3>Colors</h3>
+    <label>Terrain base color (green)
+      <input id="d-terrain" type="color" value="#4caf50">
+    </label>
+    <label>Empty base color (brown)
+      <input id="d-empty" type="color" value="#6b543a">
+    </label>
+    <h3>Fog of war</h3>
+    <label>Fog reveal distance (cells)
+      <input id="d-fogdist" type="number" min="0" max="20" step="1" value="6">
+    </label>
     <button id="d-restart">Restart game</button>
     <button id="d-copylink">Copy share link</button>
     <div id="d-stats"></div>
@@ -319,6 +330,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=19"></script>
+<script src="game.js?v=20"></script>
 </body>
 </html>

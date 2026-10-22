@@ -24,6 +24,7 @@ const TURRET = {
   rocket: { name: 'Rocket', hp: 6, interval: 2.5, dmg: 3 },
   laser:  { name: 'Laser',  hp: 5, interval: 2.0, dmg: 2 },
   bloom:  { name: 'Bloom',  hp: 4, interval: GROW_INTERVAL, dmg: 0 },
+  lantern:{ name: 'Lantern',hp: 4, interval: 0, dmg: 0 }, // pure vision, no firing
 };
 const COIN_FLY_DUR = 0.45;           // seconds for a tapped coin to zip to the corner
 const RING_DUR = 0.3;                // conversion shockwave ring lifetime (s)
@@ -66,6 +67,9 @@ const inSeed   = document.getElementById('d-seed');
 const inCoin   = document.getElementById('d-coin');
 const inCollect = document.getElementById('d-collect');
 const inThresh = document.getElementById('d-thresh');
+const inTerrain = document.getElementById('d-terrain');
+const inEmpty = document.getElementById('d-empty');
+const inFogDist = document.getElementById('d-fogdist');
 const inPopHold = document.getElementById('d-pophold');
 const inPopDur  = document.getElementById('d-popdur');
 const inPopPush = document.getElementById('d-poppush');
@@ -88,12 +92,11 @@ function minZoom() {
   if (!view.w || !view.h || !cfg.cols) return 1;
   return Math.min(view.w / (cfg.cols * CELL_PX), view.h / (cfg.rows * CELL_PX));
 }
-const START_ZOOM_MULT = 3; // new games start this far in (x min zoom), on the player
 function resetCamera() {
-  cam.zoom = minZoom() * START_ZOOM_MULT;
-  const p = nearestBlueTurret(cfg.cols / 2, cfg.rows / 2); // the player's first turret
-  cam.x = p ? (p.x + 0.5) * CELL_PX : (cfg.cols * CELL_PX) / 2;
-  cam.y = p ? (p.y + 0.5) * CELL_PX : (cfg.rows * CELL_PX) / 2;
+  // New games start fully zoomed out: the whole map, fog and all.
+  cam.zoom = minZoom();
+  cam.x = (cfg.cols * CELL_PX) / 2;
+  cam.y = (cfg.rows * CELL_PX) / 2;
   clampCamera();
 }
 function clampCamera() {
@@ -192,18 +195,34 @@ function genCaves(cols, rows, fill, rng) {
   return cur;
 }
 
-// ---- Block colors: grey gradient (weak -> strong), tinted toward damage ----
-const GREY_LIGHT = [238, 241, 246]; // ~3 HP
-const GREY_DARK = [88, 96, 114];    // ~10 HP
-const GREYS = [];
-for (let m = 3; m <= 10; m++) {
-  const t = (m - 3) / 7;
-  GREYS[m] = [0, 1, 2].map(j => Math.round(GREY_LIGHT[j] + (GREY_DARK[j] - GREY_LIGHT[j]) * t));
+// ---- Block colors: terrain gradient (weak -> strong), tinted toward damage ----
+// The base colors come from the debug pickers (green terrain, brown empty);
+// the gradient is rebuilt whenever they change.
+function hexToRgb(hex) {
+  const h = hex.replace('#', '');
+  const v = h.length === 3 ? h.split('').map(c => c + c).join('') : h;
+  const n = parseInt(v, 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+let TERRAIN_LIGHT = [76, 175, 80];
+let TERRAIN_DARK = [29, 67, 30];
+let TERRAIN = [];
+let CAVE_CSS = '#6b543a';
+let CAVE_RGB = [107, 84, 58];
+function rebuildColors() {
+  const base = hexToRgb(inTerrain.value || '#4caf50');
+  TERRAIN_LIGHT = base;
+  TERRAIN_DARK = base.map(v => Math.round(v * 0.38));
+  TERRAIN = [];
+  for (let m = 3; m <= 10; m++) {
+    const t = (m - 3) / 7;
+    TERRAIN[m] = [0, 1, 2].map(j => Math.round(TERRAIN_LIGHT[j] + (TERRAIN_DARK[j] - TERRAIN_LIGHT[j]) * t));
+  }
+  CAVE_CSS = inEmpty.value || '#6b543a';
+  CAVE_RGB = hexToRgb(CAVE_CSS);
 }
 const BLUE_RGB = [59, 130, 246];
 const RED_RGB = [239, 68, 68];
-const CAVE_CSS = '#222839';
-const CAVE_RGB = [34, 40, 57];
 
 // Hit-pop envelope: full amp during the hold (instant big square), then lerp to 0
 function popFactor(i) {
@@ -222,7 +241,7 @@ function cellRGB(x, y) {
   if (st === RED) return RED_RGB;
   if (st === EMPTY) return CAVE_RGB;
   const max = S.maxhp[i] || 3, hpv = S.hp[i];
-  const base = GREYS[max];
+  const base = TERRAIN[max];
   let r = base[0], g = base[1], b = base[2];
   const ac = S.hitBy[i] === RED ? RED_RGB : BLUE_RGB;
   if (hpv < max) { // progressive damage tint toward last hitter
@@ -310,6 +329,7 @@ function readDebug() {
     rippleAmp: clampNum(inRipple.value, 0, 1, 0.1),          // neighbor shockwave strength
     trailT: clampNum(inTrail.value, 0, 1, 0.1),               // projectile trail (s)
     gravity: clampNum(inGravity.value, 0, 40, 9),            // particle gravity (cells/s^2)
+    fogDist: clampNum(inFogDist.value, 0, 20, 6),              // fog reveal distance (cells)
     thresholds: thresholds.length ? thresholds : [15],
   };
   // reflect clamped values back into the panel
@@ -324,7 +344,9 @@ function readDebug() {
   inPopPush.value = cfg.popPush; inRipple.value = cfg.rippleAmp;
   inTrail.value = cfg.trailT;
   inGravity.value = cfg.gravity;
+  inFogDist.value = cfg.fogDist;
   inThresh.value = cfg.thresholds.join(',');
+  rebuildColors();
 }
 
 // ---- Game state ----
@@ -437,7 +459,9 @@ function newGame() {
         dmgBonus: 0, steerMult: 1,
         // territory (Tiberium fields): per-cell growth progress
         growN: new Uint8Array(n), growBy: new Uint8Array(n), growT: new Float32Array(n),
-        bloomMult: 1, harvestT: 0 };
+        bloomMult: 1, harvestT: 0,
+        // fog of war: 0 = clear, 1 = half, 2 = full (black)
+        fog: new Uint8Array(n).fill(2) };
 
   // Caves first (cellular-automata blobs), then HP from a smooth noise gradient:
   // white ~3 hits ... dark grey ~10 hits
@@ -461,9 +485,10 @@ function newGame() {
   const pc = pi >= 0 ? { x: pi % cfg.cols, y: Math.floor(pi / cfg.cols) } : snapAnchor(pA);
   S.turrets.push(mkTurret(pc.x, pc.y, BLUE, 'cannon'));
   startWave(1);
+  computeFog();   // fog of war: only the home cave + fogDist is visible
 
   resize();       // backing store = viewport x devicePixelRatio
-  resetCamera();  // overview framing, starting on the player's turret
+  resetCamera();  // fully zoomed out
 
   overlay.classList.add('hidden');
   runover.classList.add('hidden');
@@ -472,9 +497,67 @@ function newGame() {
   updateHud();
 }
 
+// ---- Fog of war --------------------------------------------------------
+// 0 = clear, 1 = half (smooth transition), 2 = full (black).
+// Initial reveal: every cave containing a blue turret, plus fogDist cells
+// beyond the cave boundary. Fog only ever clears, never closes back in.
+function computeFog() {
+  const n = cfg.cols * cfg.rows;
+  S.fog.fill(2);
+  // Home caves: flood-fill EMPTY from each living blue turret.
+  const home = new Uint8Array(n);
+  const stack = [];
+  for (const t of S.turrets) {
+    if (t.dead || t.color !== BLUE) continue;
+    const i = t.y * cfg.cols + t.x;
+    if (S.cells[i] === EMPTY && !home[i]) { home[i] = 1; stack.push(i); }
+  }
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  while (stack.length) {
+    const i = stack.pop();
+    const x = i % cfg.cols, y = (i / cfg.cols) | 0;
+    for (const [dx, dy] of DIRS) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= cfg.cols || ny >= cfg.rows) continue;
+      const ni = ny * cfg.cols + nx;
+      if (S.cells[ni] === EMPTY && !home[ni]) { home[ni] = 1; stack.push(ni); }
+    }
+  }
+  // Multi-source Euclidean distance from the home region.
+  const homeCells = [];
+  for (let i = 0; i < n; i++) if (home[i]) homeCells.push(i);
+  for (let y = 0; y < cfg.rows; y++) {
+    for (let x = 0; x < cfg.cols; x++) {
+      let bd = Infinity;
+      for (const hi of homeCells) {
+        const hx = hi % cfg.cols, hy = (hi / cfg.cols) | 0;
+        const d = Math.hypot(x - hx, y - hy);
+        if (d < bd) bd = d;
+      }
+      const i = y * cfg.cols + x;
+      if (bd <= cfg.fogDist) S.fog[i] = 0;
+      else if (bd <= cfg.fogDist + 1) S.fog[i] = 1;
+    }
+  }
+}
+// Lantern reveal: clear fog in radius r (plus a half-fog smoothing ring).
+// Only ever clears — fog never closes back in.
+function revealFog(cx, cy, r) {
+  for (let y = 0; y < cfg.rows; y++) {
+    for (let x = 0; x < cfg.cols; x++) {
+      const d = Math.hypot(x - cx, y - cy);
+      const i = y * cfg.cols + x;
+      if (d <= r) S.fog[i] = 0;
+      else if (d <= r + 1 && S.fog[i] === 2) S.fog[i] = 1;
+    }
+  }
+}
+
 // ---- Waves: red deploys over time, mid-map. Clear them all -> jackpot. ----
+// Early-game focus: no enemy units for now.
+const ENEMIES_ENABLED = false;
 function startWave(n) {
-  S.wave = n;
+  if (!ENEMIES_ENABLED) return;
   S.redQueue = [];
   const count = 2 + n;
   for (let i = 0; i < count; i++) {
@@ -584,7 +667,7 @@ function weakestBlock(t) {
   for (let y = 0; y < cfg.rows; y++) {
     for (let x = 0; x < cfg.cols; x++) {
       const i = y * cfg.cols + x;
-      if (S.cells[i] !== WHITE) continue;
+      if (S.cells[i] !== WHITE || S.fog[i] !== 0) continue; // can't snipe what you can't see
       const hp = S.hp[i];
       const d = (x - t.x) * (x - t.x) + (y - t.y) * (y - t.y);
       if (hp < bestHp || (hp === bestHp && d < bd)) { bestHp = hp; bd = d; bx = x; by = y; bi = i; }
@@ -613,6 +696,7 @@ function bloomGrowth(t) {
       if (nx < 0 || ny < 0 || nx >= cfg.cols || ny >= cfg.rows) continue;
       const ni = ny * cfg.cols + nx;
       if (S.cells[ni] !== EMPTY || S.growN[ni] >= GROW_STEPS) continue;
+      if (S.fog[ni] !== 0) continue; // blooms only work in visible territory
       if (S.growBy[ni] !== 0 && S.growBy[ni] !== t.color) continue;
       if (turretAt(nx, ny)) continue;
       const d = dx * dx + dy * dy;
@@ -770,6 +854,7 @@ const CARD_POOL = [
   { kind: 'turret', type: 'rocket', title: 'Rocket', sub: 'Homing missiles' },
   { kind: 'turret', type: 'laser', title: 'Laser', sub: 'Snipes weak blocks' },
   { kind: 'turret', type: 'bloom', title: 'Bloom', sub: 'Grows territory' },
+  { kind: 'turret', type: 'lantern', title: 'Lantern', sub: 'Clears fog' },
   { kind: 'freq', mult: 1.25, title: '+25%', sub: 'Fire rate' },
   { kind: 'damage', add: 1, title: '+1', sub: 'Damage', needs: ['cannon', 'rocket', 'laser'] },
   { kind: 'bounce', add: 0.25, title: '+25%', sub: 'Bounce chance', needs: ['cannon'] },
@@ -858,14 +943,25 @@ function placeTurretAt(sx, sy) {
     S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
     return;
   }
-  if (type === 'bloom' && S.cells[cy * cfg.cols + cx] !== EMPTY) {
-    // The Bloom needs open ground: its field spreads onto empty grid cells.
+  const pi = cy * cfg.cols + cx;
+  if (S.fog[pi] !== 0) {
+    // Units can only be placed in fully-revealed cells.
     S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
     return;
   }
-  S.cells[cy * cfg.cols + cx] = EMPTY; // clear a pad
+  if (type === 'lantern') {
+    // Lanterns sit on any visible ground: empty or terrain. No pad clearing.
+  } else {
+    // Combat units and Blooms need open ground.
+    if (S.cells[pi] !== EMPTY) {
+      S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
+      return;
+    }
+    S.cells[pi] = EMPTY; // clear a pad
+  }
   S.turrets.push(mkTurret(cx, cy, BLUE, type));
   spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[BLUE]);
+  if (type === 'lantern') revealFog(cx, cy, cfg.fogDist); // the lantern pushes back the dark
   S.placing = null;
   placebanner.classList.add('hidden');
   if (!S.runOver) {
@@ -913,6 +1009,8 @@ function update(dt) {
     } else if (t.type === 'bloom') {
       t.cd -= dt;
       if (t.cd <= 0) { t.cd = TURRET.bloom.interval / rateMult * S.bloomMult; bloomGrowth(t); }
+    } else if (t.type === 'lantern') {
+      // Lanterns don't fire — they just hold back the fog.
     }
   }
   S.turrets = S.turrets.filter(t => !t.dead);
@@ -1266,7 +1364,7 @@ function render() {
       ctx.beginPath(); // crystal
       ctx.moveTo(0, -9); ctx.lineTo(6, 0); ctx.lineTo(0, 9); ctx.lineTo(-6, 0);
       ctx.closePath(); ctx.fill(); ctx.stroke();
-    } else { // bloom: a sprout
+    } else if (t.type === 'bloom') { // a sprout
       ctx.strokeStyle = col;
       ctx.lineWidth = 2;
       ctx.beginPath(); ctx.moveTo(0, 7); ctx.quadraticCurveTo(1, 0, 0, -6); ctx.stroke();
@@ -1274,6 +1372,14 @@ function render() {
       ctx.beginPath(); ctx.ellipse(-4.5, -3, 4.5, 2.6, -0.5, 0, Math.PI * 2); ctx.fill();
       ctx.beginPath(); ctx.ellipse(4.5, -5, 4.5, 2.6, 0.5, 0, Math.PI * 2); ctx.fill();
       ctx.beginPath(); ctx.arc(0, -7.5, 2.2, 0, Math.PI * 2); ctx.fill(); // bud
+    } else { // lantern: a little glowing lantern
+      ctx.strokeStyle = col;
+      ctx.fillStyle = col;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(0, -5, 3.5, Math.PI, 0); ctx.stroke(); // handle
+      ctx.beginPath(); ctx.rect(-5, -5, 10, 12); ctx.fill(); ctx.stroke(); // body
+      ctx.fillStyle = '#fef3c7'; // glowing core
+      ctx.beginPath(); ctx.arc(0, 1, 3, 0, Math.PI * 2); ctx.fill();
     }
     ctx.restore();
     // HP bar above damaged turrets
@@ -1304,6 +1410,14 @@ function render() {
     ctx.beginPath(); ctx.moveTo(b.x1, b.y1); ctx.lineTo(b.x2, b.y2); ctx.stroke();
   }
   ctx.globalAlpha = 1;
+  // Fog of war over everything: full = black, half = 50% black (smooth edge)
+  for (let y = 0; y < cfg.rows; y++) {
+    for (let x = 0; x < cfg.cols; x++) {
+      const f = S.fog[y * cfg.cols + x];
+      if (f === 2) { ctx.fillStyle = '#000'; ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX); }
+      else if (f === 1) { ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX); }
+    }
+  }
   ctx.restore(); // ---- end world pass; screen pass below (chip, floaters) ----
   // Coin-counter chip, top-left: the zip target. Pops on collect.
   const pulse = S.chipPulse;
@@ -1369,7 +1483,7 @@ function updateHud() {
   statsEl.innerHTML =
     `<div><span class="swatch" style="background:#eef1f6"></span>Wall blocks: <b>${white}</b></div>` +
     `<div><span class="swatch" style="background:#222839"></span>Open space: <b>${empty}</b></div>` +
-    `<div>Wave: <b>${S.wave}</b> · Your turrets: <b>${blues}</b> · Enemy: <b>${reds}</b>${S.redQueue.length ? ` (+${S.redQueue.length} incoming)` : ''}</div>` +
+    (ENEMIES_ENABLED ? `<div>Wave: <b>${S.wave}</b> · Your turrets: <b>${blues}</b> · Enemy: <b>${reds}</b>${S.redQueue.length ? ` (+${S.redQueue.length} incoming)` : ''}</div>` : `<div>Your turrets: <b>${blues}</b></div>`) +
     `<div>Blocks excavated: <b>${S.destroyed}</b> · Red turrets destroyed: <b>${S.redKills}</b></div>` +
     `<div>Map seed: <b>${S.seed}</b></div>` +
     `<div>Fire rate: <b>${effFreq}/s</b> (×${S.freqMult.toFixed(2)}) · Damage: <b>+${S.dmgBonus}</b> · Steering: <b>×${S.steerMult.toFixed(2)}</b> · Bloom: <b>×${S.bloomMult.toFixed(2)}</b></div>` +
@@ -1507,7 +1621,8 @@ function applyUrlParams() {
   const map = { cols: inCols, rows: inRows, speed: inSpeed, freq: inFreq, arc: inArc,
     turn: inTurn, bounce: inBounce, cave: inCave, seed: inSeed, coin: inCoin, collect: inCollect,
     pophold: inPopHold, popdur: inPopDur,
-    poppush: inPopPush, ripple: inRipple, trail: inTrail, gravity: inGravity, thresh: inThresh };
+    poppush: inPopPush, ripple: inRipple, trail: inTrail, gravity: inGravity, thresh: inThresh,
+    terrain: inTerrain, empty: inEmpty, fogdist: inFogDist };
   for (const k of Object.keys(map)) if (q.has(k)) map[k].value = q.get(k);
 }
 function flashButton(el, text) {
@@ -1522,6 +1637,7 @@ document.getElementById('d-copylink').addEventListener('click', () => {
     turn: cfg.turnRate, bounce: cfg.bounceChance, cave: cfg.caveChance, seed: inSeed.value.trim(), coin: cfg.coinChance,
     collect: cfg.collectInterval, pophold: cfg.popHold, popdur: cfg.popDur, poppush: cfg.popPush,
     ripple: cfg.rippleAmp, trail: cfg.trailT, gravity: cfg.gravity, thresh: cfg.thresholds.join(','),
+    terrain: inTerrain.value, empty: inEmpty.value, fogdist: cfg.fogDist,
   });
   const url = location.origin + location.pathname + '?' + q.toString();
   const btn = document.getElementById('d-copylink');
