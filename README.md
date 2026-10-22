@@ -1,20 +1,30 @@
 # Territory Incremental Survivors
 
 Prototype: **Color Smash**-style excavation meets **Vampire Survivors**-style
-incremental leveling. A blue player cannon and a red enemy cannon spawn inside
-**caves**, sweep their aim arcs, and chip away at blocks that have **HP**: a
-smooth Perlin-noise gradient makes white regions weak (~3 hits) and dark-grey
-regions strong (~10 hits). Hits tint blocks progressively toward the attacker's
-color, every hit chips off little particle squares and pops a retro damage
-number, and destroying a block excavates it into open void. Cellular-automata
-**caves** carve the blobby voids the cannons live in, and projectiles fly
-through open space. Excavating a block as blue can drop a **coin** — tap it and
-it zips up to the coin counter in the top-left with a satisfying pop, granting
-1 XP (still called XP for now). Every few seconds (auto-collect interval) the
-nearest idle coin zips into your cannon for a free +1. Leveling up offers a
-choice of 3 upgrade cards: fire rate, bounce chance, or faster suction. The
-canvas fills the viewport with a pan/pinch camera (1-finger drag pans,
-2-finger pinch zooms, always crisp).
+incremental leveling, as an **auto-battler**. Your blue **Cannon** spawns inside
+a **cave** and chips away at blocks that have **HP**: a smooth Perlin-noise
+gradient makes white regions weak (~3 hits) and dark-grey regions strong
+(~10 hits). Hits tint blocks progressively toward the attacker's color, every
+hit chips off little particle squares and pops a retro damage number, and
+destroying a block excavates it into open void. Cellular-automata **caves**
+carve the blobby voids the turrets live in, and projectiles fly through open
+space. Excavating a block as blue can drop a **coin** — tap it and it zips up
+to the coin counter in the top-left with a satisfying pop, granting 1 XP
+(still called XP for now). Every few seconds (auto-collect interval) the
+nearest idle coin zips into your nearest turret for a free +1.
+
+**Turrets, not cannons.** Leveling up offers 3 cards: 4 turret types
+(**Cannon** — sweeping shots; **Rocket** — homing missiles with a limited turn
+rate that weave through caves and crash-splash into walls; **Laser** — hitscan
+zaps that always snipe the weakest block; **Mint** — drops a coin every 15s)
+plus upgrades (fire rate, damage, bounce chance, suction time, missile
+steering). Picking a turret card enters **placement mode**: tap any cell to
+deploy it (it clears its own pad). Turrets have HP and die — red turrets
+**deploy in waves** from mid-map caves and shoot back with the same roster.
+Kill every red turret to clear the wave for a coin jackpot; lose when your
+last turret falls (**run over** → dive again). The canvas fills the viewport
+with a pan/pinch camera (1-finger drag pans, 2-finger pinch zooms, always
+crisp).
 
 ## Run it
 

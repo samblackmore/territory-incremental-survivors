@@ -186,6 +186,40 @@
   .card:hover { transform: translateY(-6px); box-shadow: 0 10px 30px rgba(59,130,246,.35); }
   .card b { font-size: 30px; color: #7db4ff; }
   .card span { color: var(--muted); font-size: 12px; letter-spacing: .05em; text-transform: uppercase; }
+  /* Banners: placement prompt + wave announcements */
+  .banner {
+    position: fixed; top: 34px; left: 50%; transform: translateX(-50%);
+    background: rgba(10, 13, 22, 0.9);
+    border: 1px solid var(--blue);
+    border-radius: 10px;
+    padding: 10px 18px;
+    font-size: 15px; color: var(--text);
+    z-index: 9; pointer-events: none;
+    white-space: nowrap;
+  }
+  .banner.hidden { display: none; }
+  .banner b { color: #7db4ff; }
+  #wavebanner { border-color: #ffd75e; color: #ffd75e; font-weight: bold; letter-spacing: .08em; }
+  /* Run-over overlay */
+  #runover {
+    position: fixed; inset: 0;
+    background: rgba(5, 8, 15, 0.85);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 10;
+  }
+  #runover.hidden { display: none; }
+  #runover h2 { color: #ef4444; }
+  #runstats { color: var(--muted); margin: 0 0 22px; line-height: 2; }
+  #runstats b { color: var(--text); }
+  #diveagain {
+    background: linear-gradient(180deg, #27314d, #1a2138);
+    border: 2px solid var(--blue);
+    border-radius: 10px;
+    color: var(--text);
+    font-size: 16px; font-weight: bold; letter-spacing: .05em;
+    padding: 14px 40px; cursor: pointer;
+  }
+  #diveagain:hover { transform: translateY(-2px); box-shadow: 0 10px 30px rgba(59,130,246,.35); }
 </style>
 </head>
 <body>
@@ -262,6 +296,9 @@
   </aside>
 </div>
 
+<div id="placebanner" class="banner hidden"></div>
+<div id="wavebanner" class="banner hidden"></div>
+
 <div id="levelup" class="hidden">
   <div class="cards">
     <h2>Level up! Choose an upgrade</h2>
@@ -273,7 +310,15 @@
   </div>
 </div>
 
+<div id="runover" class="hidden">
+  <div class="cards">
+    <h2>Run over</h2>
+    <div id="runstats"></div>
+    <button id="diveagain">Dive again</button>
+  </div>
+</div>
+
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=15"></script>
+<script src="game.js?v=16"></script>
 </body>
 </html>

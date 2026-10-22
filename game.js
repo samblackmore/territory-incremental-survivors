@@ -9,6 +9,17 @@ const CELL_COLORS = ['#eef1f6', '#3d4454', '#3b82f6', '#ef4444'];
 
 const CELL_PX = 16;                 // render size of one cell
 const BOUNCE_MAX = 8;               // bounces per projectile (backstop, not a target)
+const STEER_RATE = 3;               // missile turn rate, rad/s (x S.steerMult)
+const RED_DEPLOY_EVERY = 12;        // seconds between red turret deployments
+
+// Turret roster: distinct damage patterns, no homing except the missile's
+// steering (which is deliberately dumb: limited turn rate, walls win).
+const TURRET = {
+  cannon: { name: 'Cannon', hp: 8, interval: 1.0, dmg: 1 },
+  rocket: { name: 'Rocket', hp: 6, interval: 2.5, dmg: 3 },
+  laser:  { name: 'Laser',  hp: 5, interval: 2.0, dmg: 2 },
+  mint:   { name: 'Mint',   hp: 4, interval: 15,  dmg: 0 },
+};
 const COIN_FLY_DUR = 0.45;           // seconds for a tapped coin to zip to the corner
 const RING_DUR = 0.3;                // conversion shockwave ring lifetime (s)
 const CHIP_CX = 41, CHIP_CY = 48;    // coin-counter chip center, in screen (CSS) px
@@ -33,6 +44,10 @@ const xpfill = document.getElementById('xpfill');
 const xplabel = document.getElementById('xplabel');
 const statsEl = document.getElementById('d-stats');
 const overlay = document.getElementById('levelup');
+const placebanner = document.getElementById('placebanner');
+const wavebanner = document.getElementById('wavebanner');
+const runover = document.getElementById('runover');
+const runstats = document.getElementById('runstats');
 
 const inCols   = document.getElementById('d-cols');
 const inRows   = document.getElementById('d-rows');
@@ -71,9 +86,9 @@ function minZoom() {
 const START_ZOOM_MULT = 3; // new games start this far in (x min zoom), on the player
 function resetCamera() {
   cam.zoom = minZoom() * START_ZOOM_MULT;
-  const p = S.cannons.length ? S.cannons[0] : null; // the player's (blue) cannon
-  cam.x = p ? p.x * CELL_PX : (cfg.cols * CELL_PX) / 2;
-  cam.y = p ? p.y * CELL_PX : (cfg.rows * CELL_PX) / 2;
+  const p = nearestBlueTurret(cfg.cols / 2, cfg.rows / 2); // the player's first turret
+  cam.x = p ? (p.x + 0.5) * CELL_PX : (cfg.cols * CELL_PX) / 2;
+  cam.y = p ? (p.y + 0.5) * CELL_PX : (cfg.rows * CELL_PX) / 2;
   clampCamera();
 }
 function clampCamera() {
@@ -310,11 +325,63 @@ function readDebug() {
 // ---- Game state ----
 let S = null;
 
-function mkCannon(gx, gy, color) {
-  // Base aim: toward the map center, so bottom-left aims up-right etc.
-  const cx = cfg.cols / 2, cy = cfg.rows / 2;
-  const base = Math.atan2(cy - gy, cx - gx);
-  return { x: gx, y: gy, color, base, angle: base, dir: 1, acc: 0 };
+function mkTurret(x, y, color, type) {
+  const spec = TURRET[type];
+  // Base aim is fixed at placement: blue aims map-center, red aims at blue's
+  // corner. Nobody tracks anybody — the patterns do the fighting.
+  const base = color === BLUE
+    ? Math.atan2(cfg.rows / 2 - y, cfg.cols / 2 - x)
+    : Math.atan2(cfg.rows * 0.85 - y, cfg.cols * 0.15 - x);
+  // Red gets tankier every wave so the escalation is real.
+  const hpScale = color === RED ? 1 + 0.2 * (S.wave - 1) : 1;
+  const maxhp = Math.max(1, Math.round(spec.hp * hpScale));
+  return { x, y, color, type, hp: maxhp, maxhp, base, angle: base, dir: 1,
+           cd: Math.random(), dead: false };
+}
+// Turret occupying a cell, if any (skips the dead).
+function turretAt(cx, cy) {
+  for (const t of S.turrets) {
+    if (!t.dead && t.x === cx && t.y === cy) return t;
+  }
+  return null;
+}
+function nearestBlueTurret(x, y) {
+  let best = null, bd = Infinity;
+  for (const t of S.turrets) {
+    if (t.dead || t.color !== BLUE) continue;
+    const d = (t.x + 0.5 - x) ** 2 + (t.y + 0.5 - y) ** 2;
+    if (d < bd) { bd = d; best = t; }
+  }
+  return best;
+}
+// Damage an enemy turret. Shows remaining HP above it, like block damage
+// numbers — turrets are just big blocks that shoot back.
+function damageTurret(t, dmg, byColor) {
+  if (t.dead) return;
+  t.hp -= dmg;
+  spawnDmgNum(t.x + 0.5, t.y - 0.2, Math.max(0, t.hp));
+  if (t.hp <= 0) {
+    t.dead = true;
+    killTurret(t);
+  }
+}
+function killTurret(t) {
+  spawnBurst(t.x + 0.5, t.y + 0.5, CELL_COLORS[t.color]);
+  spawnBurst(t.x + 0.5, t.y + 0.5, '#ffffff');
+  if (t.color === RED) {
+    S.redKills++;
+    // Kill reward: 3 coins scattered around the wreck.
+    for (let k = 0; k < 3; k++) {
+      if (S.coins.length >= 800) break;
+      S.coins.push({ x: t.x + 0.5 + (Math.random() - 0.5) * 2,
+                     y: t.y + 0.5 + (Math.random() - 0.5) * 2,
+                     state: 'idle', phase: Math.random() * 6.283,
+                     sx: 0, sy: 0, t: 0, dead: false });
+    }
+    checkWaveClear();
+  } else {
+    checkRunOver();
+  }
 }
 
 // Nearest cave cell to an anchor point (for cannon spawns). exclude lets the
@@ -352,12 +419,17 @@ function newGame() {
   const popCol = new Uint8Array(n); // flash color for the pop (the attacker)
   const popDX = new Float32Array(n); // knockback direction (unit vector), set at impact
   const popDY = new Float32Array(n);
-  S = { cells, hp, maxhp, hitBy, popT, popAmp, popCol, popDX, popDY, projs: [], cannons: [], xp: 0, level: 1, pending: 0,
+  S = { cells, hp, maxhp, hitBy, popT, popAmp, popCol, popDX, popDY, projs: [], xp: 0, level: 1, pending: 0,
         freqMult: 1, paused: false, frame: 0, seed,
         coins: [], floaters: [], coinsCollected: 0, chipPulse: 0, time: 0,
         particles: [], particlesSpawned: 0, rings: [], dmgNums: [],
         destroyed: 0, destroyedBlue: 0, collectT: 0,
-        bounceChance: cfg.bounceChance, suctionMult: 1 };
+        bounceChance: cfg.bounceChance, suctionMult: 1,
+        // auto-battler state
+        turrets: [], missiles: [], beams: [],
+        wave: 0, redQueue: [], redTimer: 0, waveBreak: 0, redKills: 0,
+        placing: null, runOver: false,
+        dmgBonus: 0, steerMult: 1 };
 
   // Caves first (cellular-automata blobs), then HP from a smooth noise gradient:
   // white ~3 hits ... dark grey ~10 hits
@@ -373,37 +445,160 @@ function newGame() {
     }
   }
 
-  // Cannons spawn inside caves, near the bottom-left / top-right anchors —
+  // The player's Cannon spawns inside a cave near the bottom-left anchor —
   // chipping away at cave walls feels better than painting open ground.
+  // Red comes in waves after that (see startWave).
   const pA = { x: cfg.cols * 0.15, y: cfg.rows * 0.85 };
-  const eA = { x: cfg.cols * 0.85, y: cfg.rows * 0.15 };
   const pi = nearestCave(pA.x, pA.y, -1);
-  const ei = nearestCave(eA.x, eA.y, pi);
   const pc = pi >= 0 ? { x: pi % cfg.cols, y: Math.floor(pi / cfg.cols) } : snapAnchor(pA);
-  const ec = ei >= 0 ? { x: ei % cfg.cols, y: Math.floor(ei / cfg.cols) } : snapAnchor(eA);
-  S.cannons.push(mkCannon(pc.x, pc.y, BLUE));
-  S.cannons.push(mkCannon(ec.x, ec.y, RED));
+  S.turrets.push(mkTurret(pc.x, pc.y, BLUE, 'cannon'));
+  startWave(1);
 
   resize();       // backing store = viewport x devicePixelRatio
-  resetCamera();  // height-fill framing, starting on the player's cannon
+  resetCamera();  // overview framing, starting on the player's turret
 
   overlay.classList.add('hidden');
+  runover.classList.add('hidden');
+  placebanner.classList.add('hidden');
+  wavebanner.classList.add('hidden');
   updateHud();
 }
 
+// ---- Waves: red deploys over time, mid-map. Clear them all -> jackpot. ----
+function startWave(n) {
+  S.wave = n;
+  S.redQueue = [];
+  const count = 2 + n;
+  for (let i = 0; i < count; i++) {
+    let type = 'cannon';
+    const r = Math.random();
+    if (n >= 3 && r < 0.3) type = 'rocket';       // rockets from wave 3
+    else if (n >= 2 && r < 0.5) type = 'laser';   // lasers from wave 2
+    S.redQueue.push(type);
+  }
+  S.redTimer = 0;
+  wavebanner.textContent = 'WAVE ' + n;
+  wavebanner.classList.remove('hidden');
+  clearTimeout(S._wbt);
+  S._wbt = setTimeout(() => wavebanner.classList.add('hidden'), 2000);
+}
+function deployRed(type) {
+  // Random cave cell, weighted toward the middle (rejection sample).
+  let bi = -1;
+  for (let tries = 0; tries < 20 && bi < 0; tries++) {
+    const x = (Math.random() * cfg.cols) | 0, y = (Math.random() * cfg.rows) | 0;
+    const i = y * cfg.cols + x;
+    if (S.cells[i] === EMPTY && !turretAt(x, y) &&
+        Math.abs(x - cfg.cols / 2) < cfg.cols * 0.4) bi = i;
+  }
+  if (bi < 0) { // fallback: any empty, unoccupied cell
+    for (let i = 0; i < S.cells.length && bi < 0; i++) {
+      if (S.cells[i] === EMPTY && !turretAt(i % cfg.cols, (i / cfg.cols) | 0)) bi = i;
+    }
+  }
+  if (bi < 0) return; // no room: this deployment fizzles
+  const x = bi % cfg.cols, y = (bi / cfg.cols) | 0;
+  S.turrets.push(mkTurret(x, y, RED, type));
+  spawnBurst(x + 0.5, y + 0.5, CELL_COLORS[RED]);
+}
+function checkWaveClear() {
+  if (S.runOver) return;
+  const redsAlive = S.turrets.some(t => !t.dead && t.color === RED);
+  if (!redsAlive && S.redQueue.length === 0) {
+    // Jackpot: coins scattered around map center.
+    const n = 10 + 5 * S.wave;
+    for (let k = 0; k < n; k++) {
+      if (S.coins.length >= 800) break;
+      S.coins.push({ x: cfg.cols / 2 + (Math.random() - 0.5) * 10,
+                     y: cfg.rows / 2 + (Math.random() - 0.5) * 10,
+                     state: 'idle', phase: Math.random() * 6.283,
+                     sx: 0, sy: 0, t: 0, dead: false });
+    }
+    wavebanner.textContent = 'WAVE ' + S.wave + ' CLEARED!';
+    wavebanner.classList.remove('hidden');
+    clearTimeout(S._wbt);
+    S.waveBreak = 4; // seconds of breathing room before the next wave
+  }
+}
+// Lose condition: your last turret falls -> run over.
+function checkRunOver() {
+  if (S.runOver) return;
+  const bluesAlive = S.turrets.some(t => !t.dead && t.color === BLUE);
+  if (!bluesAlive) {
+    S.runOver = true;
+    S.paused = true;
+    S.placing = null;
+    placebanner.classList.add('hidden');
+    runstats.innerHTML =
+      'Wave <b>' + S.wave + '</b> · Level <b>' + S.level + '</b><br>' +
+      'Survived <b>' + Math.round(S.time) + 's</b> · ' +
+      'Excavated <b>' + S.destroyed + '</b> · ' +
+      'Red turrets destroyed <b>' + S.redKills + '</b> · ' +
+      'Coins <b>' + S.coinsCollected + '</b>';
+    runover.classList.remove('hidden');
+  }
+}
+
 // ---- Firing ----
-function fire(c) {
+function fireTurret(t) {
   const speed = cfg.projSpeed / CELL_PX; // cells per second
-  const mx = c.x + Math.cos(c.angle) * 1.1;
-  const my = c.y + Math.sin(c.angle) * 1.1;
+  const mx = t.x + 0.5 + Math.cos(t.angle) * 1.1;
+  const my = t.y + 0.5 + Math.sin(t.angle) * 1.1;
   S.projs.push({
     x: mx, y: my,
-    vx: Math.cos(c.angle) * speed,
-    vy: Math.sin(c.angle) * speed,
-    color: c.color,
+    vx: Math.cos(t.angle) * speed,
+    vy: Math.sin(t.angle) * speed,
+    color: t.color,
+    dmg: TURRET.cannon.dmg + S.dmgBonus,
     bounces: 0,
     dead: false,
   });
+}
+// Rocket: launches a homing missile. It steers toward the nearest enemy
+// turret but can only turn STEER_RATE rad/s — momentum carries it into walls,
+// where it crashes and splash-digs the 3x3.
+function fireMissile(t) {
+  const sp = 10; // cells per second
+  S.missiles.push({
+    x: t.x + 0.5, y: t.y + 0.5,
+    vx: Math.cos(t.base) * sp, vy: Math.sin(t.base) * sp,
+    speed: sp, color: t.color,
+    dmg: TURRET.rocket.dmg + S.dmgBonus,
+    dead: false,
+  });
+  spawnBurst(t.x + 0.5, t.y + 0.5, '#fb923c');
+}
+// Laser: hitscan. Snipes the weakest block on the map (lowest current HP,
+// nearest wins ties) — it finishes off damaged blocks first, chewing its own
+// path toward the enemy caves. Beam fades in 0.15s.
+function weakestBlock(t) {
+  let bx = -1, by = -1, bi = -1, bestHp = Infinity, bd = Infinity;
+  for (let y = 0; y < cfg.rows; y++) {
+    for (let x = 0; x < cfg.cols; x++) {
+      const i = y * cfg.cols + x;
+      if (S.cells[i] !== WHITE) continue;
+      const hp = S.hp[i];
+      const d = (x - t.x) * (x - t.x) + (y - t.y) * (y - t.y);
+      if (hp < bestHp || (hp === bestHp && d < bd)) { bestHp = hp; bd = d; bx = x; by = y; bi = i; }
+    }
+  }
+  return bi < 0 ? null : { x: bx, y: by, i: bi };
+}
+function fireLaser(t) {
+  const tgt = weakestBlock(t);
+  if (!tgt) return; // nowhere left to dig
+  S.beams.push({ x1: (t.x + 0.5) * CELL_PX, y1: (t.y + 0.5) * CELL_PX,
+                 x2: (tgt.x + 0.5) * CELL_PX, y2: (tgt.y + 0.5) * CELL_PX, t: 0 });
+  damageBlock(tgt.i, TURRET.laser.dmg + S.dmgBonus, t.color,
+              t.x + 0.5, t.y + 0.5, tgt.x - t.x, tgt.y - t.y);
+}
+// Mint: doesn't shoot. Drops a coin beside itself on a timer.
+function mintCoin(t) {
+  if (S.coins.length >= 800) return;
+  S.coins.push({ x: t.x + 0.5 + (Math.random() - 0.5) * 1.5,
+                 y: t.y + 0.5 + (Math.random() - 0.5) * 1.5,
+                 state: 'idle', phase: Math.random() * 6.283,
+                 sx: 0, sy: 0, t: 0, dead: false });
 }
 
 function stepProjectile(p, dt) {
@@ -414,54 +609,18 @@ function stepProjectile(p, dt) {
     p.x += sx; p.y += sy;
     const cx = Math.floor(p.x), cy = Math.floor(p.y);
     if (cx < 0 || cy < 0 || cx >= cfg.cols || cy >= cfg.rows) { p.dead = true; return; }
+    // Turrets take priority: an enemy turret cell eats the shot.
+    const t = turretAt(cx, cy);
+    if (t && t.color !== p.color) {
+      damageTurret(t, p.dmg || 1, p.color);
+      spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[p.color]);
+      p.dead = true; return;
+    }
     const idx = cy * cfg.cols + cx;
     const cell = S.cells[idx];
     if (cell === WHITE) {
-      S.hp[idx]--;
-      S.hitBy[idx] = p.color;
-      S.popT[idx] = 0; // start the hit-pop: instant 2x scale + full projectile color
-      S.popAmp[idx] = 1;
-      S.popCol[idx] = p.color;
-      // knockback: push the block away from the projectile's entry point
-      const pdx = (cx + 0.5) - p.x, pdy = (cy + 0.5) - p.y;
-      const plen = Math.hypot(pdx, pdy) || 1;
-      S.popDX[idx] = pdx / plen;
-      S.popDY[idx] = pdy / plen;
-      // shockwave ripple: nudge the 8 neighbors radially away from the impact
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          if (!dx && !dy) continue;
-          const nx = cx + dx, ny = cy + dy;
-          if (nx < 0 || ny < 0 || nx >= cfg.cols || ny >= cfg.rows) continue;
-          const ni = ny * cfg.cols + nx;
-          if (S.cells[ni] !== WHITE) continue;
-          if (S.popT[ni] >= 0 && S.popAmp[ni] >= cfg.rippleAmp) continue; // never downgrade a real hit
-          S.popT[ni] = 0;
-          S.popAmp[ni] = cfg.rippleAmp;
-          S.popCol[ni] = p.color;
-          const rl = Math.hypot(dx, dy);
-          S.popDX[ni] = dx / rl;
-          S.popDY[ni] = dy / rl;
-        }
-      }
-      spawnChip(cx + 0.5, cy + 0.5, CELL_COLORS[p.color], p.vx, p.vy);
-      if (S.hp[idx] > 0) spawnDmgNum(cx + 0.5, cy + 0.2, S.hp[idx]); // remaining HP floats up
-      if (S.hp[idx] <= 0) {
-        S.cells[idx] = EMPTY; // excavated: the block is gone, not painted over
-        S.destroyed++;
-        if (p.color === BLUE) S.destroyedBlue++;
-        spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[p.color]); // the block cracks: debris + ring
-        if (p.color === BLUE && Math.random() < cfg.coinChance) {
-          S.coins.push({ x: cx + 0.5, y: cy + 0.5, state: 'idle',
-                         phase: Math.random() * 6.283, sx: 0, sy: 0, t: 0, dead: false });
-          if (S.coins.length > 800) { // safety valve: drop oldest idle coin
-            const i = S.coins.findIndex(c => c.state === 'idle');
-            if (i >= 0) S.coins.splice(i, 1);
-          }
-        }
-        p.dead = true;
-        return;
-      }
+      const destroyed = damageBlock(idx, p.dmg || 1, p.color, p.x, p.y, p.vx, p.vy);
+      if (destroyed) { p.dead = true; return; }
       // Pinball: a surviving block may bounce the shot back out (re-rolled per hit)
       if (p.bounces < BOUNCE_MAX && Math.random() < S.bounceChance) {
         p.bounces++;
@@ -479,6 +638,58 @@ function stepProjectile(p, dt) {
   }
 }
 
+// Damage a WHITE block: pop, ripple, chips, damage number, maybe destroy.
+// (sx, sy) = impact source (for knockback direction); (vx, vy) = spray direction.
+// Returns true when the block was destroyed.
+function damageBlock(idx, dmg, color, sx, sy, vx, vy) {
+  const cx = idx % cfg.cols, cy = Math.floor(idx / cfg.cols);
+  S.hp[idx] = Math.max(0, S.hp[idx] - dmg); // clamp: hp is a Uint8Array, no wraparound
+  S.hitBy[idx] = color;
+  S.popT[idx] = 0; // start the hit-pop: instant 2x scale + full attacker color
+  S.popAmp[idx] = 1;
+  S.popCol[idx] = color;
+  // knockback: push the block away from the impact source
+  const pdx = (cx + 0.5) - sx, pdy = (cy + 0.5) - sy;
+  const plen = Math.hypot(pdx, pdy) || 1;
+  S.popDX[idx] = pdx / plen;
+  S.popDY[idx] = pdy / plen;
+  // shockwave ripple: nudge the 8 neighbors radially away from the impact
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      if (!dx && !dy) continue;
+      const nx = cx + dx, ny = cy + dy;
+      if (nx < 0 || ny < 0 || nx >= cfg.cols || ny >= cfg.rows) continue;
+      const ni = ny * cfg.cols + nx;
+      if (S.cells[ni] !== WHITE) continue;
+      if (S.popT[ni] >= 0 && S.popAmp[ni] >= cfg.rippleAmp) continue; // never downgrade a real hit
+      S.popT[ni] = 0;
+      S.popAmp[ni] = cfg.rippleAmp;
+      S.popCol[ni] = color;
+      const rl = Math.hypot(dx, dy);
+      S.popDX[ni] = dx / rl;
+      S.popDY[ni] = dy / rl;
+    }
+  }
+  spawnChip(cx + 0.5, cy + 0.5, CELL_COLORS[color], vx, vy);
+  if (S.hp[idx] > 0) {
+    spawnDmgNum(cx + 0.5, cy + 0.2, S.hp[idx]); // remaining HP floats up
+    return false;
+  }
+  S.cells[idx] = EMPTY; // excavated: the block is gone, not painted over
+  S.destroyed++;
+  if (color === BLUE) S.destroyedBlue++;
+  spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[color]); // the block cracks: debris + ring
+  if (color === BLUE && Math.random() < cfg.coinChance) {
+    S.coins.push({ x: cx + 0.5, y: cy + 0.5, state: 'idle',
+                   phase: Math.random() * 6.283, sx: 0, sy: 0, t: 0, dead: false });
+    if (S.coins.length > 800) { // safety valve: drop oldest idle coin
+      const i = S.coins.findIndex(c => c.state === 'idle');
+      if (i >= 0) S.coins.splice(i, 1);
+    }
+  }
+  return true;
+}
+
 // ---- Level-ups ----
 function checkLevel() {
   const t = cfg.thresholds;
@@ -488,17 +699,57 @@ function checkLevel() {
   }
   if (S.pending > 0 && !S.paused) {
     S.paused = true;
+    offerCards();
     overlay.classList.remove('hidden');
+  }
+}
+
+// Card pool: 4 turret cards (placement = the skill expression) + 5 upgrades.
+const CARD_POOL = [
+  { kind: 'turret', type: 'cannon', title: 'Cannon', sub: 'New turret' },
+  { kind: 'turret', type: 'rocket', title: 'Rocket', sub: 'Homing missiles' },
+  { kind: 'turret', type: 'laser', title: 'Laser', sub: 'Snipes weak blocks' },
+  { kind: 'turret', type: 'mint', title: 'Mint', sub: '+1 coin / 15s' },
+  { kind: 'freq', mult: 1.25, title: '+25%', sub: 'Fire rate' },
+  { kind: 'damage', add: 1, title: '+1', sub: 'Damage' },
+  { kind: 'bounce', add: 0.25, title: '+25%', sub: 'Bounce chance' },
+  { kind: 'suction', mult: 0.75, title: '−25%', sub: 'Suction time' },
+  { kind: 'steer', mult: 1.3, title: '+30%', sub: 'Missile steering' },
+];
+function offerCards() {
+  const pool = CARD_POOL.slice();
+  const els = document.querySelectorAll('.card');
+  for (let k = 0; k < els.length && pool.length; k++) {
+    const p = pool.splice((Math.random() * pool.length) | 0, 1)[0];
+    const el = els[k];
+    el.dataset.kind = p.kind;
+    el.dataset.type = p.type || '';
+    el.dataset.mult = p.mult || '';
+    el.dataset.add = p.add || '';
+    el.innerHTML = '<b>' + p.title + '</b><span>' + p.sub + '</span>';
   }
 }
 
 document.querySelectorAll('.card').forEach(card => {
   card.addEventListener('click', () => {
     const kind = card.dataset.kind || 'freq';
+    if (kind === 'turret') {
+      // Placement mode: tap the map to deploy. The game stays paused until
+      // the turret is down — no cancel, there's always room somewhere.
+      S.pending--;
+      overlay.classList.add('hidden');
+      updateHud();
+      enterPlacement(card.dataset.type);
+      return;
+    }
     if (kind === 'bounce') {
       S.bounceChance = Math.min(0.95, S.bounceChance + parseFloat(card.dataset.add));
     } else if (kind === 'suction') {
       S.suctionMult = Math.max(0.2, S.suctionMult * parseFloat(card.dataset.mult));
+    } else if (kind === 'damage') {
+      S.dmgBonus += parseInt(card.dataset.add, 10);
+    } else if (kind === 'steer') {
+      S.steerMult *= parseFloat(card.dataset.mult);
     } else {
       S.freqMult *= parseFloat(card.dataset.mult);
     }
@@ -512,6 +763,42 @@ document.querySelectorAll('.card').forEach(card => {
   });
 });
 
+// Run over -> dive again: fresh map, fresh run.
+document.getElementById('diveagain').addEventListener('click', () => {
+  runover.classList.add('hidden');
+  newGame();
+});
+
+// Placement: the chosen turret clears its own 1-cell pad and goes live.
+function enterPlacement(type) {  S.placing = { type };
+  placebanner.innerHTML = 'Tap the map to deploy <b>' + TURRET[type].name + '</b>';
+  placebanner.classList.remove('hidden');
+}
+function placeTurretAt(sx, sy) {
+  const wpt = screenToWorld(sx, sy);
+  let cx = Math.floor(wpt.x / CELL_PX), cy = Math.floor(wpt.y / CELL_PX);
+  cx = Math.max(0, Math.min(cfg.cols - 1, cx));
+  cy = Math.max(0, Math.min(cfg.rows - 1, cy));
+  if (turretAt(cx, cy)) {
+    // Occupied: red ring says no, placement mode stays on.
+    S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
+    return;
+  }
+  S.cells[cy * cfg.cols + cx] = EMPTY; // clear a pad
+  S.turrets.push(mkTurret(cx, cy, BLUE, S.placing.type));
+  spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[BLUE]);
+  S.placing = null;
+  placebanner.classList.add('hidden');
+  if (!S.runOver) {
+    if (S.pending > 0) {
+      offerCards(); // more picks to make: fresh cards, game stays paused
+      overlay.classList.remove('hidden');
+    } else {
+      S.paused = false;
+    }
+  }
+}
+
 // Effective auto-collect interval after suction upgrades
 function suctionInterval() {
   return cfg.collectInterval * S.suctionMult;
@@ -521,26 +808,107 @@ function suctionInterval() {
 function update(dt) {
   const arcRad = (cfg.arc * Math.PI) / 180;
   const turnRate = (cfg.turnRate * Math.PI) / 180; // rad/s
-  for (const c of S.cannons) {
-    // Sweep the aim within the turn arc (full 360 = continuous spin)
-    if (cfg.arc >= 360) {
-      c.angle += turnRate * dt;
-    } else if (arcRad > 0) {
-      c.angle += c.dir * turnRate * dt;
-      const lo = c.base - arcRad / 2, hi = c.base + arcRad / 2;
-      if (c.angle > hi) { c.angle = hi; c.dir = -1; }
-      else if (c.angle < lo) { c.angle = lo; c.dir = 1; }
-    } else {
-      c.angle = c.base;
+  for (const t of S.turrets) {
+    if (t.dead) continue;
+    const rateMult = cfg.freq * (t.color === BLUE ? S.freqMult : 1);
+    if (t.type === 'cannon') {
+      // Sweep the aim within the turn arc (full 360 = continuous spin)
+      if (cfg.arc >= 360) {
+        t.angle += turnRate * dt;
+      } else if (arcRad > 0) {
+        t.angle += t.dir * turnRate * dt;
+        const lo = t.base - arcRad / 2, hi = t.base + arcRad / 2;
+        if (t.angle > hi) { t.angle = hi; t.dir = -1; }
+        else if (t.angle < lo) { t.angle = lo; t.dir = 1; }
+      } else {
+        t.angle = t.base;
+      }
+      t.cd -= dt;
+      if (t.cd <= 0) { t.cd = 1 / rateMult; fireTurret(t); }
+    } else if (t.type === 'rocket') {
+      t.cd -= dt;
+      if (t.cd <= 0) { t.cd = TURRET.rocket.interval / rateMult; fireMissile(t); }
+    } else if (t.type === 'laser') {
+      t.cd -= dt;
+      if (t.cd <= 0) { t.cd = TURRET.laser.interval / rateMult; fireLaser(t); }
+    } else if (t.type === 'mint') {
+      t.cd -= dt;
+      if (t.cd <= 0) { t.cd = TURRET.mint.interval / rateMult; mintCoin(t); }
     }
-    // Fire. Frequency upgrades apply to the player's (blue) cannon only.
-    const rate = cfg.freq * (c.color === BLUE ? S.freqMult : 1);
-    c.acc += dt * rate;
-    while (c.acc >= 1) { c.acc -= 1; fire(c); }
   }
+  S.turrets = S.turrets.filter(t => !t.dead);
   for (const p of S.projs) stepProjectile(p, dt);
   if (S.projs.length > 4000) S.projs.splice(0, S.projs.length - 4000); // safety valve
   S.projs = S.projs.filter(p => !p.dead);
+
+  // Missiles: steer toward the nearest enemy turret, limited turn rate.
+  // Walls always win a momentum contest — crashes splash-dig the 3x3.
+  const maxTurn = STEER_RATE * S.steerMult * dt;
+  for (const m of S.missiles) {
+    let tgt = null, bd = Infinity;
+    for (const t of S.turrets) {
+      if (t.dead || t.color === m.color) continue;
+      const d = (t.x + 0.5 - m.x) ** 2 + (t.y + 0.5 - m.y) ** 2;
+      if (d < bd) { bd = d; tgt = t; }
+    }
+    if (tgt) {
+      const desired = Math.atan2(tgt.y + 0.5 - m.y, tgt.x + 0.5 - m.x);
+      const cur = Math.atan2(m.vy, m.vx);
+      let diff = desired - cur;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      const turn = Math.max(-maxTurn, Math.min(maxTurn, diff));
+      const na = cur + turn;
+      m.vx = Math.cos(na) * m.speed;
+      m.vy = Math.sin(na) * m.speed;
+    }
+    m.x += m.vx * dt;
+    m.y += m.vy * dt;
+    // flame trail
+    S.particles.push({ x: m.x, y: m.y,
+      vx: (Math.random() - 0.5) * 2, vy: (Math.random() - 0.5) * 2,
+      life: 0.25, t: 0, dead: false, color: '#fb923c', size: 3 + Math.random() * 2 });
+    const cx = Math.floor(m.x), cy = Math.floor(m.y);
+    if (cx < 0 || cy < 0 || cx >= cfg.cols || cy >= cfg.rows) { m.dead = true; continue; }
+    const tt = turretAt(cx, cy);
+    if (tt && tt.color !== m.color) {
+      // direct hit!
+      damageTurret(tt, m.dmg, m.color);
+      spawnBurst(m.x, m.y, '#fb923c');
+      spawnBurst(m.x, m.y, CELL_COLORS[m.color]);
+      m.dead = true;
+      continue;
+    }
+    if (S.cells[cy * cfg.cols + cx] === WHITE) {
+      // crash: splash-dig the 3x3 so it never feels wasted
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = cx + dx, ny = cy + dy;
+          if (nx < 0 || ny < 0 || nx >= cfg.cols || ny >= cfg.rows) continue;
+          const ni = ny * cfg.cols + nx;
+          if (S.cells[ni] === WHITE) damageBlock(ni, 2, m.color, m.x, m.y, m.vx, m.vy);
+        }
+      }
+      spawnBurst(m.x, m.y, '#fb923c');
+      S.rings.push({ x: m.x, y: m.y, t: 0, css: '#fb923c', dead: false });
+      m.dead = true;
+    }
+  }
+  S.missiles = S.missiles.filter(m => !m.dead);
+
+  // Laser beams: quick fade
+  for (const b of S.beams) b.t += dt;
+  S.beams = S.beams.filter(b => b.t < 0.15);
+
+  // Red deploys over time; wave-clear breather, then the next wave.
+  if (!S.runOver && S.redQueue.length) {
+    S.redTimer += dt;
+    if (S.redTimer >= RED_DEPLOY_EVERY) { S.redTimer = 0; deployRed(S.redQueue.shift()); }
+  }
+  if (S.waveBreak > 0) {
+    S.waveBreak -= dt;
+    if (S.waveBreak <= 0) startWave(S.wave + 1);
+  }
 
   // Tapped coins zip to the top-left chip (accelerating = satisfying).
   // The chip lives in screen space, so re-project its target every frame.
@@ -563,19 +931,21 @@ function update(dt) {
         checkLevel();
       }
     } else if (c.state === 'cannon') {
-      // auto-collected: lerps into the player's cannon, pops gold on arrival
+      // auto-collected: lerps into the nearest blue turret, pops gold on arrival
+      const pt = nearestBlueTurret(c.x, c.y);
+      if (!pt) { c.state = 'idle'; continue; } // no turrets left: coin stays put
       c.t += dt;
       const k = Math.min(1, c.t / COIN_FLY_DUR);
       const e = k * k;
-      const pc = S.cannons[0];
-      c.x = c.sx + (pc.x - c.sx) * e;
-      c.y = c.sy + (pc.y - c.sy) * e;
+      const px = pt.x + 0.5, py = pt.y + 0.5;
+      c.x = c.sx + (px - c.sx) * e;
+      c.y = c.sy + (py - c.sy) * e;
       if (k >= 1) {
         c.dead = true;
         S.xp++;
         S.coinsCollected++;
         S.chipPulse = 1;
-        spawnBurst(pc.x, pc.y, '#f5b301');
+        spawnBurst(px, py, '#f5b301');
         checkLevel();
       }
     }
@@ -585,17 +955,18 @@ function update(dt) {
   S.floaters = S.floaters.filter(f => f.t < 0.7);
   S.chipPulse = Math.max(0, S.chipPulse - dt * 3);
 
-  // Auto-collect: every interval the nearest idle coin zips to the player's
-  // cannon for a free +1. Tapping still sends coins to the corner chip.
-  if (cfg.collectInterval > 0 && S.cannons.length) {
+  // Auto-collect: every interval the nearest idle coin zips to its nearest
+  // blue turret for a free +1. Tapping still sends coins to the corner chip.
+  if (cfg.collectInterval > 0) {
     S.collectT += dt;
     if (S.collectT >= suctionInterval()) {
       S.collectT = 0;
-      const pc = S.cannons[0];
       let bestC = null, bd = Infinity;
       for (const c of S.coins) {
         if (c.state !== 'idle') continue;
-        const d = (c.x - pc.x) * (c.x - pc.x) + (c.y - pc.y) * (c.y - pc.y);
+        const pt = nearestBlueTurret(c.x, c.y);
+        if (!pt) continue;
+        const d = (c.x - pt.x) * (c.x - pt.x) + (c.y - pt.y) * (c.y - pt.y);
         if (d < bd) { bd = d; bestC = c; }
       }
       if (bestC) { bestC.state = 'cannon'; bestC.sx = bestC.x; bestC.sy = bestC.y; bestC.t = 0; }
@@ -756,20 +1127,70 @@ function render() {
   }
   ctx.globalAlpha = 1;
   ctx.textAlign = 'start';
-  // Cannons (rectangles, like the spec)
-  for (const c of S.cannons) {
+  // Turrets: distinct shapes per type, color = owner. HP bar when damaged.
+  for (const t of S.turrets) {
+    const px = (t.x + 0.5) * CELL_PX, py = (t.y + 0.5) * CELL_PX;
+    const col = CELL_COLORS[t.color];
     ctx.save();
-    ctx.translate(c.x * CELL_PX, c.y * CELL_PX);
-    ctx.rotate(c.angle);
+    ctx.translate(px, py);
+    // base
     ctx.fillStyle = '#10141f';
     ctx.beginPath(); ctx.arc(0, 0, 10, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = CELL_COLORS[c.color];
-    ctx.strokeStyle = '#0b0e16'; ctx.lineWidth = 2;
+    ctx.lineWidth = 2; ctx.strokeStyle = col;
+    ctx.beginPath(); ctx.arc(0, 0, 10, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = col;
+    ctx.strokeStyle = '#0b0e16';
+    if (t.type === 'cannon') {
+      ctx.rotate(t.angle);
+      ctx.beginPath(); ctx.rect(-4, -6, 26, 12); ctx.fill(); ctx.stroke();
+    } else if (t.type === 'rocket') {
+      ctx.rotate(t.base);
+      ctx.beginPath(); // nose cone
+      ctx.moveTo(11, 0); ctx.lineTo(-3, -7); ctx.lineTo(-3, 7);
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+    } else if (t.type === 'laser') {
+      ctx.fillStyle = '#22d3ee';
+      ctx.beginPath(); // crystal
+      ctx.moveTo(0, -9); ctx.lineTo(6, 0); ctx.lineTo(0, 9); ctx.lineTo(-6, 0);
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+    } else { // mint: a gold coin
+      ctx.fillStyle = '#f5b301';
+      ctx.beginPath(); ctx.arc(0, 0, 7, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#8a5b00';
+      ctx.font = 'bold 9px system-ui, sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('$', 0, 1);
+      ctx.textAlign = 'start';
+    }
+    ctx.restore();
+    // HP bar above damaged turrets
+    if (t.hp < t.maxhp) {
+      const w = 24, k = Math.max(0, t.hp / t.maxhp);
+      ctx.fillStyle = 'rgba(11,14,22,0.8)';
+      ctx.fillRect(px - w / 2, py - 18, w, 5);
+      ctx.fillStyle = k > 0.5 ? '#4ade80' : k > 0.25 ? '#f5b301' : '#ef4444';
+      ctx.fillRect(px - w / 2, py - 18, w * k, 5);
+    }
+  }
+  // Missiles: little triangles flying along their velocity
+  for (const m of S.missiles) {
+    ctx.save();
+    ctx.translate(m.x * CELL_PX, m.y * CELL_PX);
+    ctx.rotate(Math.atan2(m.vy, m.vx));
+    ctx.fillStyle = CELL_COLORS[m.color];
     ctx.beginPath();
-    ctx.rect(-4, -6, 26, 12); // the cannon rectangle, pointing along aim
-    ctx.fill(); ctx.stroke();
+    ctx.moveTo(7, 0); ctx.lineTo(-5, -4.5); ctx.lineTo(-5, 4.5);
+    ctx.closePath(); ctx.fill();
     ctx.restore();
   }
+  // Laser beams: instant cyan lines, fading fast
+  for (const b of S.beams) {
+    ctx.globalAlpha = Math.max(0, 1 - b.t / 0.15);
+    ctx.strokeStyle = '#22d3ee';
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(b.x1, b.y1); ctx.lineTo(b.x2, b.y2); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
   ctx.restore(); // ---- end world pass; screen pass below (chip, floaters) ----
   // Coin-counter chip, top-left: the zip target. Pops on collect.
   const pulse = S.chipPulse;
@@ -827,14 +1248,20 @@ function updateHud() {
     else empty++;
   }
   const effFreq = (cfg.freq * S.freqMult).toFixed(2);
+  let blues = 0, reds = 0;
+  for (const t of S.turrets) {
+    if (t.dead) continue;
+    if (t.color === BLUE) blues++; else reds++;
+  }
   statsEl.innerHTML =
     `<div><span class="swatch" style="background:#eef1f6"></span>Wall blocks: <b>${white}</b></div>` +
     `<div><span class="swatch" style="background:#222839"></span>Open space: <b>${empty}</b></div>` +
-    `<div>Blocks excavated: <b>${S.destroyed}</b></div>` +
+    `<div>Wave: <b>${S.wave}</b> · Your turrets: <b>${blues}</b> · Enemy: <b>${reds}</b>${S.redQueue.length ? ` (+${S.redQueue.length} incoming)` : ''}</div>` +
+    `<div>Blocks excavated: <b>${S.destroyed}</b> · Red turrets destroyed: <b>${S.redKills}</b></div>` +
     `<div>Map seed: <b>${S.seed}</b></div>` +
-    `<div>Player fire rate: <b>${effFreq}/s</b> (×${S.freqMult.toFixed(2)})</div>` +
+    `<div>Fire rate: <b>${effFreq}/s</b> (×${S.freqMult.toFixed(2)}) · Damage: <b>+${S.dmgBonus}</b> · Steering: <b>×${S.steerMult.toFixed(2)}</b></div>` +
     `<div>Bounce chance: <b>${Math.round(S.bounceChance * 100)}%</b> · Suction every: <b>${suctionInterval().toFixed(1)}s</b></div>` +
-    `<div>Projectiles alive: <b>${S.projs.length}</b></div>` +
+    `<div>Projectiles alive: <b>${S.projs.length}</b> · Missiles: <b>${S.missiles.length}</b></div>` +
     `<div>Coins: <b>${S.coins.length}</b> on field · <b>${S.coinsCollected}</b> collected</div>`;
 }
 
@@ -907,7 +1334,10 @@ canvas.addEventListener('pointermove', (e) => {
 function endPointer(e) {
   pointers.delete(e.pointerId);
   if (pointers.size === 0) {
-    if (downPos && !panning) tapCoin(downPos.x, downPos.y);
+    if (downPos && !panning) {
+      if (S.placing) placeTurretAt(downPos.x, downPos.y); // placement eats the tap
+      else tapCoin(downPos.x, downPos.y);
+    }
     downPos = null; panning = false;
   } else if (pointers.size === 1) {
     // pinch -> one finger: re-anchor so the remaining finger doesn't jump
