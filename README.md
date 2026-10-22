@@ -33,6 +33,7 @@ restarts the game:
 - Cave amount (cellular-automata cave fill, 0–0.95)
 - Map seed (blank = random; the stats line shows the seed in use)
 - Coin drop chance (probability per block excavated by blue)
+- Auto-collect interval (seconds between free coin collections, 0 = off)
 - Level thresholds (XP per level, comma-separated)
 - Hit feel: pop hold/shrink time, knockback push, neighbor ripple, projectile
   trail, particle gravity

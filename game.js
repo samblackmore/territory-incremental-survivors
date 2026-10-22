@@ -42,6 +42,7 @@ const inTurn   = document.getElementById('d-turn');
 const inCave   = document.getElementById('d-cave');
 const inSeed   = document.getElementById('d-seed');
 const inCoin   = document.getElementById('d-coin');
+const inCollect = document.getElementById('d-collect');
 const inThresh = document.getElementById('d-thresh');
 const inPopHold = document.getElementById('d-pophold');
 const inPopDur  = document.getElementById('d-popdur');
@@ -278,7 +279,8 @@ function readDebug() {
     arc: clampNum(inArc.value, 0, 360, 120),             // degrees
     turnRate: clampNum(inTurn.value, 0, 720, 120),          // cannon sweep speed (deg/s)
     caveChance: clampNum(inCave.value, 0, 0.95, 0.38),      // CA cave fill
-    coinChance: clampNum(inCoin.value, 0, 1, 0.3),          // coin drop per blue conversion
+    coinChance: clampNum(inCoin.value, 0, 1, 0.3),          // coin drop per block excavated by blue
+    collectInterval: clampNum(inCollect.value, 0, 60, 5),   // auto-collect timer (s, 0 = off)
     popHold: clampNum(inPopHold.value, 0, 0.5, 0.03),        // big square hold time (s)
     popDur: clampNum(inPopDur.value, 0.05, 1, 0.1),          // pop shrink time (s)
     popPush: clampNum(inPopPush.value, 0, 1.5, 0.2),         // knockback push (cells)
@@ -293,6 +295,7 @@ function readDebug() {
   inArc.value = cfg.arc; inCave.value = cfg.caveChance;
   inTurn.value = cfg.turnRate;
   inCoin.value = cfg.coinChance;
+  inCollect.value = cfg.collectInterval;
   inPopHold.value = cfg.popHold; inPopDur.value = cfg.popDur;
   inPopPush.value = cfg.popPush; inRipple.value = cfg.rippleAmp;
   inTrail.value = cfg.trailT;
@@ -349,7 +352,7 @@ function newGame() {
         freqMult: 1, paused: false, frame: 0, seed,
         coins: [], floaters: [], coinsCollected: 0, chipPulse: 0, time: 0,
         particles: [], particlesSpawned: 0, rings: [], dmgNums: [],
-        destroyed: 0, destroyedBlue: 0 };
+        destroyed: 0, destroyedBlue: 0, collectT: 0 };
 
   // Caves first (cellular-automata blobs), then HP from a smooth noise gradient:
   // white ~3 hits ... dark grey ~10 hits
@@ -516,25 +519,59 @@ function update(dt) {
   const tgt = screenToWorld(CHIP_CX, CHIP_CY);
   const TX = tgt.x / CELL_PX, TY = tgt.y / CELL_PX;
   for (const c of S.coins) {
-    if (c.state !== 'fly') continue;
-    c.t += dt;
-    const k = Math.min(1, c.t / COIN_FLY_DUR);
-    const e = k * k;
-    c.x = c.sx + (TX - c.sx) * e;
-    c.y = c.sy + (TY - c.sy) * e;
-    if (k >= 1) {
-      c.dead = true;
-      S.xp++;
-      S.coinsCollected++;
-      S.chipPulse = 1; // the "blurp": chip pops
-      S.floaters.push({ x: CHIP_CX + 30, y: CHIP_CY, t: 0 });
-      checkLevel();
+    if (c.state === 'fly') {
+      c.t += dt;
+      const k = Math.min(1, c.t / COIN_FLY_DUR);
+      const e = k * k;
+      c.x = c.sx + (TX - c.sx) * e;
+      c.y = c.sy + (TY - c.sy) * e;
+      if (k >= 1) {
+        c.dead = true;
+        S.xp++;
+        S.coinsCollected++;
+        S.chipPulse = 1; // the "blurp": chip pops
+        S.floaters.push({ x: CHIP_CX + 30, y: CHIP_CY, t: 0 });
+        checkLevel();
+      }
+    } else if (c.state === 'cannon') {
+      // auto-collected: lerps into the player's cannon, pops gold on arrival
+      c.t += dt;
+      const k = Math.min(1, c.t / COIN_FLY_DUR);
+      const e = k * k;
+      const pc = S.cannons[0];
+      c.x = c.sx + (pc.x - c.sx) * e;
+      c.y = c.sy + (pc.y - c.sy) * e;
+      if (k >= 1) {
+        c.dead = true;
+        S.xp++;
+        S.coinsCollected++;
+        S.chipPulse = 1;
+        spawnBurst(pc.x, pc.y, '#f5b301');
+        checkLevel();
+      }
     }
   }
   S.coins = S.coins.filter(c => !c.dead);
   for (const f of S.floaters) f.t += dt;
   S.floaters = S.floaters.filter(f => f.t < 0.7);
   S.chipPulse = Math.max(0, S.chipPulse - dt * 3);
+
+  // Auto-collect: every interval the nearest idle coin zips to the player's
+  // cannon for a free +1. Tapping still sends coins to the corner chip.
+  if (cfg.collectInterval > 0 && S.cannons.length) {
+    S.collectT += dt;
+    if (S.collectT >= cfg.collectInterval) {
+      S.collectT = 0;
+      const pc = S.cannons[0];
+      let bestC = null, bd = Infinity;
+      for (const c of S.coins) {
+        if (c.state !== 'idle') continue;
+        const d = (c.x - pc.x) * (c.x - pc.x) + (c.y - pc.y) * (c.y - pc.y);
+        if (d < bd) { bd = d; bestC = c; }
+      }
+      if (bestC) { bestC.state = 'cannon'; bestC.sx = bestC.x; bestC.sy = bestC.y; bestC.t = 0; }
+    }
+  }
 
   // Hit-pop clock: holds full size briefly (impact reads as instant), then lerps down
   const popEnd = cfg.popHold + cfg.popDur;
@@ -617,12 +654,12 @@ function render() {
       if (S.cells[i] === WHITE && S.popT[i] >= 0) drawWhiteCell(x, y);
     }
   }
-  // Projectiles (with tracer trails)
+  // Projectiles (with white tracer trails)
   ctx.lineCap = 'round';
   for (const p of S.projs) {
     const px = p.x * CELL_PX, py = p.y * CELL_PX;
     ctx.globalAlpha = 0.3;
-    ctx.strokeStyle = CELL_COLORS[p.color];
+    ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 5;
     ctx.beginPath();
     ctx.moveTo((p.x - p.vx * cfg.trailT) * CELL_PX, (p.y - p.vy * cfg.trailT) * CELL_PX);
@@ -778,7 +815,7 @@ function frame(now) {
 }
 
 // ---- Debug wiring: any change restarts the game ----
-[inCols, inRows, inSpeed, inFreq, inArc, inTurn, inCave, inCoin, inSeed, inThresh,
+[inCols, inRows, inSpeed, inFreq, inArc, inTurn, inCave, inCoin, inCollect, inSeed, inThresh,
  inPopHold, inPopDur, inPopPush, inRipple, inTrail, inGravity].forEach(el => {
   el.addEventListener('change', newGame);
 });
@@ -863,7 +900,8 @@ function applyUrlParams() {
   if (typeof location === 'undefined' || !location.search) return;
   const q = new URLSearchParams(location.search);
   const map = { cols: inCols, rows: inRows, speed: inSpeed, freq: inFreq, arc: inArc,
-    turn: inTurn, cave: inCave, seed: inSeed, coin: inCoin, pophold: inPopHold, popdur: inPopDur,
+    turn: inTurn, cave: inCave, seed: inSeed, coin: inCoin, collect: inCollect,
+    pophold: inPopHold, popdur: inPopDur,
     poppush: inPopPush, ripple: inRipple, trail: inTrail, gravity: inGravity, thresh: inThresh };
   for (const k of Object.keys(map)) if (q.has(k)) map[k].value = q.get(k);
 }
@@ -877,7 +915,7 @@ document.getElementById('d-copylink').addEventListener('click', () => {
   const q = new URLSearchParams({
     cols: cfg.cols, rows: cfg.rows, speed: cfg.projSpeed, freq: cfg.freq, arc: cfg.arc,
     turn: cfg.turnRate, cave: cfg.caveChance, seed: inSeed.value.trim(), coin: cfg.coinChance,
-    pophold: cfg.popHold, popdur: cfg.popDur, poppush: cfg.popPush,
+    collect: cfg.collectInterval, pophold: cfg.popHold, popdur: cfg.popDur, poppush: cfg.popPush,
     ripple: cfg.rippleAmp, trail: cfg.trailT, gravity: cfg.gravity, thresh: cfg.thresholds.join(','),
   });
   const url = location.origin + location.pathname + '?' + q.toString();
