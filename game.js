@@ -58,25 +58,31 @@ const view = { w: 0, h: 0 }; // viewport, CSS px
 let dpr = 1;
 const cam = { x: 0, y: 0, zoom: 1 }; // x/y: world px at screen center; zoom: CSS px per world px
 
-function fitZoom() {
+function minZoom() {
+  // Outermost zoom: the map height fills the screen height exactly, so there
+  // is never black space above/below the map. Width may crop on narrow screens.
   if (!view.w || !view.h || !cfg.cols) return 1;
-  return Math.min(view.w / (cfg.cols * CELL_PX), view.h / (cfg.rows * CELL_PX));
+  return view.h / (cfg.rows * CELL_PX);
 }
 function resetCamera() {
-  cam.x = (cfg.cols * CELL_PX) / 2;
-  cam.y = (cfg.rows * CELL_PX) / 2;
-  cam.zoom = fitZoom();
+  cam.zoom = minZoom();
+  cam.y = (cfg.rows * CELL_PX) / 2; // pinned: no vertical slack at min zoom
+  // Frame the player's cannon horizontally (on narrow screens the full width
+  // doesn't fit, and the cannon is the interesting thing to land on)
+  const W = cfg.cols * CELL_PX;
+  cam.x = S.cannons.length ? S.cannons[0].x * CELL_PX : W / 2;
   clampCamera();
 }
 function clampCamera() {
   if (!cfg.cols) return;
-  const fz = fitZoom();
-  cam.zoom = Math.min(Math.max(cam.zoom, fz), fz * 8);
+  const mz = minZoom();
+  cam.zoom = Math.min(Math.max(cam.zoom, mz), mz * 8);
   const hw = view.w / cam.zoom / 2, hh = view.h / cam.zoom / 2;
   const W = cfg.cols * CELL_PX, H = cfg.rows * CELL_PX;
   const pad = 2 * CELL_PX;
-  cam.x = Math.min(Math.max(cam.x, hw - pad), W - hw + pad);
-  cam.y = Math.min(Math.max(cam.y, hh - pad), H - hh + pad);
+  // When the view is wider/taller than the map, pin to center instead of sliding
+  cam.x = hw * 2 >= W ? W / 2 : Math.min(Math.max(cam.x, hw - pad), W - hw + pad);
+  cam.y = hh * 2 >= H ? H / 2 : Math.min(Math.max(cam.y, hh - pad), H - hh + pad);
 }
 function screenToWorld(sx, sy) {
   return { x: (sx - view.w / 2) / cam.zoom + cam.x,
@@ -84,8 +90,8 @@ function screenToWorld(sx, sy) {
 }
 // Zoom keeping the world point under (sx, sy) pinned to the cursor/fingers
 function zoomAt(sx, sy, newZoom) {
-  const fz = fitZoom();
-  newZoom = Math.min(Math.max(newZoom, fz), fz * 8);
+  const mz = minZoom();
+  newZoom = Math.min(Math.max(newZoom, mz), mz * 8);
   const before = screenToWorld(sx, sy);
   cam.zoom = newZoom;
   const after = screenToWorld(sx, sy);
@@ -371,7 +377,7 @@ function newGame() {
   S.cannons.push(mkCannon(ec.x, ec.y, RED));
 
   resize();       // backing store = viewport x devicePixelRatio
-  resetCamera();  // frame the whole map
+  resetCamera();  // height-fill framing, starting on the player's cannon
 
   overlay.classList.add('hidden');
   updateHud();
