@@ -189,6 +189,12 @@ function spawnChip(cx, cy, css, vx, vy) {
   if (S.particles.length > 600) S.particles.splice(0, S.particles.length - 600);
 }
 
+// Damage numbers: white retro text above the wall, drifting up, fading fast
+function spawnDmgNum(x, y, dmg) {
+  S.dmgNums.push({ x: x + (Math.random() - 0.5) * 0.5, y, t: 0, life: 0.6, dmg, dead: false });
+  if (S.dmgNums.length > 200) S.dmgNums.splice(0, S.dmgNums.length - 200);
+}
+
 // ---- Config (from debug panel; any change restarts the game) ----
 let cfg = {};
 
@@ -274,7 +280,7 @@ function newGame() {
   S = { cells, hp, maxhp, hitBy, popT, popAmp, popCol, popDX, popDY, projs: [], cannons: [], xp: 0, level: 1, pending: 0,
         freqMult: 1, paused: false, frame: 0, seed,
         coins: [], floaters: [], coinsCollected: 0, chipPulse: 0, time: 0,
-        particles: [], particlesSpawned: 0, rings: [] };
+        particles: [], particlesSpawned: 0, rings: [], dmgNums: [] };
 
   // Caves first (cellular-automata blobs), then HP from a smooth noise gradient:
   // white ~3 hits ... dark grey ~10 hits
@@ -358,6 +364,7 @@ function stepProjectile(p, dt) {
         }
       }
       spawnChip(cx + 0.5, cy + 0.5, CELL_COLORS[p.color], p.vx, p.vy);
+      spawnDmgNum(cx + 0.5, cy + 0.2, 1); // the hit lands: white number pops above the wall
       p.dead = true;
       if (S.hp[idx] <= 0) {
         S.cells[idx] = p.color;
@@ -475,6 +482,14 @@ function update(dt) {
     if (r.t >= RING_DUR) r.dead = true;
   }
   S.rings = S.rings.filter(r => !r.dead);
+
+  // Damage numbers: drift up, fade fast, then gone
+  for (const d of S.dmgNums) {
+    d.t += dt;
+    d.y -= 1.4 * dt;
+    if (d.t >= d.life) d.dead = true;
+  }
+  S.dmgNums = S.dmgNums.filter(d => !d.dead);
 }
 
 // Draw one WHITE (terrain) cell with its hit-pop scale; popped cells are drawn
@@ -570,6 +585,22 @@ function render() {
     ctx.stroke();
     ctx.globalAlpha = 1;
   }
+  // Damage numbers: bold retro white text with a dark outline, drifting up
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '12px "Press Start 2P", "Courier New", monospace';
+  for (const d of S.dmgNums) {
+    const k = d.t / d.life;
+    ctx.globalAlpha = k < 0.25 ? 1 : 1 - (k - 0.25) / 0.75; // brief hold, then a quick fade
+    const px = d.x * CELL_PX, py = d.y * CELL_PX;
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(11,14,22,0.9)';
+    ctx.strokeText(d.dmg, px, py);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(d.dmg, px, py);
+  }
+  ctx.globalAlpha = 1;
+  ctx.textAlign = 'start';
   // Cannons (rectangles, like the spec)
   for (const c of S.cannons) {
     ctx.save();
