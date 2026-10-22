@@ -10,9 +10,11 @@ number, and destroying a block excavates it into open void. Cellular-automata
 **caves** carve the blobby voids the cannons live in, and projectiles fly
 through open space. Excavating a block as blue can drop a **coin** — tap it and
 it zips up to the coin counter in the top-left with a satisfying pop, granting
-1 XP (still called XP for now). Leveling up offers a choice of 3 fire-rate
-upgrade cards. The canvas fills the viewport with a pan/pinch camera (1-finger
-drag pans, 2-finger pinch zooms, always crisp).
+1 XP (still called XP for now). Every few seconds (auto-collect interval) the
+nearest idle coin zips into your cannon for a free +1. Leveling up offers a
+choice of 3 upgrade cards: fire rate, bounce chance, or faster suction. The
+canvas fills the viewport with a pan/pinch camera (1-finger drag pans,
+2-finger pinch zooms, always crisp).
 
 ## Run it
 
@@ -30,6 +32,7 @@ restarts the game:
 - Fire frequency (shots/s, applies to both cannons; level-up cards multiply the player's)
 - Cannon turn arc (degrees, max 360 = continuous spin)
 - Cannon turn speed (deg/s)
+- Bounce chance (probability a surviving block ricochets the projectile)
 - Cave amount (cellular-automata cave fill, 0–0.95)
 - Map seed (blank = random; the stats line shows the seed in use)
 - Coin drop chance (probability per block excavated by blue)

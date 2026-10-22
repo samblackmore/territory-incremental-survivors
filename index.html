@@ -219,6 +219,9 @@
     <label>Cannon turn speed (deg/s)
       <input id="d-turn" type="number" min="0" max="720" step="10" value="120">
     </label>
+    <label>Bounce chance (0–1)
+      <input id="d-bounce" type="number" min="0" max="1" step="0.05" value="0">
+    </label>
     <label>Cave amount (0–0.95)
       <input id="d-cave" type="number" min="0" max="0.95" step="0.05" value="0.38">
     </label>
@@ -229,7 +232,7 @@
       <input id="d-coin" type="number" min="0" max="1" step="0.05" value="0.3">
     </label>
     <label>Auto-collect interval (s, 0 = off)
-      <input id="d-collect" type="number" min="0" max="60" step="0.5" value="5">
+      <input id="d-collect" type="number" min="0" max="60" step="0.5" value="30">
     </label>
     <label>Level thresholds (XP per level, comma-separated)
       <input id="d-thresh" type="text" value="15,40,80,140,220,320,450,600,800,1050">
@@ -263,14 +266,14 @@
   <div class="cards">
     <h2>Level up! Choose an upgrade</h2>
     <div class="cardrow">
-      <button class="card" data-mult="1.10"><b>+10%</b><span>Fire rate</span></button>
-      <button class="card" data-mult="1.25"><b>+25%</b><span>Fire rate</span></button>
-      <button class="card" data-mult="1.50"><b>+50%</b><span>Fire rate</span></button>
+      <button class="card" data-kind="freq" data-mult="1.25"><b>+25%</b><span>Fire rate</span></button>
+      <button class="card" data-kind="bounce" data-add="0.25"><b>+25%</b><span>Bounce chance</span></button>
+      <button class="card" data-kind="suction" data-mult="0.75"><b>−25%</b><span>Suction time</span></button>
     </div>
   </div>
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=13"></script>
+<script src="game.js?v=15"></script>
 </body>
 </html>

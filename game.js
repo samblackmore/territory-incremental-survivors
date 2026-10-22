@@ -8,6 +8,7 @@ const WHITE = 0, EMPTY = 1, BLUE = 2, RED = 3;
 const CELL_COLORS = ['#eef1f6', '#3d4454', '#3b82f6', '#ef4444'];
 
 const CELL_PX = 16;                 // render size of one cell
+const BOUNCE_MAX = 8;               // bounces per projectile (backstop, not a target)
 const COIN_FLY_DUR = 0.45;           // seconds for a tapped coin to zip to the corner
 const RING_DUR = 0.3;                // conversion shockwave ring lifetime (s)
 const CHIP_CX = 41, CHIP_CY = 48;    // coin-counter chip center, in screen (CSS) px
@@ -39,6 +40,7 @@ const inSpeed  = document.getElementById('d-speed');
 const inFreq   = document.getElementById('d-freq');
 const inArc    = document.getElementById('d-arc');
 const inTurn   = document.getElementById('d-turn');
+const inBounce  = document.getElementById('d-bounce');
 const inCave   = document.getElementById('d-cave');
 const inSeed   = document.getElementById('d-seed');
 const inCoin   = document.getElementById('d-coin');
@@ -278,9 +280,10 @@ function readDebug() {
     freq: clampNum(inFreq.value, 0.1, 20, 1),            // shots/s (both cannons)
     arc: clampNum(inArc.value, 0, 360, 120),             // degrees
     turnRate: clampNum(inTurn.value, 0, 720, 120),          // cannon sweep speed (deg/s)
+    bounceChance: clampNum(inBounce.value, 0, 1, 0),         // block-bounce chance per hit
     caveChance: clampNum(inCave.value, 0, 0.95, 0.38),      // CA cave fill
     coinChance: clampNum(inCoin.value, 0, 1, 0.3),          // coin drop per block excavated by blue
-    collectInterval: clampNum(inCollect.value, 0, 60, 5),   // auto-collect timer (s, 0 = off)
+    collectInterval: clampNum(inCollect.value, 0, 60, 30),  // auto-collect timer (s, 0 = off)
     popHold: clampNum(inPopHold.value, 0, 0.5, 0.03),        // big square hold time (s)
     popDur: clampNum(inPopDur.value, 0.05, 1, 0.1),          // pop shrink time (s)
     popPush: clampNum(inPopPush.value, 0, 1.5, 0.2),         // knockback push (cells)
@@ -294,6 +297,7 @@ function readDebug() {
   inSpeed.value = cfg.projSpeed; inFreq.value = cfg.freq;
   inArc.value = cfg.arc; inCave.value = cfg.caveChance;
   inTurn.value = cfg.turnRate;
+  inBounce.value = cfg.bounceChance;
   inCoin.value = cfg.coinChance;
   inCollect.value = cfg.collectInterval;
   inPopHold.value = cfg.popHold; inPopDur.value = cfg.popDur;
@@ -352,7 +356,8 @@ function newGame() {
         freqMult: 1, paused: false, frame: 0, seed,
         coins: [], floaters: [], coinsCollected: 0, chipPulse: 0, time: 0,
         particles: [], particlesSpawned: 0, rings: [], dmgNums: [],
-        destroyed: 0, destroyedBlue: 0, collectT: 0 };
+        destroyed: 0, destroyedBlue: 0, collectT: 0,
+        bounceChance: cfg.bounceChance, suctionMult: 1 };
 
   // Caves first (cellular-automata blobs), then HP from a smooth noise gradient:
   // white ~3 hits ... dark grey ~10 hits
@@ -396,6 +401,7 @@ function fire(c) {
     vx: Math.cos(c.angle) * speed,
     vy: Math.sin(c.angle) * speed,
     color: c.color,
+    bounces: 0,
     dead: false,
   });
 }
@@ -403,7 +409,7 @@ function fire(c) {
 function stepProjectile(p, dt) {
   const dist = Math.hypot(p.vx, p.vy) * dt;
   const steps = Math.max(1, Math.ceil(dist / 0.4)); // sub-step so fast shots can't tunnel
-  const sx = (p.vx * dt) / steps, sy = (p.vy * dt) / steps;
+  let sx = (p.vx * dt) / steps, sy = (p.vy * dt) / steps;
   for (let s = 0; s < steps; s++) {
     p.x += sx; p.y += sy;
     const cx = Math.floor(p.x), cy = Math.floor(p.y);
@@ -440,7 +446,6 @@ function stepProjectile(p, dt) {
       }
       spawnChip(cx + 0.5, cy + 0.5, CELL_COLORS[p.color], p.vx, p.vy);
       if (S.hp[idx] > 0) spawnDmgNum(cx + 0.5, cy + 0.2, S.hp[idx]); // remaining HP floats up
-      p.dead = true;
       if (S.hp[idx] <= 0) {
         S.cells[idx] = EMPTY; // excavated: the block is gone, not painted over
         S.destroyed++;
@@ -454,7 +459,19 @@ function stepProjectile(p, dt) {
             if (i >= 0) S.coins.splice(i, 1);
           }
         }
+        p.dead = true;
+        return;
       }
+      // Pinball: a surviving block may bounce the shot back out (re-rolled per hit)
+      if (p.bounces < BOUNCE_MAX && Math.random() < S.bounceChance) {
+        p.bounces++;
+        p.x -= sx; p.y -= sy; // back out to the pre-entry position
+        if (Math.abs(sx) >= Math.abs(sy)) p.vx = -p.vx; else p.vy = -p.vy;
+        sx = (p.vx * dt) / steps;
+        sy = (p.vy * dt) / steps;
+        continue;
+      }
+      p.dead = true;
       return;
     }
     if (cell === EMPTY || cell === p.color) continue; // pass through grey + own color
@@ -477,7 +494,14 @@ function checkLevel() {
 
 document.querySelectorAll('.card').forEach(card => {
   card.addEventListener('click', () => {
-    S.freqMult *= parseFloat(card.dataset.mult);
+    const kind = card.dataset.kind || 'freq';
+    if (kind === 'bounce') {
+      S.bounceChance = Math.min(0.95, S.bounceChance + parseFloat(card.dataset.add));
+    } else if (kind === 'suction') {
+      S.suctionMult = Math.max(0.2, S.suctionMult * parseFloat(card.dataset.mult));
+    } else {
+      S.freqMult *= parseFloat(card.dataset.mult);
+    }
     S.pending--;
     if (S.pending <= 0) {
       S.pending = 0;
@@ -487,6 +511,11 @@ document.querySelectorAll('.card').forEach(card => {
     updateHud();
   });
 });
+
+// Effective auto-collect interval after suction upgrades
+function suctionInterval() {
+  return cfg.collectInterval * S.suctionMult;
+}
 
 // ---- Update ----
 function update(dt) {
@@ -560,7 +589,7 @@ function update(dt) {
   // cannon for a free +1. Tapping still sends coins to the corner chip.
   if (cfg.collectInterval > 0 && S.cannons.length) {
     S.collectT += dt;
-    if (S.collectT >= cfg.collectInterval) {
+    if (S.collectT >= suctionInterval()) {
       S.collectT = 0;
       const pc = S.cannons[0];
       let bestC = null, bd = Infinity;
@@ -804,6 +833,7 @@ function updateHud() {
     `<div>Blocks excavated: <b>${S.destroyed}</b></div>` +
     `<div>Map seed: <b>${S.seed}</b></div>` +
     `<div>Player fire rate: <b>${effFreq}/s</b> (×${S.freqMult.toFixed(2)})</div>` +
+    `<div>Bounce chance: <b>${Math.round(S.bounceChance * 100)}%</b> · Suction every: <b>${suctionInterval().toFixed(1)}s</b></div>` +
     `<div>Projectiles alive: <b>${S.projs.length}</b></div>` +
     `<div>Coins: <b>${S.coins.length}</b> on field · <b>${S.coinsCollected}</b> collected</div>`;
 }
@@ -821,7 +851,7 @@ function frame(now) {
 }
 
 // ---- Debug wiring: any change restarts the game ----
-[inCols, inRows, inSpeed, inFreq, inArc, inTurn, inCave, inCoin, inCollect, inSeed, inThresh,
+[inCols, inRows, inSpeed, inFreq, inArc, inTurn, inBounce, inCave, inCoin, inCollect, inSeed, inThresh,
  inPopHold, inPopDur, inPopPush, inRipple, inTrail, inGravity].forEach(el => {
   el.addEventListener('change', newGame);
 });
@@ -906,7 +936,7 @@ function applyUrlParams() {
   if (typeof location === 'undefined' || !location.search) return;
   const q = new URLSearchParams(location.search);
   const map = { cols: inCols, rows: inRows, speed: inSpeed, freq: inFreq, arc: inArc,
-    turn: inTurn, cave: inCave, seed: inSeed, coin: inCoin, collect: inCollect,
+    turn: inTurn, bounce: inBounce, cave: inCave, seed: inSeed, coin: inCoin, collect: inCollect,
     pophold: inPopHold, popdur: inPopDur,
     poppush: inPopPush, ripple: inRipple, trail: inTrail, gravity: inGravity, thresh: inThresh };
   for (const k of Object.keys(map)) if (q.has(k)) map[k].value = q.get(k);
@@ -920,7 +950,7 @@ document.getElementById('d-copylink').addEventListener('click', () => {
   readDebug();
   const q = new URLSearchParams({
     cols: cfg.cols, rows: cfg.rows, speed: cfg.projSpeed, freq: cfg.freq, arc: cfg.arc,
-    turn: cfg.turnRate, cave: cfg.caveChance, seed: inSeed.value.trim(), coin: cfg.coinChance,
+    turn: cfg.turnRate, bounce: cfg.bounceChance, cave: cfg.caveChance, seed: inSeed.value.trim(), coin: cfg.coinChance,
     collect: cfg.collectInterval, pophold: cfg.popHold, popdur: cfg.popDur, poppush: cfg.popPush,
     ripple: cfg.rippleAmp, trail: cfg.trailT, gravity: cfg.gravity, thresh: cfg.thresholds.join(','),
   });
