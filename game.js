@@ -304,17 +304,23 @@ function mkCannon(gx, gy, color) {
   return { x: gx, y: gy, color, base, angle: base, dir: 1, acc: 0 };
 }
 
-function paintBlob(cx, cy, color) {
-  for (let dy = -1; dy <= 1; dy++) {
-    for (let dx = -1; dx <= 1; dx++) {
-      const x = cx + dx, y = cy + dy;
-      if (x >= 0 && y >= 0 && x < cfg.cols && y < cfg.rows) {
-        const i = y * cfg.cols + x;
-        S.cells[i] = color;
-        S.maxhp[i] = 10; S.hp[i] = 10; S.hitBy[i] = 0;
-      }
+// Nearest cave cell to an anchor point (for cannon spawns). exclude lets the
+// second cannon avoid the first cannon's cell. -1 when the map has no caves.
+function nearestCave(ax, ay, exclude) {
+  let best = -1, bd = Infinity;
+  for (let y = 0; y < cfg.rows; y++) {
+    for (let x = 0; x < cfg.cols; x++) {
+      const i = y * cfg.cols + x;
+      if (i === exclude || S.cells[i] !== EMPTY) continue;
+      const d = (x - ax) * (x - ax) + (y - ay) * (y - ay);
+      if (d < bd) { bd = d; best = i; }
     }
   }
+  return best;
+}
+function snapAnchor(a) { // fallback spawn when there are no caves at all
+  return { x: Math.min(cfg.cols - 1, Math.max(0, Math.round(a.x))),
+           y: Math.min(cfg.rows - 1, Math.max(0, Math.round(a.y))) };
 }
 
 function newGame() {
@@ -336,7 +342,8 @@ function newGame() {
   S = { cells, hp, maxhp, hitBy, popT, popAmp, popCol, popDX, popDY, projs: [], cannons: [], xp: 0, level: 1, pending: 0,
         freqMult: 1, paused: false, frame: 0, seed,
         coins: [], floaters: [], coinsCollected: 0, chipPulse: 0, time: 0,
-        particles: [], particlesSpawned: 0, rings: [], dmgNums: [] };
+        particles: [], particlesSpawned: 0, rings: [], dmgNums: [],
+        destroyed: 0, destroyedBlue: 0 };
 
   // Caves first (cellular-automata blobs), then HP from a smooth noise gradient:
   // white ~3 hits ... dark grey ~10 hits
@@ -352,13 +359,16 @@ function newGame() {
     }
   }
 
-  // Player cannon (blue) near bottom-left, enemy (red) near top-right
-  const px = Math.round(cfg.cols * 0.15), py = Math.round(cfg.rows * 0.85);
-  const ex = Math.round(cfg.cols * 0.85), ey = Math.round(cfg.rows * 0.15);
-  paintBlob(px, py, BLUE);
-  paintBlob(ex, ey, RED);
-  S.cannons.push(mkCannon(px, py, BLUE));
-  S.cannons.push(mkCannon(ex, ey, RED));
+  // Cannons spawn inside caves, near the bottom-left / top-right anchors —
+  // chipping away at cave walls feels better than painting open ground.
+  const pA = { x: cfg.cols * 0.15, y: cfg.rows * 0.85 };
+  const eA = { x: cfg.cols * 0.85, y: cfg.rows * 0.15 };
+  const pi = nearestCave(pA.x, pA.y, -1);
+  const ei = nearestCave(eA.x, eA.y, pi);
+  const pc = pi >= 0 ? { x: pi % cfg.cols, y: Math.floor(pi / cfg.cols) } : snapAnchor(pA);
+  const ec = ei >= 0 ? { x: ei % cfg.cols, y: Math.floor(ei / cfg.cols) } : snapAnchor(eA);
+  S.cannons.push(mkCannon(pc.x, pc.y, BLUE));
+  S.cannons.push(mkCannon(ec.x, ec.y, RED));
 
   resize();       // backing store = viewport x devicePixelRatio
   resetCamera();  // frame the whole map
@@ -423,7 +433,9 @@ function stepProjectile(p, dt) {
       spawnDmgNum(cx + 0.5, cy + 0.2, 1); // the hit lands: white number pops above the wall
       p.dead = true;
       if (S.hp[idx] <= 0) {
-        S.cells[idx] = p.color;
+        S.cells[idx] = EMPTY; // excavated: the block is gone, not painted over
+        S.destroyed++;
+        if (p.color === BLUE) S.destroyedBlue++;
         spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[p.color]); // the block cracks: debris + ring
         if (p.color === BLUE && Math.random() < cfg.coinChance) {
           S.coins.push({ x: cx + 0.5, y: cy + 0.5, state: 'idle',
@@ -730,20 +742,17 @@ function updateHud() {
   xplabel.innerHTML = label;
 
   // Debug stats (throttled by caller)
-  let blue = 0, red = 0, white = 0, empty = 0;
+  let white = 0, empty = 0;
   const cells = S.cells;
   for (let i = 0; i < cells.length; i++) {
-    if (cells[i] === BLUE) blue++;
-    else if (cells[i] === RED) red++;
-    else if (cells[i] === WHITE) white++;
+    if (cells[i] === WHITE) white++;
     else empty++;
   }
   const effFreq = (cfg.freq * S.freqMult).toFixed(2);
   statsEl.innerHTML =
-    `<div><span class="swatch" style="background:#3b82f6"></span>Blue cells: <b>${blue}</b></div>` +
-    `<div><span class="swatch" style="background:#ef4444"></span>Red cells: <b>${red}</b></div>` +
-    `<div><span class="swatch" style="background:#eef1f6"></span>White cells: <b>${white}</b></div>` +
-    `<div><span class="swatch" style="background:#222839"></span>Cave cells: <b>${empty}</b></div>` +
+    `<div><span class="swatch" style="background:#eef1f6"></span>Wall blocks: <b>${white}</b></div>` +
+    `<div><span class="swatch" style="background:#222839"></span>Open space: <b>${empty}</b></div>` +
+    `<div>Blocks excavated: <b>${S.destroyed}</b></div>` +
     `<div>Map seed: <b>${S.seed}</b></div>` +
     `<div>Player fire rate: <b>${effFreq}/s</b> (×${S.freqMult.toFixed(2)})</div>` +
     `<div>Projectiles alive: <b>${S.projs.length}</b></div>` +
