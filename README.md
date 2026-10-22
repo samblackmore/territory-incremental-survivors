@@ -16,11 +16,15 @@ nearest idle coin zips into your nearest turret for a free +1.
 **Turrets, not cannons.** Leveling up offers 3 cards: 4 turret types
 (**Cannon** — sweeping shots; **Rocket** — homing missiles with a limited turn
 rate that weave through caves and crash-splash into walls; **Laser** — hitscan
-zaps that always snipe the weakest block; **Mint** — drops a coin every 15s)
-plus upgrades (fire rate, damage, bounce chance, suction time, missile
-steering). Picking a turret card enters **placement mode**: tap any cell to
-deploy it (it clears its own pad). Turrets have HP and die — red turrets
-**deploy in waves** from mid-map caves and shoot back with the same roster.
+zaps that always snipe the weakest block; **Bloom** — Tiberium-style territory:
+every 5s it grows one increment on the nearest open cell, 10 increments bloom
+it into solid blue territory with a pop-in dot animation) plus upgrades (fire
+rate, damage, bounce chance, suction time, missile steering, bloom speed).
+Picking a turret card enters **placement mode**: tap any cell to deploy it
+(Blooms need open ground). Turrets have HP and die — red turrets
+**deploy in waves** from mid-map caves and shoot back with the same roster
+(minus Bloom). Territory generates coins on harvest ticks, and enemy
+projectiles bomb it back to empty — so fields are worth guarding.
 Kill every red turret to clear the wave for a coin jackpot; lose when your
 last turret falls (**run over** → dive again). The canvas fills the viewport
 with a pan/pinch camera (1-finger drag pans, 2-finger pinch zooms, always

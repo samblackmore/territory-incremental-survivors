@@ -11,6 +11,11 @@ const CELL_PX = 16;                 // render size of one cell
 const BOUNCE_MAX = 8;               // bounces per projectile (backstop, not a target)
 const STEER_RATE = 3;               // missile turn rate, rad/s (x S.steerMult)
 const RED_DEPLOY_EVERY = 12;        // seconds between red turret deployments
+const GROW_INTERVAL = 5;            // Bloom: seconds per growth increment (x S.bloomMult)
+const GROW_STEPS = 10;             // increments to turn a cell into territory
+const BLOOM_RADIUS = 8;            // Bloom: how far (cells) it reaches for empty ground
+const HARVEST_EVERY = 8;           // territory: seconds between coin harvest ticks
+const HARVEST_CHANCE = 0.2;         // ...per territory cell, per tick
 
 // Turret roster: distinct damage patterns, no homing except the missile's
 // steering (which is deliberately dumb: limited turn rate, walls win).
@@ -18,7 +23,7 @@ const TURRET = {
   cannon: { name: 'Cannon', hp: 8, interval: 1.0, dmg: 1 },
   rocket: { name: 'Rocket', hp: 6, interval: 2.5, dmg: 3 },
   laser:  { name: 'Laser',  hp: 5, interval: 2.0, dmg: 2 },
-  mint:   { name: 'Mint',   hp: 4, interval: 15,  dmg: 0 },
+  bloom:  { name: 'Bloom',  hp: 4, interval: GROW_INTERVAL, dmg: 0 },
 };
 const COIN_FLY_DUR = 0.45;           // seconds for a tapped coin to zip to the corner
 const RING_DUR = 0.3;                // conversion shockwave ring lifetime (s)
@@ -429,7 +434,10 @@ function newGame() {
         turrets: [], missiles: [], beams: [],
         wave: 0, redQueue: [], redTimer: 0, waveBreak: 0, redKills: 0,
         placing: null, runOver: false,
-        dmgBonus: 0, steerMult: 1 };
+        dmgBonus: 0, steerMult: 1,
+        // territory (Tiberium fields): per-cell growth progress
+        growN: new Uint8Array(n), growBy: new Uint8Array(n), growT: new Float32Array(n),
+        bloomMult: 1, harvestT: 0 };
 
   // Caves first (cellular-automata blobs), then HP from a smooth noise gradient:
   // white ~3 hits ... dark grey ~10 hits
@@ -592,33 +600,58 @@ function fireLaser(t) {
   damageBlock(tgt.i, TURRET.laser.dmg + S.dmgBonus, t.color,
               t.x + 0.5, t.y + 0.5, tgt.x - t.x, tgt.y - t.y);
 }
-// Mint: doesn't shoot. Drops a coin onto the nearest empty grid cell with no
-// coin already on it (never on a turret) — coins spread into a field around
-// the mint, never overlapping. Skips the drop if the field is full.
+// Bloom: Tiberium-style territory. Every interval it makes one growth
+// increment on the nearest empty cell in radius (preferring cells it has
+// already started). GROW_STEPS increments turn the cell into solid territory
+// of the Bloom's color, which then generates coins on harvest ticks.
+// Progress persists if the Bloom dies — another Bloom can finish the job.
+function bloomGrowth(t) {
+  let bx = -1, by = -1, bd = Infinity;
+  for (let dy = -BLOOM_RADIUS; dy <= BLOOM_RADIUS; dy++) {
+    for (let dx = -BLOOM_RADIUS; dx <= BLOOM_RADIUS; dx++) {
+      const nx = t.x + dx, ny = t.y + dy;
+      if (nx < 0 || ny < 0 || nx >= cfg.cols || ny >= cfg.rows) continue;
+      const ni = ny * cfg.cols + nx;
+      if (S.cells[ni] !== EMPTY || S.growN[ni] >= GROW_STEPS) continue;
+      if (S.growBy[ni] !== 0 && S.growBy[ni] !== t.color) continue;
+      if (turretAt(nx, ny)) continue;
+      const d = dx * dx + dy * dy;
+      if (d < bd) { bd = d; bx = nx; by = ny; }
+    }
+  }
+  if (bx < 0) return; // no open ground in reach
+  const bi = by * cfg.cols + bx;
+  S.growN[bi]++;
+  S.growBy[bi] = t.color;
+  S.growT[bi] = S.time; // drives the newest dot's pop-in
+  if (S.growN[bi] >= GROW_STEPS) {
+    // Bloomed: the cell becomes solid territory.
+    S.cells[bi] = t.color;
+    S.growN[bi] = 0; S.growBy[bi] = 0;
+    spawnBurst(bx + 0.5, by + 0.5, CELL_COLORS[t.color]);
+    S.rings.push({ x: bx + 0.5, y: by + 0.5, t: 0, css: CELL_COLORS[t.color], dead: false });
+  }
+}
+// Deterministic dot position for growth increment k of a cell: the k-th
+// circle always plops in the same spot, so the field visibly accumulates.
+function growthDotPos(idx, k) {
+  let h = (idx * 31 + k * 17 + 7) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  h = h ^ (h >>> 16);
+  const u = (h >>> 0) % 1000 / 1000, v = ((h >>> 10) % 1000) / 1000;
+  return [0.22 + u * 0.56, 0.22 + v * 0.56];
+}
+function easeOutBack(t) {
+  const c1 = 1.70158, c3 = c1 + 1;
+  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+}
+// Any live coin sitting on a grid cell (so the harvest never stacks coins).
 function coinAt(cx, cy) {
   for (const c of S.coins) {
     if (c.dead) continue;
     if (Math.floor(c.x) === cx && Math.floor(c.y) === cy) return true;
   }
   return false;
-}
-function mintCoin(t) {
-  if (S.coins.length >= 800) return;
-  const R = 6; // the mint's field radius, in cells
-  let bx = -1, by = -1, bd = Infinity;
-  for (let dy = -R; dy <= R; dy++) {
-    for (let dx = -R; dx <= R; dx++) {
-      const nx = t.x + dx, ny = t.y + dy;
-      if (nx < 0 || ny < 0 || nx >= cfg.cols || ny >= cfg.rows) continue;
-      if (S.cells[ny * cfg.cols + nx] !== EMPTY) continue;
-      if (turretAt(nx, ny) || coinAt(nx, ny)) continue;
-      const d = dx * dx + dy * dy;
-      if (d < bd) { bd = d; bx = nx; by = ny; }
-    }
-  }
-  if (bx < 0) return; // field's full: no drop
-  S.coins.push({ x: bx + 0.5, y: by + 0.5, state: 'idle',
-                 phase: Math.random() * 6.283, sx: 0, sy: 0, t: 0, dead: false });
 }
 
 function stepProjectile(p, dt) {
@@ -653,8 +686,13 @@ function stepProjectile(p, dt) {
       p.dead = true;
       return;
     }
-    if (cell === EMPTY || cell === p.color) continue; // pass through grey + own color
-    p.dead = true; return; // enemy color blocks the shot
+    if (cell === EMPTY || cell === p.color) continue; // pass through open + own color
+    // Enemy territory: bomb it back to empty. This is why fields need guards.
+    S.cells[idx] = EMPTY;
+    S.growN[idx] = 0; S.growBy[idx] = 0;
+    spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[cell]);
+    spawnChip(cx + 0.5, cy + 0.5, CELL_COLORS[cell], p.vx, p.vy);
+    p.dead = true; return;
   }
 }
 
@@ -731,12 +769,13 @@ const CARD_POOL = [
   { kind: 'turret', type: 'cannon', title: 'Cannon', sub: 'New turret' },
   { kind: 'turret', type: 'rocket', title: 'Rocket', sub: 'Homing missiles' },
   { kind: 'turret', type: 'laser', title: 'Laser', sub: 'Snipes weak blocks' },
-  { kind: 'turret', type: 'mint', title: 'Mint', sub: '+1 coin / 15s' },
+  { kind: 'turret', type: 'bloom', title: 'Bloom', sub: 'Grows territory' },
   { kind: 'freq', mult: 1.25, title: '+25%', sub: 'Fire rate' },
   { kind: 'damage', add: 1, title: '+1', sub: 'Damage', needs: ['cannon', 'rocket', 'laser'] },
   { kind: 'bounce', add: 0.25, title: '+25%', sub: 'Bounce chance', needs: ['cannon'] },
   { kind: 'suction', mult: 0.75, title: '−25%', sub: 'Suction time' },
   { kind: 'steer', mult: 1.3, title: '+30%', sub: 'Missile steering', needs: ['rocket'] },
+  { kind: 'bloom', mult: 0.8, title: '−20%', sub: 'Bloom speed', needs: ['bloom'] },
 ];
 function hasTurretTypes(types) {
   for (const t of S.turrets) {
@@ -782,6 +821,8 @@ document.querySelectorAll('.card').forEach(card => {
       S.dmgBonus += parseInt(card.dataset.add, 10);
     } else if (kind === 'steer') {
       S.steerMult *= parseFloat(card.dataset.mult);
+    } else if (kind === 'bloom') {
+      S.bloomMult = Math.max(0.2, S.bloomMult * parseFloat(card.dataset.mult));
     } else {
       S.freqMult *= parseFloat(card.dataset.mult);
     }
@@ -817,8 +858,8 @@ function placeTurretAt(sx, sy) {
     S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
     return;
   }
-  if (type === 'mint' && S.cells[cy * cfg.cols + cx] !== EMPTY) {
-    // The mint needs open ground: its coins spread onto empty grid cells.
+  if (type === 'bloom' && S.cells[cy * cfg.cols + cx] !== EMPTY) {
+    // The Bloom needs open ground: its field spreads onto empty grid cells.
     S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
     return;
   }
@@ -869,9 +910,9 @@ function update(dt) {
     } else if (t.type === 'laser') {
       t.cd -= dt;
       if (t.cd <= 0) { t.cd = TURRET.laser.interval / rateMult; fireLaser(t); }
-    } else if (t.type === 'mint') {
+    } else if (t.type === 'bloom') {
       t.cd -= dt;
-      if (t.cd <= 0) { t.cd = TURRET.mint.interval / rateMult; mintCoin(t); }
+      if (t.cd <= 0) { t.cd = TURRET.bloom.interval / rateMult * S.bloomMult; bloomGrowth(t); }
     }
   }
   S.turrets = S.turrets.filter(t => !t.dead);
@@ -946,6 +987,21 @@ function update(dt) {
   if (S.waveBreak > 0) {
     S.waveBreak -= dt;
     if (S.waveBreak <= 0) startWave(S.wave + 1);
+  }
+
+  // Harvest: every few seconds each blue territory cell without a coin pops
+  // one. The field pays for itself — which is why it's worth protecting.
+  S.harvestT += dt;
+  if (S.harvestT >= HARVEST_EVERY) {
+    S.harvestT = 0;
+    for (let i = 0; i < S.cells.length; i++) {
+      if (S.cells[i] !== BLUE) continue;
+      const cx = i % cfg.cols, cy = (i / cfg.cols) | 0;
+      if (coinAt(cx, cy) || Math.random() >= HARVEST_CHANCE) continue;
+      if (S.coins.length >= 800) break;
+      S.coins.push({ x: cx + 0.5, y: cy + 0.5, state: 'idle',
+                     phase: Math.random() * 6.283, sx: 0, sy: 0, t: 0, dead: false });
+    }
   }
 
   // Tapped coins zip to the top-left chip (accelerating = satisfying).
@@ -1098,6 +1154,25 @@ function render() {
       }
     }
   }
+  // Territory growth: each increment plops a little circle at a deterministic
+  // spot inside the cell; the newest one pops in with an overshoot. At
+  // GROW_STEPS the cell blooms into solid territory (handled in bloomGrowth).
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      const n = S.growN[i];
+      if (n <= 0 || S.cells[i] !== EMPTY) continue;
+      ctx.fillStyle = CELL_COLORS[S.growBy[i]];
+      for (let k = 0; k < n; k++) {
+        const [fx, fy] = growthDotPos(i, k);
+        let s = 1;
+        if (k === n - 1) s = Math.max(0.01, easeOutBack(Math.min(1, (S.time - S.growT[i]) / 0.2)));
+        ctx.beginPath();
+        ctx.arc((x + fx) * CELL_PX, (y + fy) * CELL_PX, 3.2 * s, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
   // Projectiles (with white tracer trails)
   ctx.lineCap = 'round';
   for (const p of S.projs) {
@@ -1191,14 +1266,14 @@ function render() {
       ctx.beginPath(); // crystal
       ctx.moveTo(0, -9); ctx.lineTo(6, 0); ctx.lineTo(0, 9); ctx.lineTo(-6, 0);
       ctx.closePath(); ctx.fill(); ctx.stroke();
-    } else { // mint: a gold coin
-      ctx.fillStyle = '#f5b301';
-      ctx.beginPath(); ctx.arc(0, 0, 7, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-      ctx.fillStyle = '#8a5b00';
-      ctx.font = 'bold 9px system-ui, sans-serif';
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText('$', 0, 1);
-      ctx.textAlign = 'start';
+    } else { // bloom: a sprout
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(0, 7); ctx.quadraticCurveTo(1, 0, 0, -6); ctx.stroke();
+      ctx.fillStyle = col;
+      ctx.beginPath(); ctx.ellipse(-4.5, -3, 4.5, 2.6, -0.5, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(4.5, -5, 4.5, 2.6, 0.5, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(0, -7.5, 2.2, 0, Math.PI * 2); ctx.fill(); // bud
     }
     ctx.restore();
     // HP bar above damaged turrets
@@ -1297,7 +1372,7 @@ function updateHud() {
     `<div>Wave: <b>${S.wave}</b> · Your turrets: <b>${blues}</b> · Enemy: <b>${reds}</b>${S.redQueue.length ? ` (+${S.redQueue.length} incoming)` : ''}</div>` +
     `<div>Blocks excavated: <b>${S.destroyed}</b> · Red turrets destroyed: <b>${S.redKills}</b></div>` +
     `<div>Map seed: <b>${S.seed}</b></div>` +
-    `<div>Fire rate: <b>${effFreq}/s</b> (×${S.freqMult.toFixed(2)}) · Damage: <b>+${S.dmgBonus}</b> · Steering: <b>×${S.steerMult.toFixed(2)}</b></div>` +
+    `<div>Fire rate: <b>${effFreq}/s</b> (×${S.freqMult.toFixed(2)}) · Damage: <b>+${S.dmgBonus}</b> · Steering: <b>×${S.steerMult.toFixed(2)}</b> · Bloom: <b>×${S.bloomMult.toFixed(2)}</b></div>` +
     `<div>Bounce chance: <b>${Math.round(S.bounceChance * 100)}%</b> · Suction every: <b>${suctionInterval().toFixed(1)}s</b></div>` +
     `<div>Projectiles alive: <b>${S.projs.length}</b> · Missiles: <b>${S.missiles.length}</b></div>` +
     `<div>Coins: <b>${S.coins.length}</b> on field · <b>${S.coinsCollected}</b> collected</div>`;
