@@ -48,6 +48,7 @@ const inPopDur  = document.getElementById('d-popdur');
 const inPopPush = document.getElementById('d-poppush');
 const inRipple  = document.getElementById('d-ripple');
 const inTrail   = document.getElementById('d-trail');
+const inGravity = document.getElementById('d-gravity');
 
 // ---- Seeded RNG, smooth value noise (Perlin-style), cave automata ----
 function mulberry32(a) {
@@ -216,6 +217,7 @@ function readDebug() {
     popPush: clampNum(inPopPush.value, 0, 1.5, 0.2),         // knockback push (cells)
     rippleAmp: clampNum(inRipple.value, 0, 1, 0.1),          // neighbor shockwave strength
     trailT: clampNum(inTrail.value, 0, 0.2, 0.1),            // projectile trail (s)
+    gravity: clampNum(inGravity.value, 0, 40, 9),            // particle gravity (cells/s^2)
     thresholds: thresholds.length ? thresholds : [15],
   };
   // reflect clamped values back into the panel
@@ -226,6 +228,7 @@ function readDebug() {
   inPopHold.value = cfg.popHold; inPopDur.value = cfg.popDur;
   inPopPush.value = cfg.popPush; inRipple.value = cfg.rippleAmp;
   inTrail.value = cfg.trailT;
+  inGravity.value = cfg.gravity;
   inThresh.value = cfg.thresholds.join(',');
 }
 
@@ -456,12 +459,12 @@ function update(dt) {
     if (t >= 0) S.popT[i] = t + dt >= popEnd ? -1 : t + dt;
   }
 
-  // Chip particles: fly, gravity, fade
+  // Chip particles: fly, gravity, shrink to nothing, then destroyed
   for (const pt of S.particles) {
     pt.t += dt;
     pt.x += pt.vx * dt;
     pt.y += pt.vy * dt;
-    pt.vy += 9 * dt;
+    pt.vy += cfg.gravity * dt;
     if (pt.t >= pt.life) pt.dead = true;
   }
   S.particles = S.particles.filter(p => !p.dead);
@@ -550,13 +553,11 @@ function render() {
     ctx.beginPath(); ctx.arc(px - r * 0.3, py - r * 0.3, r * 0.28, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fill(); // shine
   }
-  // Chip particles
+  // Chip particles (no fade: they shrink to nothing, then pop out of existence)
   for (const pt of S.particles) {
-    ctx.globalAlpha = Math.max(0, 1 - pt.t / pt.life);
     ctx.fillStyle = pt.color;
-    const s = pt.size;
+    const s = Math.max(0.1, pt.size * (1 - pt.t / pt.life));
     ctx.fillRect(pt.x * CELL_PX - s / 2, pt.y * CELL_PX - s / 2, s, s);
-    ctx.globalAlpha = 1;
   }
   // Shockwave rings
   for (const r of S.rings) {
@@ -666,7 +667,7 @@ function frame(now) {
 
 // ---- Debug wiring: any change restarts the game ----
 [inCols, inRows, inSpeed, inFreq, inArc, inCave, inCoin, inSeed, inThresh,
- inPopHold, inPopDur, inPopPush, inRipple, inTrail].forEach(el => {
+ inPopHold, inPopDur, inPopPush, inRipple, inTrail, inGravity].forEach(el => {
   el.addEventListener('change', newGame);
 });
 document.getElementById('d-restart').addEventListener('click', newGame);
@@ -700,7 +701,7 @@ function applyUrlParams() {
   const q = new URLSearchParams(location.search);
   const map = { cols: inCols, rows: inRows, speed: inSpeed, freq: inFreq, arc: inArc,
     cave: inCave, seed: inSeed, coin: inCoin, pophold: inPopHold, popdur: inPopDur,
-    poppush: inPopPush, ripple: inRipple, trail: inTrail, thresh: inThresh };
+    poppush: inPopPush, ripple: inRipple, trail: inTrail, gravity: inGravity, thresh: inThresh };
   for (const k of Object.keys(map)) if (q.has(k)) map[k].value = q.get(k);
 }
 function flashButton(el, text) {
@@ -714,7 +715,7 @@ document.getElementById('d-copylink').addEventListener('click', () => {
     cols: cfg.cols, rows: cfg.rows, speed: cfg.projSpeed, freq: cfg.freq, arc: cfg.arc,
     cave: cfg.caveChance, seed: inSeed.value.trim(), coin: cfg.coinChance,
     pophold: cfg.popHold, popdur: cfg.popDur, poppush: cfg.popPush,
-    ripple: cfg.rippleAmp, trail: cfg.trailT, thresh: cfg.thresholds.join(','),
+    ripple: cfg.rippleAmp, trail: cfg.trailT, gravity: cfg.gravity, thresh: cfg.thresholds.join(','),
   });
   const url = location.origin + location.pathname + '?' + q.toString();
   const btn = document.getElementById('d-copylink');
