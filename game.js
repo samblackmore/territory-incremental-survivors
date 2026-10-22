@@ -1374,6 +1374,7 @@ function endPointer(e) {
   if (pointers.size === 0) {
     if (downPos && !panning) {
       if (S.placing) placeTurretAt(downPos.x, downPos.y); // placement eats the tap
+      else if (tryChipDoubleTap(downPos.x, downPos.y)) { /* debug level grant */ }
       else tapCoin(downPos.x, downPos.y);
     }
     downPos = null; panning = false;
@@ -1382,6 +1383,31 @@ function endPointer(e) {
     const [p] = [...pointers.values()];
     downPos = { x: p.x, y: p.y }; panning = false;
   }
+}
+
+// Debug gesture: double-tap the coin-counter chip to grant enough XP for
+// the next level. Hidden, harmless in production — just a fast way to
+// exercise the card draft while tuning.
+function tryChipDoubleTap(sx, sy) {
+  if (Math.abs(sx - CHIP_CX) > 38 || Math.abs(sy - CHIP_CY) > 13) return false;
+  const now = S.time;
+  if (now - (S._lastChipTap ?? -1) < 0.4) {
+    S._lastChipTap = -1;
+    debugGrantLevel();
+    return true;
+  }
+  S._lastChipTap = now;
+  return false; // first tap falls through to tapCoin
+}
+function debugGrantLevel() {
+  const t = cfg.thresholds;
+  const need = (S.level - 1 < t.length) ? t[S.level - 1] - S.xp : 100;
+  if (need <= 0) return;
+  S.xp += need;
+  S.coinsCollected += need; // the chip counter reflects the grant too
+  S.chipPulse = 1;
+  checkLevel();
+  updateHud();
 }
 canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', endPointer);
