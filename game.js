@@ -8,10 +8,9 @@ const WHITE = 0, EMPTY = 1, BLUE = 2, RED = 3;
 const CELL_COLORS = ['#eef1f6', '#3d4454', '#3b82f6', '#ef4444'];
 
 const CELL_PX = 16;                 // render size of one cell
-const TURN_RATE = (Math.PI * 2) / 3; // cannon sweep speed: 120 deg/s
 const COIN_FLY_DUR = 0.45;           // seconds for a tapped coin to zip to the corner
 const RING_DUR = 0.3;                // conversion shockwave ring lifetime (s)
-const CHIP_CX = 41, CHIP_CY = 19;    // coin-counter chip center, in canvas px
+const CHIP_CX = 41, CHIP_CY = 48;    // coin-counter chip center, in screen (CSS) px
 // (hit-feel knobs live in cfg via the debug panel: popHold, popDur, popPush,
 // rippleAmp, trailT)
 
@@ -39,6 +38,7 @@ const inRows   = document.getElementById('d-rows');
 const inSpeed  = document.getElementById('d-speed');
 const inFreq   = document.getElementById('d-freq');
 const inArc    = document.getElementById('d-arc');
+const inTurn   = document.getElementById('d-turn');
 const inCave   = document.getElementById('d-cave');
 const inSeed   = document.getElementById('d-seed');
 const inCoin   = document.getElementById('d-coin');
@@ -49,6 +49,60 @@ const inPopPush = document.getElementById('d-poppush');
 const inRipple  = document.getElementById('d-ripple');
 const inTrail   = document.getElementById('d-trail');
 const inGravity = document.getElementById('d-gravity');
+
+// ---- Camera: fullscreen canvas, pan + pinch zoom, always crisp ----
+// The backing store is viewport x devicePixelRatio and the vector scene is
+// re-rasterized through the camera transform every frame, so zooming never
+// upscales a bitmap: it stays sharp at any zoom level.
+const view = { w: 0, h: 0 }; // viewport, CSS px
+let dpr = 1;
+const cam = { x: 0, y: 0, zoom: 1 }; // x/y: world px at screen center; zoom: CSS px per world px
+
+function fitZoom() {
+  if (!view.w || !view.h || !cfg.cols) return 1;
+  return Math.min(view.w / (cfg.cols * CELL_PX), view.h / (cfg.rows * CELL_PX));
+}
+function resetCamera() {
+  cam.x = (cfg.cols * CELL_PX) / 2;
+  cam.y = (cfg.rows * CELL_PX) / 2;
+  cam.zoom = fitZoom();
+  clampCamera();
+}
+function clampCamera() {
+  if (!cfg.cols) return;
+  const fz = fitZoom();
+  cam.zoom = Math.min(Math.max(cam.zoom, fz), fz * 8);
+  const hw = view.w / cam.zoom / 2, hh = view.h / cam.zoom / 2;
+  const W = cfg.cols * CELL_PX, H = cfg.rows * CELL_PX;
+  const pad = 2 * CELL_PX;
+  cam.x = Math.min(Math.max(cam.x, hw - pad), W - hw + pad);
+  cam.y = Math.min(Math.max(cam.y, hh - pad), H - hh + pad);
+}
+function screenToWorld(sx, sy) {
+  return { x: (sx - view.w / 2) / cam.zoom + cam.x,
+           y: (sy - view.h / 2) / cam.zoom + cam.y };
+}
+// Zoom keeping the world point under (sx, sy) pinned to the cursor/fingers
+function zoomAt(sx, sy, newZoom) {
+  const fz = fitZoom();
+  newZoom = Math.min(Math.max(newZoom, fz), fz * 8);
+  const before = screenToWorld(sx, sy);
+  cam.zoom = newZoom;
+  const after = screenToWorld(sx, sy);
+  cam.x += before.x - after.x;
+  cam.y += before.y - after.y;
+  clampCamera();
+}
+function resize() {
+  view.w = window.innerWidth;
+  view.h = window.innerHeight;
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.max(1, Math.round(view.w * dpr));
+  canvas.height = Math.max(1, Math.round(view.h * dpr));
+  clampCamera();
+}
+window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', resize);
 
 // ---- Seeded RNG, smooth value noise (Perlin-style), cave automata ----
 function mulberry32(a) {
@@ -216,6 +270,7 @@ function readDebug() {
     projSpeed: clampNum(inSpeed.value, 40, 2000, 260),   // px/s
     freq: clampNum(inFreq.value, 0.1, 20, 1),            // shots/s (both cannons)
     arc: clampNum(inArc.value, 0, 360, 120),             // degrees
+    turnRate: clampNum(inTurn.value, 0, 720, 120),          // cannon sweep speed (deg/s)
     caveChance: clampNum(inCave.value, 0, 0.95, 0.38),      // CA cave fill
     coinChance: clampNum(inCoin.value, 0, 1, 0.3),          // coin drop per blue conversion
     popHold: clampNum(inPopHold.value, 0, 0.5, 0.03),        // big square hold time (s)
@@ -230,6 +285,7 @@ function readDebug() {
   inCols.value = cols; inRows.value = rows;
   inSpeed.value = cfg.projSpeed; inFreq.value = cfg.freq;
   inArc.value = cfg.arc; inCave.value = cfg.caveChance;
+  inTurn.value = cfg.turnRate;
   inCoin.value = cfg.coinChance;
   inPopHold.value = cfg.popHold; inPopDur.value = cfg.popDur;
   inPopPush.value = cfg.popPush; inRipple.value = cfg.rippleAmp;
@@ -304,8 +360,8 @@ function newGame() {
   S.cannons.push(mkCannon(px, py, BLUE));
   S.cannons.push(mkCannon(ex, ey, RED));
 
-  canvas.width = cfg.cols * CELL_PX;
-  canvas.height = cfg.rows * CELL_PX;
+  resize();       // backing store = viewport x devicePixelRatio
+  resetCamera();  // frame the whole map
 
   overlay.classList.add('hidden');
   updateHud();
@@ -414,12 +470,13 @@ document.querySelectorAll('.card').forEach(card => {
 // ---- Update ----
 function update(dt) {
   const arcRad = (cfg.arc * Math.PI) / 180;
+  const turnRate = (cfg.turnRate * Math.PI) / 180; // rad/s
   for (const c of S.cannons) {
     // Sweep the aim within the turn arc (full 360 = continuous spin)
     if (cfg.arc >= 360) {
-      c.angle += TURN_RATE * dt;
+      c.angle += turnRate * dt;
     } else if (arcRad > 0) {
-      c.angle += c.dir * TURN_RATE * dt;
+      c.angle += c.dir * turnRate * dt;
       const lo = c.base - arcRad / 2, hi = c.base + arcRad / 2;
       if (c.angle > hi) { c.angle = hi; c.dir = -1; }
       else if (c.angle < lo) { c.angle = lo; c.dir = 1; }
@@ -435,9 +492,11 @@ function update(dt) {
   if (S.projs.length > 4000) S.projs.splice(0, S.projs.length - 4000); // safety valve
   S.projs = S.projs.filter(p => !p.dead);
 
-  // Tapped coins zip to the top-left chip (accelerating = satisfying)
+  // Tapped coins zip to the top-left chip (accelerating = satisfying).
+  // The chip lives in screen space, so re-project its target every frame.
   S.time += dt;
-  const TX = CHIP_CX / CELL_PX, TY = CHIP_CY / CELL_PX;
+  const tgt = screenToWorld(CHIP_CX, CHIP_CY);
+  const TX = tgt.x / CELL_PX, TY = tgt.y / CELL_PX;
   for (const c of S.coins) {
     if (c.state !== 'fly') continue;
     c.t += dt;
@@ -514,8 +573,14 @@ function drawWhiteCell(x, y) {
 
 // ---- Render ----
 function render() {
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // draw in CSS px: crisp on hidpi
   ctx.fillStyle = '#0b0e16';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillRect(0, 0, view.w, view.h);
+  // ---- world pass: everything through the camera ----
+  ctx.save();
+  ctx.translate(view.w / 2, view.h / 2);
+  ctx.scale(cam.zoom, cam.zoom);
+  ctx.translate(-cam.x, -cam.y);
   const w = cfg.cols, h = cfg.rows;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
@@ -615,6 +680,7 @@ function render() {
     ctx.fill(); ctx.stroke();
     ctx.restore();
   }
+  ctx.restore(); // ---- end world pass; screen pass below (chip, floaters) ----
   // Coin-counter chip, top-left: the zip target. Pops on collect.
   const pulse = S.chipPulse;
   const chw = 76, chh = 26;
@@ -697,17 +763,17 @@ function frame(now) {
 }
 
 // ---- Debug wiring: any change restarts the game ----
-[inCols, inRows, inSpeed, inFreq, inArc, inCave, inCoin, inSeed, inThresh,
+[inCols, inRows, inSpeed, inFreq, inArc, inTurn, inCave, inCoin, inSeed, inThresh,
  inPopHold, inPopDur, inPopPush, inRipple, inTrail, inGravity].forEach(el => {
   el.addEventListener('change', newGame);
 });
 document.getElementById('d-restart').addEventListener('click', newGame);
 
-// ---- Coin tapping: topmost idle coin within tap radius starts its flight ----
-canvas.addEventListener('pointerdown', (e) => {
-  const r = canvas.getBoundingClientRect();
-  const cx = (e.clientX - r.left) * (canvas.width / r.width) / CELL_PX;
-  const cy = (e.clientY - r.top) * (canvas.height / r.height) / CELL_PX;
+// ---- Camera controls: 1-finger drag pans, 2-finger pinch zooms, tap hits coins ----
+// touch-action:none on the canvas stops the page scrolling/zooming underneath.
+function tapCoin(sx, sy) {
+  const wpt = screenToWorld(sx, sy);
+  const cx = wpt.x / CELL_PX, cy = wpt.y / CELL_PX;
   for (let i = S.coins.length - 1; i >= 0; i--) {
     const c = S.coins[i];
     if (c.state !== 'idle') continue;
@@ -717,13 +783,64 @@ canvas.addEventListener('pointerdown', (e) => {
       break;
     }
   }
+}
+const pointers = new Map(); // pointerId -> {x, y} in client px
+let pinchD0 = 0;
+let downPos = null, panning = false;
+const TAP_SLOP = 8; // px: below this, a press is a tap, not a pan
+canvas.addEventListener('pointerdown', (e) => {
+  if (canvas.setPointerCapture) { try { canvas.setPointerCapture(e.pointerId); } catch (_) {} }
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size === 1) { downPos = { x: e.clientX, y: e.clientY }; panning = false; }
+  else if (pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    pinchD0 = Math.hypot(a.x - b.x, a.y - b.y);
+    downPos = null; panning = false; // a second finger cancels the tap
+  }
 });
+canvas.addEventListener('pointermove', (e) => {
+  if (!pointers.has(e.pointerId)) return;
+  const prev = pointers.get(e.pointerId);
+  const dx = e.clientX - prev.x, dy = e.clientY - prev.y;
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size === 1) {
+    if (!panning && downPos &&
+        Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y) > TAP_SLOP) panning = true;
+    if (panning) { cam.x -= dx / cam.zoom; cam.y -= dy / cam.zoom; clampCamera(); }
+  } else if (pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    const d = Math.hypot(a.x - b.x, a.y - b.y);
+    if (pinchD0 > 0 && d > 0) {
+      zoomAt((a.x + b.x) / 2, (a.y + b.y) / 2, cam.zoom * (d / pinchD0));
+    }
+    pinchD0 = d;
+  }
+});
+function endPointer(e) {
+  pointers.delete(e.pointerId);
+  if (pointers.size === 0) {
+    if (downPos && !panning) tapCoin(downPos.x, downPos.y);
+    downPos = null; panning = false;
+  } else if (pointers.size === 1) {
+    // pinch -> one finger: re-anchor so the remaining finger doesn't jump
+    const [p] = [...pointers.values()];
+    downPos = { x: p.x, y: p.y }; panning = false;
+  }
+}
+canvas.addEventListener('pointerup', endPointer);
+canvas.addEventListener('pointercancel', endPointer);
+// Desktop: wheel zooms around the cursor; drag pans (same pointer logic as touch)
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  zoomAt(e.clientX, e.clientY, cam.zoom * Math.exp(-e.deltaY * 0.0015));
+}, { passive: false });
 
 // ---- Mobile: collapsible debug panel (button only visible under 720px) ----
 const debugToggle = document.getElementById('debug-toggle');
 const debugPanel = document.getElementById('debug');
 if (debugToggle && debugPanel) {
   debugToggle.addEventListener('click', () => debugPanel.classList.toggle('collapsed'));
+  if (window.innerWidth < 720) debugPanel.classList.add('collapsed'); // start tucked away on phones
 }
 
 // ---- Share link: encode the whole debug config into the URL ----
@@ -731,7 +848,7 @@ function applyUrlParams() {
   if (typeof location === 'undefined' || !location.search) return;
   const q = new URLSearchParams(location.search);
   const map = { cols: inCols, rows: inRows, speed: inSpeed, freq: inFreq, arc: inArc,
-    cave: inCave, seed: inSeed, coin: inCoin, pophold: inPopHold, popdur: inPopDur,
+    turn: inTurn, cave: inCave, seed: inSeed, coin: inCoin, pophold: inPopHold, popdur: inPopDur,
     poppush: inPopPush, ripple: inRipple, trail: inTrail, gravity: inGravity, thresh: inThresh };
   for (const k of Object.keys(map)) if (q.has(k)) map[k].value = q.get(k);
 }
@@ -744,7 +861,7 @@ document.getElementById('d-copylink').addEventListener('click', () => {
   readDebug();
   const q = new URLSearchParams({
     cols: cfg.cols, rows: cfg.rows, speed: cfg.projSpeed, freq: cfg.freq, arc: cfg.arc,
-    cave: cfg.caveChance, seed: inSeed.value.trim(), coin: cfg.coinChance,
+    turn: cfg.turnRate, cave: cfg.caveChance, seed: inSeed.value.trim(), coin: cfg.coinChance,
     pophold: cfg.popHold, popdur: cfg.popDur, poppush: cfg.popPush,
     ripple: cfg.rippleAmp, trail: cfg.trailT, gravity: cfg.gravity, thresh: cfg.thresholds.join(','),
   });

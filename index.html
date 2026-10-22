@@ -18,16 +18,19 @@
     --accent: #22d3ee;
   }
   * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; }
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
   body {
     background: var(--bg);
     color: var(--text);
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    min-height: 100vh;
+    position: fixed; inset: 0; /* the game owns the viewport; nothing scrolls */
+    overscroll-behavior: none;
   }
   /* Vampire-survivors-esque XP bar across the top */
   #xpbar {
-    position: relative;
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 5;
     height: 30px;
     background: #0b0e16;
     border-bottom: 1px solid #2a3145;
@@ -46,52 +49,55 @@
     color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.7);
     pointer-events: none;
   }
-  #layout {
-    display: flex;
-    align-items: flex-start;
-    gap: 16px;
-    padding: 16px;
-  }
+  #layout { display: block; padding: 0; }
+  /* The canvas fills the viewport; the camera pans/zooms inside it */
   #game {
-    border: 2px solid #2a3145;
-    border-radius: 8px;
+    position: fixed; inset: 0;
+    width: 100vw; height: 100vh; height: 100dvh;
+    display: block;
     background: #0b0e16;
-    max-width: calc(100vw - 340px);
-    height: auto;
-    image-rendering: pixelated;
-    touch-action: manipulation; /* snappy taps, no double-tap zoom delay */
+    touch-action: none; /* 1-finger pan + 2-finger pinch, no page scroll/zoom */
   }
   #debug-toggle {
-    display: none;
-    width: 100%;
-    padding: 10px;
+    position: fixed;
+    right: 12px; bottom: 12px;
+    z-index: 7;
+    width: auto;
+    padding: 10px 16px;
     background: var(--panel);
     border: 1px solid #2a3145;
-    border-radius: 8px;
+    border-radius: 999px;
     color: var(--accent);
     font-size: 13px;
     font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
     cursor: pointer;
+    box-shadow: 0 4px 16px rgba(0,0,0,.4);
   }
-  /* Narrow screens: stack canvas above the debug panel, full width */
-  @media (max-width: 720px) {
-    #layout { flex-direction: column; padding: 12px; gap: 12px; }
-    #game { width: 100%; max-width: 100%; }
-    #debug { width: 100%; flex: none; }
-    #debug.collapsed { display: none; }
-    #debug-toggle { display: block; }
-    .cardrow { flex-wrap: wrap; }
-    .card { width: 130px; height: 170px; }
-  }
+  /* Debug panel floats over the game: right side on desktop, bottom sheet on phones */
   #debug {
-    width: 290px;
-    flex: 0 0 290px;
+    position: fixed;
+    z-index: 6;
+    top: 42px; right: 12px; bottom: 12px;
+    width: 300px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
     background: var(--panel);
     border: 1px solid #2a3145;
     border-radius: 8px;
     padding: 14px 14px 16px;
+    box-shadow: 0 8px 32px rgba(0,0,0,.45);
+  }
+  #debug.collapsed { display: none; }
+  @media (max-width: 720px) {
+    #debug {
+      top: auto; left: 12px; right: 12px; bottom: 12px;
+      width: auto;
+      max-height: 62vh; max-height: 62dvh;
+    }
+    .cardrow { flex-wrap: wrap; }
+    .card { width: 130px; height: 170px; }
   }
   #debug h2 {
     margin: 0 0 10px;
@@ -210,6 +216,9 @@
     <label>Cannon turn arc (degrees, max 360)
       <input id="d-arc" type="number" min="0" max="360" step="5" value="120">
     </label>
+    <label>Cannon turn speed (deg/s)
+      <input id="d-turn" type="number" min="0" max="720" step="10" value="120">
+    </label>
     <label>Cave amount (0–0.95)
       <input id="d-cave" type="number" min="0" max="0.95" step="0.05" value="0.38">
     </label>
@@ -259,6 +268,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=6"></script>
+<script src="game.js?v=7"></script>
 </body>
 </html>
