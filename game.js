@@ -439,7 +439,7 @@ function stepProjectile(p, dt) {
         }
       }
       spawnChip(cx + 0.5, cy + 0.5, CELL_COLORS[p.color], p.vx, p.vy);
-      spawnDmgNum(cx + 0.5, cy + 0.2, 1); // the hit lands: white number pops above the wall
+      if (S.hp[idx] > 0) spawnDmgNum(cx + 0.5, cy + 0.2, S.hp[idx]); // remaining HP floats up
       p.dead = true;
       if (S.hp[idx] <= 0) {
         S.cells[idx] = EMPTY; // excavated: the block is gone, not painted over
@@ -647,11 +647,17 @@ function render() {
       else if (S.popT[i] < 0) drawWhiteCell(x, y); // popped cells draw in the pass below
     }
   }
-  // Popped (enlarged) cells render last, in front of surrounding squares
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const i = y * w + x;
-      if (S.cells[i] === WHITE && S.popT[i] >= 0) drawWhiteCell(x, y);
+  // Popped (enlarged) cells render last, in front of surrounding squares.
+  // Two passes: the faint neighbor ripple first, then the hard-hit cell itself,
+  // so the damaged cell always lands on top of its own shockwave.
+  for (let pass = 0; pass < 2; pass++) {
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = y * w + x;
+        if (S.cells[i] !== WHITE || S.popT[i] < 0) continue;
+        if (pass === 0 ? S.popAmp[i] >= 1 : S.popAmp[i] < 1) continue;
+        drawWhiteCell(x, y);
+      }
     }
   }
   // Projectiles (with white tracer trails)
