@@ -211,11 +211,11 @@ function readDebug() {
     arc: clampNum(inArc.value, 0, 360, 120),             // degrees
     caveChance: clampNum(inCave.value, 0, 0.95, 0.38),      // CA cave fill
     coinChance: clampNum(inCoin.value, 0, 1, 0.3),          // coin drop per blue conversion
-    popHold: clampNum(inPopHold.value, 0, 0.5, 0.05),        // big square hold time (s)
-    popDur: clampNum(inPopDur.value, 0.05, 1, 0.22),         // pop shrink time (s)
-    popPush: clampNum(inPopPush.value, 0, 1.5, 0.4),         // knockback push (cells)
-    rippleAmp: clampNum(inRipple.value, 0, 1, 0.35),         // neighbor shockwave strength
-    trailT: clampNum(inTrail.value, 0, 0.2, 0.04),           // projectile trail (s)
+    popHold: clampNum(inPopHold.value, 0, 0.5, 0.03),        // big square hold time (s)
+    popDur: clampNum(inPopDur.value, 0.05, 1, 0.1),          // pop shrink time (s)
+    popPush: clampNum(inPopPush.value, 0, 1.5, 0.2),         // knockback push (cells)
+    rippleAmp: clampNum(inRipple.value, 0, 1, 0.1),          // neighbor shockwave strength
+    trailT: clampNum(inTrail.value, 0, 0.2, 0.1),            // projectile trail (s)
     thresholds: thresholds.length ? thresholds : [15],
   };
   // reflect clamped values back into the panel
@@ -694,5 +694,35 @@ if (debugToggle && debugPanel) {
   debugToggle.addEventListener('click', () => debugPanel.classList.toggle('collapsed'));
 }
 
+// ---- Share link: encode the whole debug config into the URL ----
+function applyUrlParams() {
+  if (typeof location === 'undefined' || !location.search) return;
+  const q = new URLSearchParams(location.search);
+  const map = { cols: inCols, rows: inRows, speed: inSpeed, freq: inFreq, arc: inArc,
+    cave: inCave, seed: inSeed, coin: inCoin, pophold: inPopHold, popdur: inPopDur,
+    poppush: inPopPush, ripple: inRipple, trail: inTrail, thresh: inThresh };
+  for (const k of Object.keys(map)) if (q.has(k)) map[k].value = q.get(k);
+}
+function flashButton(el, text) {
+  const old = el.textContent;
+  el.textContent = text;
+  setTimeout(() => { el.textContent = old; }, 1200);
+}
+document.getElementById('d-copylink').addEventListener('click', () => {
+  readDebug();
+  const q = new URLSearchParams({
+    cols: cfg.cols, rows: cfg.rows, speed: cfg.projSpeed, freq: cfg.freq, arc: cfg.arc,
+    cave: cfg.caveChance, seed: inSeed.value.trim(), coin: cfg.coinChance,
+    pophold: cfg.popHold, popdur: cfg.popDur, poppush: cfg.popPush,
+    ripple: cfg.rippleAmp, trail: cfg.trailT, thresh: cfg.thresholds.join(','),
+  });
+  const url = location.origin + location.pathname + '?' + q.toString();
+  const btn = document.getElementById('d-copylink');
+  navigator.clipboard.writeText(url).then(
+    () => flashButton(btn, 'Copied!'),
+    () => flashButton(btn, 'Copy failed'));
+});
+
+applyUrlParams();
 newGame();
 requestAnimationFrame(frame);

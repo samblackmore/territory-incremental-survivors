@@ -120,7 +120,7 @@
     padding: 6px 8px;
   }
   #debug input:focus { outline: 1px solid var(--accent); }
-  #d-restart {
+  #d-restart, #d-copylink {
     width: 100%;
     margin-top: 12px;
     padding: 8px;
@@ -132,7 +132,9 @@
     font-weight: 700;
     cursor: pointer;
   }
-  #d-restart:hover { background: #3b82f6; }
+  #d-restart:hover, #d-copylink:hover { background: #3b82f6; }
+  #d-copylink { margin-top: 8px; background: #26314d; }
+  #d-copylink:hover { background: #314063; }
   #d-stats {
     margin-top: 12px;
     font-size: 12px;
@@ -219,21 +221,22 @@
     </label>
     <h3>Hit feel</h3>
     <label>Pop hold at full size (s)
-      <input id="d-pophold" type="number" min="0" max="0.5" step="0.01" value="0.05">
+      <input id="d-pophold" type="number" min="0" max="0.5" step="0.01" value="0.03">
     </label>
     <label>Pop shrink time (s)
-      <input id="d-popdur" type="number" min="0.05" max="1" step="0.01" value="0.22">
+      <input id="d-popdur" type="number" min="0.05" max="1" step="0.01" value="0.1">
     </label>
     <label>Knockback push (cells)
-      <input id="d-poppush" type="number" min="0" max="1.5" step="0.05" value="0.4">
+      <input id="d-poppush" type="number" min="0" max="1.5" step="0.05" value="0.2">
     </label>
     <label>Neighbor ripple strength (0–1)
-      <input id="d-ripple" type="number" min="0" max="1" step="0.05" value="0.35">
+      <input id="d-ripple" type="number" min="0" max="1" step="0.05" value="0.1">
     </label>
     <label>Projectile trail (s)
-      <input id="d-trail" type="number" min="0" max="0.2" step="0.01" value="0.04">
+      <input id="d-trail" type="number" min="0" max="0.2" step="0.01" value="0.1">
     </label>
     <button id="d-restart">Restart game</button>
+    <button id="d-copylink">Copy share link</button>
     <div id="d-stats"></div>
   </aside>
 </div>
@@ -250,6 +253,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=2"></script>
+<script src="game.js?v=3"></script>
 </body>
 </html>
