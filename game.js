@@ -22,6 +22,11 @@ const GATHER_BASE_RANGE = 6;         // pickup pull range in cells
 const GATHER_RANGE_PER_LEVEL = 2;    // +range per Gather level
 const GATHER_COOLDOWN = 6;           // seconds between pulls
 const GATHER_FLASH_DUR = 1.5;        // range ring flash duration on pull (s)
+// Shared icons (emoji) for weapons/passives — used in cards and HUD badges.
+const ICONS = {
+  cannon: '🔺', rocket: '🚀', laser: '💎', bloom: '🌱', lantern: '🏮',
+  gather: '🧲', bounce: '⚡', steer: '🚀',
+};
 const TURRET = {
   cannon: { name: 'Cannon', hp: 8, interval: 1.0, dmg: 1 },
   rocket: { name: 'Rocket', hp: 6, interval: 2.5, dmg: 3 },
@@ -963,17 +968,17 @@ function checkLevel() {
 // `needs` gates an upgrade on owning a turret it actually affects — no
 // steering card before you've got a rocket.
 const CARD_POOL = [
-  { kind: 'turret', type: 'cannon', title: 'Cannon', icon: '🔺', sub: 'Sweeps shots in an arc, blasting rock.' },
-  { kind: 'turret', type: 'rocket', title: 'Rocket', icon: '🚀', sub: 'Fires homing missiles that crash and splash-dig.' },
-  { kind: 'turret', type: 'laser', title: 'Laser', icon: '💎', sub: 'Zaps the weakest visible block.' },
-  { kind: 'turret', type: 'bloom', title: 'Bloom', icon: '🌱', sub: 'Grows territory that harvests gold coins.' },
-  { kind: 'turret', type: 'lantern', title: 'Lantern', icon: '🏮', sub: 'Pushes back the fog of war.' },
-  { kind: 'turret', type: 'gather', title: 'Gather', icon: '🧲', sub: 'Pulls in nearby pickups.' },
+  { kind: 'turret', type: 'cannon', title: 'Cannon', icon: ICONS.cannon, sub: 'Sweeps shots in an arc, blasting rock.' },
+  { kind: 'turret', type: 'rocket', title: 'Rocket', icon: ICONS.rocket, sub: 'Fires homing missiles that crash and splash-dig.' },
+  { kind: 'turret', type: 'laser', title: 'Laser', icon: ICONS.laser, sub: 'Zaps the weakest visible block.' },
+  { kind: 'turret', type: 'bloom', title: 'Bloom', icon: ICONS.bloom, sub: 'Grows territory that harvests gold coins.' },
+  { kind: 'turret', type: 'lantern', title: 'Lantern', icon: ICONS.lantern, sub: 'Pushes back the fog of war.' },
+  { kind: 'turret', type: 'gather', title: 'Gather', icon: ICONS.gather, sub: 'Pulls in nearby pickups.' },
   // (no global fire-rate / damage cards — weapon levels are the single
   // linear upgrade track: each level is +10% rate, +1 damage, or +5% crit)
-  { kind: 'passive', passive: 'bounce', title: 'Bounce', icon: '⚡', sub: 'Shots ricochet off rock.', needs: ['cannon'] },
-  { kind: 'steer', mult: 1.3, title: '+30%', icon: '🚀', sub: 'Missile steering', needs: ['rocket'] },
-  { kind: 'bloom', mult: 0.8, title: '+25%', icon: '🌱', sub: 'Bloom grow frequency', needs: ['bloom'] },
+  { kind: 'passive', passive: 'bounce', title: 'Bounce', icon: ICONS.bounce, sub: 'Shots ricochet off rock.', needs: ['cannon'] },
+  { kind: 'steer', mult: 1.3, title: '+30%', icon: ICONS.steer, sub: 'Missile steering', needs: ['rocket'] },
+  { kind: 'bloom', mult: 0.8, title: '+25%', icon: ICONS.bloom, sub: 'Bloom grow frequency', needs: ['bloom'] },
 ];
 function hasTurretTypes(types) {
   for (const t of S.turrets) {
@@ -1773,21 +1778,9 @@ function render() {
     ctx.lineWidth = 1; ctx.strokeStyle = '#2a3145';
     rr(8, ppy, bw, bh, 6); ctx.stroke();
     const iy = ppy + bh / 2;
-    if (key === 'gather') {
-      // inward arrows: the magnet pull
-      ctx.fillStyle = '#7dd3fc';
-      ctx.beginPath(); ctx.moveTo(14, iy - 4); ctx.lineTo(19, iy); ctx.lineTo(14, iy + 4); ctx.closePath(); ctx.fill();
-      ctx.beginPath(); ctx.moveTo(26, iy - 4); ctx.lineTo(21, iy); ctx.lineTo(26, iy + 4); ctx.closePath(); ctx.fill();
-      ctx.beginPath(); ctx.arc(20, iy, 2.5, 0, Math.PI * 2); ctx.fill();
-    } else {
-      // zigzag: the bouncing ball path
-      ctx.strokeStyle = '#fb923c';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(13, iy + 5); ctx.lineTo(17, iy - 5);
-      ctx.lineTo(21, iy + 5); ctx.lineTo(25, iy - 5);
-      ctx.stroke();
-    }
+    ctx.font = '13px system-ui, sans-serif';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(ICONS[key], 12, iy + 1);
     // level pips
     for (let i = 0; i < 8; i++) {
       ctx.beginPath();
@@ -1798,7 +1791,7 @@ function render() {
     ppy += bh + 6;
   }
   // Weapon badges: icon + level number (levels go to 50+, so no pips).
-  for (const type of ['cannon', 'rocket', 'laser', 'bloom', 'lantern']) {
+  for (const type of ['cannon', 'rocket', 'laser', 'bloom', 'lantern', 'gather']) {
     const w = S.weapons[type];
     if (!w) continue;
     const bw = 96, bh = 20;
@@ -1807,27 +1800,11 @@ function render() {
     ctx.lineWidth = 1; ctx.strokeStyle = '#2a3145';
     rr(8, ppy, bw, bh, 6); ctx.stroke();
     const iy = ppy + bh / 2;
-    const col = CELL_COLORS[BLUE];
-    ctx.fillStyle = col;
-    ctx.strokeStyle = col;
-    if (type === 'cannon') {
-      ctx.beginPath(); ctx.moveTo(26, iy - 6); ctx.lineTo(14, iy + 5); ctx.lineTo(26, iy + 5); ctx.closePath(); ctx.fill();
-    } else if (type === 'rocket') {
-      ctx.beginPath(); ctx.moveTo(26, iy); ctx.lineTo(18, iy - 4); ctx.lineTo(18, iy + 4); ctx.closePath(); ctx.fill();
-      ctx.fillRect(12, iy - 2.5, 7, 5);
-    } else if (type === 'laser') {
-      ctx.beginPath(); ctx.moveTo(20, iy - 7); ctx.lineTo(25, iy); ctx.lineTo(20, iy + 7); ctx.lineTo(15, iy); ctx.closePath(); ctx.fill();
-    } else if (type === 'bloom') {
-      ctx.beginPath(); ctx.arc(20, iy, 5.5, 0, Math.PI * 2); ctx.fill();
-    } else { // lantern
-      ctx.lineWidth = 1.5;
-      ctx.strokeRect(15, iy - 6, 10, 12);
-      ctx.fillStyle = '#fef3c7';
-      ctx.beginPath(); ctx.arc(20, iy, 2.5, 0, Math.PI * 2); ctx.fill();
-    }
+    ctx.font = '13px system-ui, sans-serif';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(ICONS[type], 12, iy + 1);
     ctx.fillStyle = '#dfe5f2';
     ctx.font = 'bold 12px system-ui, sans-serif';
-    ctx.textBaseline = 'middle';
     ctx.fillText('Lv ' + w.level, 34, iy + 1);
     ppy += bh + 6;
   }
