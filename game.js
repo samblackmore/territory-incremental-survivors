@@ -208,6 +208,7 @@ let TERRAIN_DARK = [29, 67, 30];
 let TERRAIN = [];
 let CAVE_CSS = '#4caf50';
 let CAVE_RGB = [76, 175, 80];
+let CAVE_SHADES = [];
 function rebuildColors() {
   const base = hexToRgb(inTerrain.value || '#6b543a');
   TERRAIN_LIGHT = base;
@@ -219,6 +220,13 @@ function rebuildColors() {
   }
   CAVE_CSS = inEmpty.value || '#4caf50';
   CAVE_RGB = hexToRgb(CAVE_CSS);
+  // Empty caves get Perlin shades too (purely visual — no gameplay effect).
+  const caveDark = CAVE_RGB.map(v => Math.round(v * 0.55));
+  CAVE_SHADES = [];
+  for (let s = 0; s < 8; s++) {
+    const t = s / 7;
+    CAVE_SHADES[s] = [0, 1, 2].map(j => Math.round(CAVE_RGB[j] + (caveDark[j] - CAVE_RGB[j]) * t));
+  }
 }
 const BLUE_RGB = [59, 130, 246];
 const RED_RGB = [239, 68, 68];
@@ -238,7 +246,7 @@ function cellRGB(x, y) {
   const st = S.cells[i];
   if (st === BLUE) return BLUE_RGB;
   if (st === RED) return RED_RGB;
-  if (st === EMPTY) return CAVE_RGB;
+  if (st === EMPTY) return CAVE_SHADES[S.shade[i] || 0];
   const max = S.maxhp[i] || 3, hpv = S.hp[i];
   const base = TERRAIN[max];
   let r = base[0], g = base[1], b = base[2];
@@ -466,8 +474,9 @@ function newGame() {
   const popCol = new Uint8Array(n); // flash color for the pop (the attacker)
   const popDX = new Float32Array(n); // knockback direction (unit vector), set at impact
   const popDY = new Float32Array(n);
+  const shade = new Uint8Array(n); // Perlin shade index (0..7) for empty cells — visual only
   S = { cells, hp, maxhp, hitBy, popT, popAmp, popCol, popDX, popDY, projs: [], xp: 0, level: 1, pending: 0,
-        freqMult: 1, paused: false, frame: 0, seed,
+        freqMult: 1, paused: false, frame: 0, seed, shade,
         coins: [], floaters: [], gold: 0, chipPulse: 0, time: 0, lastBanked: banked,
         // XP bar animation: xpShown eases toward xp; level-up cards wait
         // for the bar to finish filling.
@@ -499,6 +508,8 @@ function newGame() {
   for (let y = 0; y < cfg.rows; y++) {
     for (let x = 0; x < cfg.cols; x++) {
       const i = y * cfg.cols + x;
+      // Visual shade for empty cells (Perlin, no gameplay effect).
+      shade[i] = Math.round(noise((x / cfg.cols) * 4.5 + 10, (y / cfg.rows) * 4.5 + 10) * 7);
       if (cave[i]) { cells[i] = EMPTY; continue; }
       cells[i] = WHITE;
       const m = 3 + Math.round(noise((x / cfg.cols) * 3.5, (y / cfg.rows) * 3.5) * 7);
@@ -1394,7 +1405,11 @@ function render() {
       const st = S.cells[i];
       if (st === BLUE) { ctx.fillStyle = CELL_COLORS[BLUE]; ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX); }
       else if (st === RED) { ctx.fillStyle = CELL_COLORS[RED]; ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX); }
-      else if (st === EMPTY) { ctx.fillStyle = CAVE_CSS; ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX); }
+      else if (st === EMPTY) {
+        const sh = CAVE_SHADES[S.shade[i] || 0];
+        ctx.fillStyle = `rgb(${sh[0]},${sh[1]},${sh[2]})`;
+        ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX);
+      }
       else if (S.popT[i] < 0) drawWhiteCell(x, y); // popped cells draw in the pass below
     }
   }
