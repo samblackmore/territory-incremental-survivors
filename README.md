@@ -48,8 +48,9 @@ Gather there is no auto-collect; each level multiplies the interval by 0.75.
 next to its icon in the top-left, no cap — cannons can hit level 50).
 Picking a weapon card for a type you already own levels it up instead of
 placing a new turret. The card shows exactly what you'll get, e.g.
-"Cannon Lv4" / "+20% fire rate". Cannon rotates through +20% rate, +1
-damage, +5% crit chance; other weapons get +20% rate or +1 damage.
+"Cannon Lv4" / "+20% fire rate". Cannon rotates +20% rate / +1 damage /
++5% crit; rocket and laser get +20% rate or +1 damage; Bloom gets +20%
+growth speed; Lantern gets +2 max HP.
 Picking a card for a type you don't own enters placement mode as before.
 There are no separate global fire-rate/damage cards — the weapon track is
 the single linear upgrade path. The XP bar animates to full before the

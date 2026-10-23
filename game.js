@@ -380,7 +380,8 @@ function mkTurret(x, y, color, type) {
     : Math.atan2(cfg.rows * 0.85 - y, cfg.cols * 0.15 - x);
   // Red gets tankier every wave so the escalation is real.
   const hpScale = color === RED ? 1 + 0.2 * (S.wave - 1) : 1;
-  const maxhp = Math.max(1, Math.round(spec.hp * hpScale));
+  const w = color === BLUE && S.weapons[type] ? S.weapons[type] : null;
+  const maxhp = Math.max(1, Math.round(spec.hp * hpScale)) + (w && w.hpBonus ? w.hpBonus : 0);
   return { x, y, color, type, hp: maxhp, maxhp, base, angle: base, dir: 1,
            cd: Math.random(), dead: false };
 }
@@ -932,20 +933,25 @@ function offerCards() {
     if (p.kind === 'passive' && lv > 0) title = `${p.title} Lv${lv + 1}`;
     else if (p.kind === 'turret' && S.weapons[p.type]) {
       // Owned weapon: this card is a level-up. Roll the stat now so the
-      // card shows exactly what you'll get — "Cannon Lv2 / +10% FIRE RATE".
+      // card shows exactly what you'll get — "Cannon Lv2 / +20% FIRE RATE".
+      // Stats fit the weapon: Bloom grows faster, Lantern gets tougher.
       const w = S.weapons[p.type];
       title = `${p.title} Lv${w.level + 1}`;
       let stat;
-      if (p.type === 'cannon') {
+      if (p.type === 'bloom') {
+        stat = 'rate'; sub = '+20% growth speed';
+      } else if (p.type === 'lantern') {
+        stat = 'hp'; sub = '+2 max HP';
+      } else if (p.type === 'cannon') {
         const roll = Math.random();
-        if (roll < 1 / 3) stat = 'rate';
-        else if (roll < 2 / 3) stat = 'dmg';
-        else stat = 'crit';
+        if (roll < 1 / 3) { stat = 'rate'; sub = '+20% fire rate'; }
+        else if (roll < 2 / 3) { stat = 'dmg'; sub = '+1 damage'; }
+        else { stat = 'crit'; sub = '+5% crit chance'; }
       } else {
-        stat = Math.random() < 0.5 ? 'rate' : 'dmg';
+        if (Math.random() < 0.5) { stat = 'rate'; sub = '+20% fire rate'; }
+        else { stat = 'dmg'; sub = '+1 damage'; }
       }
       el.dataset.stat = stat;
-      sub = stat === 'rate' ? '+20% fire rate' : stat === 'dmg' ? '+1 damage' : '+5% crit chance';
     }
     el.innerHTML = '<b>' + title + '</b><span>' + sub + '</span>';
   }
@@ -963,6 +969,12 @@ document.querySelectorAll('.card').forEach(card => {
         const stat = card.dataset.stat || 'dmg';
         if (stat === 'rate') w.rateMult *= 1.2;
         else if (stat === 'crit') w.critChance = Math.min(1, (w.critChance || 0) + 0.05);
+        else if (stat === 'hp') {
+          w.hpBonus = (w.hpBonus || 0) + 2;
+          for (const t of S.turrets) {
+            if (!t.dead && t.color === BLUE && t.type === type) { t.maxhp += 2; t.hp += 2; }
+          }
+        }
         else w.dmgBonus += 1;
         S.pending--;
         if (S.pending <= 0) {
