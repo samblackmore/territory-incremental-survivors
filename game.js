@@ -12,10 +12,9 @@ const BOUNCE_MAX = 8;               // bounces per projectile (backstop, not a t
 const STEER_RATE = 3;               // missile turn rate, rad/s (x S.steerMult)
 const RED_DEPLOY_EVERY = 12;        // seconds between red turret deployments
 const GROW_INTERVAL = 5;            // Bloom: seconds per growth increment (x S.bloomMult)
-const GROW_STEPS = 10;             // increments to turn a cell into territory
+const GROW_STEPS = 5;              // increments to turn a cell into territory
 const BLOOM_RADIUS = 8;            // Bloom: how far (cells) it reaches for empty ground
-const HARVEST_EVERY = 8;           // territory: seconds between coin harvest ticks
-const HARVEST_CHANCE = 0.2;         // ...per territory cell, per tick
+const HARVEST_EVERY = 8;           // territory: seconds between pickups per cell
 
 // Turret roster: distinct damage patterns, no homing except the missile's
 // steering (which is deliberately dumb: limited turn rate, walls win).
@@ -506,7 +505,7 @@ function newGame() {
         dmgBonus: 0, steerMult: 1,
         // territory (Tiberium fields): per-cell growth progress
         growN: new Uint8Array(n), growBy: new Uint8Array(n), growT: new Float32Array(n),
-        bloomMult: 1, harvestT: 0,
+        bloomMult: 1, harvT: new Float32Array(n),
         // fog of war: 0 = clear, 1 = half, 2 = full (black)
         fog: new Uint8Array(n).fill(2) };
 
@@ -1297,17 +1296,17 @@ function update(dt) {
     if (S.waveBreak <= 0) startWave(S.wave + 1);
   }
 
-  // Harvest: every few seconds each blue territory cell without a coin pops
-  // one. The field pays for itself — which is why it's worth protecting.
-  S.harvestT += dt;
-  if (S.harvestT >= HARVEST_EVERY) {
-    S.harvestT = 0;
-    for (let i = 0; i < S.cells.length; i++) {
-      if (S.cells[i] !== BLUE) continue;
+  // Harvest: each blue territory cell glows over HARVEST_EVERY seconds,
+  // then pops a pickup (80% XP, 20% gold) and resets to base color.
+  for (let i = 0; i < S.cells.length; i++) {
+    if (S.cells[i] !== BLUE) continue;
+    S.harvT[i] += dt;
+    if (S.harvT[i] >= HARVEST_EVERY) {
+      S.harvT[i] = 0;
       const cx = i % cfg.cols, cy = (i / cfg.cols) | 0;
-      if (coinAt(cx, cy) || Math.random() >= HARVEST_CHANCE) continue;
-      if (S.coins.length >= 800) break;
-      S.coins.push({ x: cx + 0.5, y: cy + 0.5, state: 'idle', kind: 'gold',
+      if (coinAt(cx, cy) || S.coins.length >= 800) continue;
+      const kind = Math.random() < 0.2 ? 'gold' : 'xp';
+      S.coins.push({ x: cx + 0.5, y: cy + 0.5, state: 'idle', kind,
                      phase: Math.random() * 6.283, sx: 0, sy: 0, t: 0, dead: false });
     }
   }
@@ -1484,7 +1483,15 @@ function render() {
     for (let x = 0; x < w; x++) {
       const i = y * w + x;
       const st = S.cells[i];
-      if (st === BLUE) { ctx.fillStyle = CELL_COLORS[BLUE]; ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX); }
+      if (st === BLUE) {
+        // Harvest glow: lightens toward white as the next pickup approaches.
+        const k = Math.min(1, S.harvT[i] / HARVEST_EVERY) * 0.45;
+        const r = Math.round(BLUE_RGB[0] + (255 - BLUE_RGB[0]) * k);
+        const g = Math.round(BLUE_RGB[1] + (255 - BLUE_RGB[1]) * k);
+        const b = Math.round(BLUE_RGB[2] + (255 - BLUE_RGB[2]) * k);
+        ctx.fillStyle = `rgb(${r},${g},${b})`;
+        ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX);
+      }
       else if (st === RED) { ctx.fillStyle = CELL_COLORS[RED]; ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX); }
       else if (st === EMPTY) {
         const sh = CAVE_SHADES[S.shade[i] || 0];
