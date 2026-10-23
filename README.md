@@ -37,19 +37,19 @@ on open ground inside a cave. Turrets have HP and die. Enemy units are
 **disabled for now** while the early game takes shape — red waves, the coin
 jackpot, and the run-over screen are parked behind `ENEMIES_ENABLED`.
 
-**Passives.** Suction (auto-collect) and Bounce are VS-style passives: each
+**Passives.** Gather (auto-collect) and Bounce are VS-style passives: each
 has 8 levels, shown as badges with level pips in the top-left under the gold
 chip. A passive's upgrade card only appears once you own it (level 1+), and
 stops appearing at level 8. Without the Bounce passive there is no bounce
 chance at all; each level adds 12% (tunable via the debug panel). Without
-Suction there is no auto-collect; each level multiplies the interval by 0.75.
+Gather there is no auto-collect; each level multiplies the interval by 0.75.
 
 **Weapons level up.** Each owned weapon type has a level (shown as "Lv N"
 next to its icon in the top-left, no cap — cannons can hit level 50).
 Picking a weapon card for a type you already own levels it up instead of
 placing a new turret. The card shows exactly what you'll get, e.g.
-"Cannon Lv4" / "+10% fire rate". Cannon rotates through +10% rate, +1
-damage, +5% crit chance; other weapons get +10% rate or +1 damage.
+"Cannon Lv4" / "+20% fire rate". Cannon rotates through +20% rate, +1
+damage, +5% crit chance; other weapons get +20% rate or +1 damage.
 Picking a card for a type you don't own enters placement mode as before.
 There are no separate global fire-rate/damage cards — the weapon track is
 the single linear upgrade path. The XP bar animates to full before the

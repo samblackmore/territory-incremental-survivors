@@ -476,10 +476,10 @@ function newGame() {
         weapons: {},
         particles: [], particlesSpawned: 0, rings: [], dmgNums: [],
         destroyed: 0, destroyedBlue: 0, collectT: 0,
-        bounceChance: 0, suctionMult: 1,
+        bounceChance: 0, gatherMult: 1,
         // passives (VS-style): level 0 = not owned, max 8. Proposed once
         // active; upgrades stop at 8.
-        passives: { suction: 0, bounce: 0 },
+        passives: { gather: 0, bounce: 0 },
         // auto-battler state
         turrets: [], missiles: [], beams: [],
         wave: 0, redQueue: [], redTimer: 0, waveBreak: 0, redKills: 0,
@@ -896,7 +896,7 @@ const CARD_POOL = [
   // (no global fire-rate / damage cards — weapon levels are the single
   // linear upgrade track: each level is +10% rate, +1 damage, or +5% crit)
   { kind: 'passive', passive: 'bounce', title: 'Bounce', sub: 'Bounce chance', needs: ['cannon'] },
-  { kind: 'passive', passive: 'suction', title: 'Suction', sub: 'Auto-collect' },
+  { kind: 'passive', passive: 'gather', title: 'Gather', sub: 'Auto-collect' },
   { kind: 'steer', mult: 1.3, title: '+30%', sub: 'Missile steering', needs: ['rocket'] },
   { kind: 'bloom', mult: 0.8, title: '−20%', sub: 'Bloom speed', needs: ['bloom'] },
 ];
@@ -912,7 +912,7 @@ function availableCards() {
   // until maxed (level 8); the obtain (level 1) is how you get them.
   return CARD_POOL.filter(c =>
     (!c.needs || hasTurretTypes(c.needs)) &&
-    (c.kind !== 'turret' || meta.unlocks[c.type]) &&
+    (c.kind !== 'turret' || c.type === 'bloom' || meta.unlocks[c.type]) &&
     (c.kind !== 'passive' || S.passives[c.passive] < 8));
 }
 function offerCards() {
@@ -945,7 +945,7 @@ function offerCards() {
         stat = Math.random() < 0.5 ? 'rate' : 'dmg';
       }
       el.dataset.stat = stat;
-      sub = stat === 'rate' ? '+10% fire rate' : stat === 'dmg' ? '+1 damage' : '+5% crit chance';
+      sub = stat === 'rate' ? '+20% fire rate' : stat === 'dmg' ? '+1 damage' : '+5% crit chance';
     }
     el.innerHTML = '<b>' + title + '</b><span>' + sub + '</span>';
   }
@@ -961,7 +961,7 @@ document.querySelectorAll('.card').forEach(card => {
         // Owned: apply the level-up the card promised (rolled at offer time).
         w.level++;
         const stat = card.dataset.stat || 'dmg';
-        if (stat === 'rate') w.rateMult *= 1.1;
+        if (stat === 'rate') w.rateMult *= 1.2;
         else if (stat === 'crit') w.critChance = Math.min(1, (w.critChance || 0) + 0.05);
         else w.dmgBonus += 1;
         S.pending--;
@@ -985,7 +985,7 @@ document.querySelectorAll('.card').forEach(card => {
       const p = card.dataset.passive;
       if (S.passives[p] < 8) {
         S.passives[p]++;
-        if (p === 'suction') S.suctionMult = Math.max(0.2, S.suctionMult * 0.75);
+        if (p === 'gather') S.gatherMult = Math.max(0.2, S.gatherMult * 0.75);
         else if (p === 'bounce') S.bounceChance = Math.min(0.95, S.passives.bounce * cfg.bouncePerLevel);
       }
     } else if (kind === 'steer') {
@@ -1059,10 +1059,10 @@ function placeTurretAt(sx, sy) {
   }
 }
 
-// Effective auto-collect interval. No suction passive = no auto-collect.
-function suctionInterval() {
-  if (S.passives.suction === 0) return Infinity;
-  return cfg.collectInterval * S.suctionMult;
+// Effective auto-collect interval. No gather passive = no auto-collect.
+function gatherInterval() {
+  if (S.passives.gather === 0) return Infinity;
+  return cfg.collectInterval * S.gatherMult;
 }
 
 // ---- Update ----
@@ -1286,7 +1286,7 @@ function update(dt) {
   // blue turret for a free +1. Tapping still sends coins to the corner chip.
   if (cfg.collectInterval > 0) {
     S.collectT += dt;
-    if (S.collectT >= suctionInterval()) {
+    if (S.collectT >= gatherInterval()) {
       S.collectT = 0;
       let bestC = null, bd = Infinity;
       for (const c of S.coins) {
@@ -1584,7 +1584,7 @@ function render() {
   ctx.restore();
   // Passive badges, top-left under the gold chip: icon + level pips (8 max).
   let ppy = CHIP_CY + 32;
-  for (const key of ['suction', 'bounce']) {
+  for (const key of ['gather', 'bounce']) {
     const lvl = S.passives[key];
     if (lvl === 0) continue;
     const bw = 96, bh = 20;
@@ -1593,7 +1593,7 @@ function render() {
     ctx.lineWidth = 1; ctx.strokeStyle = '#2a3145';
     rr(8, ppy, bw, bh, 6); ctx.stroke();
     const iy = ppy + bh / 2;
-    if (key === 'suction') {
+    if (key === 'gather') {
       // inward arrows: the magnet pull
       ctx.fillStyle = '#7dd3fc';
       ctx.beginPath(); ctx.moveTo(14, iy - 4); ctx.lineTo(19, iy); ctx.lineTo(14, iy + 4); ctx.closePath(); ctx.fill();
@@ -1699,7 +1699,7 @@ function updateHud() {
     `<div>Blocks excavated: <b>${S.destroyed}</b> · Red turrets destroyed: <b>${S.redKills}</b></div>` +
     `<div>Map seed: <b>${S.seed}</b></div>` +
     `<div>Fire rate: <b>${effFreq}/s</b> (×${S.freqMult.toFixed(2)}) · Damage: <b>+${S.dmgBonus}</b> · Steering: <b>×${S.steerMult.toFixed(2)}</b> · Bloom: <b>×${S.bloomMult.toFixed(2)}</b></div>` +
-    `<div>Bounce: <b>Lv${S.passives.bounce}</b> (${Math.round(S.bounceChance * 100)}%) · Suction: <b>Lv${S.passives.suction}</b> (${S.passives.suction === 0 ? 'off' : suctionInterval().toFixed(1) + 's'})</div>` +
+    `<div>Bounce: <b>Lv${S.passives.bounce}</b> (${Math.round(S.bounceChance * 100)}%) · Gather: <b>Lv${S.passives.gather}</b> (${S.passives.gather === 0 ? 'off' : gatherInterval().toFixed(1) + 's'})</div>` +
     `<div>Weapons: <b>${Object.entries(S.weapons).map(([k, w]) => `${k} Lv${w.level} (×${w.rateMult.toFixed(2)} rate, +${w.dmgBonus} dmg${w.critChance ? `, ${Math.round(w.critChance * 100)}% crit` : ''})`).join(' · ')}</b></div>` +
     `<div>Projectiles alive: <b>${S.projs.length}</b> · Missiles: <b>${S.missiles.length}</b></div>` +
     `<div>Pickups: <b>${S.coins.length}</b> on field · Gold this run: <b>${S.gold}</b> · Total: <b>${meta.gold}</b></div>`;
