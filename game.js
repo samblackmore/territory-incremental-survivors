@@ -483,8 +483,9 @@ function newGame() {
   const popDX = new Float32Array(n); // knockback direction (unit vector), set at impact
   const popDY = new Float32Array(n);
   const shade = new Uint8Array(n); // Perlin shade index (0..7) for empty cells — visual only
+  const goldNug = new Uint8Array(n); // 1 = gold nugget locked in this rock cell
   S = { cells, hp, maxhp, hitBy, popT, popAmp, popCol, popDX, popDY, projs: [], xp: 0, level: 1, pending: 0,
-        freqMult: 1, paused: false, frame: 0, seed, shade,
+        freqMult: 1, paused: false, frame: 0, seed, shade, goldNug,
         coins: [], floaters: [], gold: 0, chipPulse: 0, time: 0, lastBanked: banked,
         // XP bar animation: xpShown eases toward xp; level-up cards wait
         // for the bar to finish filling.
@@ -522,6 +523,24 @@ function newGame() {
       cells[i] = WHITE;
       const m = 3 + Math.round(noise((x / cfg.cols) * 3.5, (y / cfg.rows) * 3.5) * 7);
       maxhp[i] = m; hp[i] = m;
+    }
+  }
+
+  // Gold nuggets: 1% of rock cells seed a cluster of 1-5 contiguous cells.
+  // The gold is locked until the rock is broken.
+  for (let y = 0; y < cfg.rows; y++) {
+    for (let x = 0; x < cfg.cols; x++) {
+      const i = y * cfg.cols + x;
+      if (cells[i] !== WHITE || goldNug[i] || rng() >= 0.01) continue;
+      const size = 1 + Math.floor(rng() * 5);
+      let cx = x, cy = y;
+      for (let s = 0; s < size; s++) {
+        const ci = cy * cfg.cols + cx;
+        if (cells[ci] === WHITE) goldNug[ci] = 1;
+        const d = Math.floor(rng() * 4);
+        cx = Math.max(0, Math.min(cfg.cols - 1, cx + [1, -1, 0, 0][d]));
+        cy = Math.max(0, Math.min(cfg.rows - 1, cy + [0, 0, 1, -1][d]));
+      }
     }
   }
 
@@ -896,6 +915,16 @@ function damageBlock(idx, dmg, color, sx, sy, vx, vy, crit) {
   if (color === BLUE) S.destroyedBlue++;
   computeFog(); // the cave grew: push the fog boundary out
   spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[color]); // the block cracks: debris + ring
+  if (S.goldNug[idx]) {
+    // Gold nugget released: locked until the rock was broken.
+    S.goldNug[idx] = 0;
+    S.coins.push({ x: cx + 0.5, y: cy + 0.5, state: 'idle', kind: 'gold',
+                   phase: Math.random() * 6.283, sx: 0, sy: 0, t: 0, dead: false });
+    if (S.coins.length > 800) { // safety valve: drop oldest idle coin
+      const i = S.coins.findIndex(c => c.state === 'idle');
+      if (i >= 0) S.coins.splice(i, 1);
+    }
+  }
   if (color === BLUE && Math.random() < cfg.coinChance) {
     S.coins.push({ x: cx + 0.5, y: cy + 0.5, state: 'idle', kind: 'xp',
                    phase: Math.random() * 6.283, sx: 0, sy: 0, t: 0, dead: false });
@@ -1412,6 +1441,18 @@ function drawWhiteCell(x, y) {
     ctx.fillRect(ox - s / 2, oy - s / 2, s, s);
   } else {
     ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX);
+  }
+  // Gold nugget: deterministic flecks so the player can spot the treasure.
+  if (S.goldNug[i]) {
+    const h = (x * 73856093) ^ (y * 19349663);
+    ctx.fillStyle = '#ffd75e';
+    for (let k = 0; k < 3; k++) {
+      const fx = x * CELL_PX + 4 + ((h >> (k * 5)) & 7);
+      const fy = y * CELL_PX + 4 + ((h >> (k * 5 + 3)) & 7);
+      ctx.beginPath();
+      ctx.arc(fx, fy, 1.8, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 }
 
