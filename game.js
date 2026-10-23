@@ -292,8 +292,8 @@ function spawnChip(cx, cy, css, vx, vy) {
 }
 
 // Damage numbers: white retro text above the wall, drifting up, fading fast
-function spawnDmgNum(x, y, dmg) {
-  S.dmgNums.push({ x: x + (Math.random() - 0.5) * 0.5, y, t: 0, life: 0.6, dmg, dead: false });
+function spawnDmgNum(x, y, dmg, crit) {
+  S.dmgNums.push({ x: x + (Math.random() - 0.5) * 0.5, y, t: 0, life: 0.6, dmg, crit: !!crit, dead: false });
   if (S.dmgNums.length > 200) S.dmgNums.splice(0, S.dmgNums.length - 200);
 }
 
@@ -519,7 +519,7 @@ function newGame() {
     S.hp[pci] = 0; S.maxhp[pci] = 0;
   }
   S.turrets.push(mkTurret(pc.x, pc.y, BLUE, starterType));
-  S.weapons[starterType] = { level: 1, rateMult: 1, dmgBonus: 0 };
+  S.weapons[starterType] = { level: 1, rateMult: 1, dmgBonus: 0, critChance: 0 };
   startWave(1);
   computeFog();   // fog of war: only the home cave + fogDist is visible
 
@@ -667,12 +667,19 @@ function fireTurret(t) {
   const speed = cfg.projSpeed / CELL_PX; // cells per second
   const mx = t.x + 0.5 + Math.cos(t.angle) * 1.1;
   const my = t.y + 0.5 + Math.sin(t.angle) * 1.1;
+  let dmg = TURRET.cannon.dmg + S.dmgBonus + weaponDmgBonus(t);
+  let crit = false;
+  const w = t.color === BLUE ? S.weapons.cannon : null;
+  if (w && w.critChance > 0 && Math.random() < w.critChance) {
+    dmg *= 2 + Math.floor(Math.random() * 2); // 2x or 3x, whole numbers
+    crit = true;
+  }
   S.projs.push({
     x: mx, y: my,
     vx: Math.cos(t.angle) * speed,
     vy: Math.sin(t.angle) * speed,
     color: t.color,
-    dmg: TURRET.cannon.dmg + S.dmgBonus + weaponDmgBonus(t),
+    dmg, crit,
     bounces: 0,
     dead: false,
   });
@@ -788,7 +795,7 @@ function stepProjectile(p, dt) {
     const idx = cy * cfg.cols + cx;
     const cell = S.cells[idx];
     if (cell === WHITE) {
-      const destroyed = damageBlock(idx, p.dmg || 1, p.color, p.x, p.y, p.vx, p.vy);
+      const destroyed = damageBlock(idx, p.dmg || 1, p.color, p.x, p.y, p.vx, p.vy, p.crit);
       if (destroyed) { p.dead = true; return; }
       // Pinball: a surviving block may bounce the shot back out (re-rolled per hit)
       if (p.bounces < BOUNCE_MAX && Math.random() < S.bounceChance) {
@@ -815,7 +822,7 @@ function stepProjectile(p, dt) {
 // Damage a WHITE block: pop, ripple, chips, damage number, maybe destroy.
 // (sx, sy) = impact source (for knockback direction); (vx, vy) = spray direction.
 // Returns true when the block was destroyed.
-function damageBlock(idx, dmg, color, sx, sy, vx, vy) {
+function damageBlock(idx, dmg, color, sx, sy, vx, vy, crit) {
   const cx = idx % cfg.cols, cy = Math.floor(idx / cfg.cols);
   S.hp[idx] = Math.max(0, S.hp[idx] - dmg); // clamp: hp is a Uint8Array, no wraparound
   S.hitBy[idx] = color;
@@ -846,7 +853,7 @@ function damageBlock(idx, dmg, color, sx, sy, vx, vy) {
   }
   spawnChip(cx + 0.5, cy + 0.5, CELL_COLORS[color], vx, vy);
   if (S.hp[idx] > 0) {
-    spawnDmgNum(cx + 0.5, cy + 0.2, S.hp[idx]); // remaining HP floats up
+    spawnDmgNum(cx + 0.5, cy + 0.2, dmg, crit); // the damage dealt floats up
     return false;
   }
   S.cells[idx] = EMPTY; // excavated: the block is gone, not painted over
@@ -929,10 +936,16 @@ document.querySelectorAll('.card').forEach(card => {
       const type = card.dataset.type;
       const w = S.weapons[type];
       if (w) {
-        // Owned: level it up instead of placing another. Each level is
-        // +10% fire rate or +1 damage (50/50, not hardcoded).
+        // Owned: level it up instead of placing another. Cannon rotates
+        // through +10% rate / +1 damage / +5% crit chance; other weapons
+        // get +10% rate or +1 damage (50/50). Nothing hardcoded per level.
         w.level++;
-        if (Math.random() < 0.5) w.rateMult *= 1.1;
+        if (type === 'cannon') {
+          const roll = Math.random();
+          if (roll < 1 / 3) w.rateMult *= 1.1;
+          else if (roll < 2 / 3) w.dmgBonus += 1;
+          else w.critChance = Math.min(1, (w.critChance || 0) + 0.05);
+        } else if (Math.random() < 0.5) w.rateMult *= 1.1;
         else w.dmgBonus += 1;
         S.pending--;
         if (S.pending <= 0) {
@@ -1016,7 +1029,7 @@ function placeTurretAt(sx, sy) {
     S.cells[pi] = EMPTY; // clear a pad
   }
   S.turrets.push(mkTurret(cx, cy, BLUE, type));
-  if (!S.weapons[type]) S.weapons[type] = { level: 1, rateMult: 1, dmgBonus: 0 };
+  if (!S.weapons[type]) S.weapons[type] = { level: 1, rateMult: 1, dmgBonus: 0, critChance: 0 };
   spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[BLUE]);
   if (type === 'lantern') computeFog(); // the lantern pushes back the dark
   S.placing = null;
@@ -1416,18 +1429,19 @@ function render() {
     ctx.stroke();
     ctx.globalAlpha = 1;
   }
-  // Damage numbers: bold retro white text with a dark outline, drifting up
+  // Damage numbers: bold retro white text with a dark outline, drifting up.
+  // Crits render gold and slightly larger.
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = '12px "Press Start 2P", "Courier New", monospace';
   for (const d of S.dmgNums) {
     const k = d.t / d.life;
     ctx.globalAlpha = k < 0.25 ? 1 : 1 - (k - 0.25) / 0.75; // brief hold, then a quick fade
     const px = d.x * CELL_PX, py = d.y * CELL_PX;
+    ctx.font = (d.crit ? '14px' : '12px') + ' "Press Start 2P", "Courier New", monospace';
     ctx.lineWidth = 3;
     ctx.strokeStyle = 'rgba(11,14,22,0.9)';
     ctx.strokeText(d.dmg, px, py);
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = d.crit ? '#ffd75e' : '#ffffff';
     ctx.fillText(d.dmg, px, py);
   }
   ctx.globalAlpha = 1;
@@ -1671,6 +1685,7 @@ function updateHud() {
     `<div>Map seed: <b>${S.seed}</b></div>` +
     `<div>Fire rate: <b>${effFreq}/s</b> (×${S.freqMult.toFixed(2)}) · Damage: <b>+${S.dmgBonus}</b> · Steering: <b>×${S.steerMult.toFixed(2)}</b> · Bloom: <b>×${S.bloomMult.toFixed(2)}</b></div>` +
     `<div>Bounce: <b>Lv${S.passives.bounce}</b> (${Math.round(S.bounceChance * 100)}%) · Suction: <b>Lv${S.passives.suction}</b> (${S.passives.suction === 0 ? 'off' : suctionInterval().toFixed(1) + 's'})</div>` +
+    `<div>Weapons: <b>${Object.entries(S.weapons).map(([k, w]) => `${k} Lv${w.level} (×${w.rateMult.toFixed(2)} rate, +${w.dmgBonus} dmg${w.critChance ? `, ${Math.round(w.critChance * 100)}% crit` : ''})`).join(' · ')}</b></div>` +
     `<div>Projectiles alive: <b>${S.projs.length}</b> · Missiles: <b>${S.missiles.length}</b></div>` +
     `<div>Pickups: <b>${S.coins.length}</b> on field · Gold this run: <b>${S.gold}</b> · Total: <b>${meta.gold}</b></div>`;
 }
