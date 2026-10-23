@@ -559,6 +559,23 @@ function newGame() {
   }
   S.turrets.push(mkTurret(pc.x, pc.y, BLUE, starterType));
   S.weapons[starterType] = { level: 1, rateMult: 1, dmgBonus: 0, critChance: 0 };
+  // Red Bloom: 60% chance to spawn in a distant cave (not the starter's).
+  // It grows red territory — a reason to push out and kill it.
+  if (rng() < 0.6) {
+    const far = [];
+    for (let y = 0; y < cfg.rows; y++) {
+      for (let x = 0; x < cfg.cols; x++) {
+        const i = y * cfg.cols + x;
+        if (cells[i] !== EMPTY) continue;
+        const dx = x - pc.x, dy = y - pc.y;
+        if (dx * dx + dy * dy > 400) far.push({ x, y }); // >20 cells away
+      }
+    }
+    if (far.length) {
+      const spot = far[Math.floor(rng() * far.length)];
+      S.turrets.push(mkTurret(spot.x, spot.y, RED, 'bloom'));
+    }
+  }
   startWave(1);
   computeFog();   // fog of war: only the home cave + fogDist is visible
 
@@ -779,7 +796,7 @@ function bloomGrowth(t) {
       if (nx < 0 || ny < 0 || nx >= cfg.cols || ny >= cfg.rows) continue;
       const ni = ny * cfg.cols + nx;
       if (S.cells[ni] !== EMPTY || S.growN[ni] >= GROW_STEPS) continue;
-      if (S.fog[ni] !== 0) continue; // blooms only work in visible territory
+      if (t.color === BLUE && S.fog[ni] !== 0) continue; // blue blooms only work in visible territory
       if (S.growBy[ni] !== 0 && S.growBy[ni] !== t.color) continue;
       if (turretAt(nx, ny)) continue;
       const d = dx * dx + dy * dy;
