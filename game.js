@@ -1345,6 +1345,7 @@ function update(dt) {
   // within its range toward itself.
   for (const t of S.turrets) {
     if (t.dead || t.color !== BLUE || t.type !== 'gather') continue;
+    if (t.showRange > 0) t.showRange -= dt;
     t.coolT += dt;
     if (t.coolT >= GATHER_COOLDOWN) {
       t.coolT = 0;
@@ -1586,6 +1587,17 @@ function render() {
       ctx.arc(px, py, 12, -Math.PI / 2, -Math.PI / 2 + k * Math.PI * 2);
       ctx.stroke();
       ctx.restore();
+      // Tapped: flash the pull range.
+      if (t.showRange > 0) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(250, 204, 21, 0.6)';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 6]);
+        ctx.beginPath();
+        ctx.arc(px, py, gatherRange() * CELL_PX, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
     }
     // HP bar above damaged turrets
     if (t.hp < t.maxhp) {
@@ -1823,9 +1835,21 @@ function tapCoin(sx, sy) {
     const dx = c.x - cx, dy = c.y - cy;
     if (dx * dx + dy * dy < 0.81) { // 0.9-cell tap radius
       c.state = 'fly'; c.sx = c.x; c.sy = c.y; c.t = 0;
-      break;
+      return true;
     }
   }
+  return false;
+}
+// Tapping a placed Gather flashes its range for a few seconds.
+function tapGather(sx, sy) {
+  const wpt = screenToWorld(sx, sy);
+  const cx = Math.floor(wpt.x / CELL_PX), cy = Math.floor(wpt.y / CELL_PX);
+  const t = turretAt(cx, cy);
+  if (t && !t.dead && t.type === 'gather' && t.color === BLUE) {
+    t.showRange = 3;
+    return true;
+  }
+  return false;
 }
 const pointers = new Map(); // pointerId -> {x, y} in client px
 let pinchD0 = 0;
@@ -1867,7 +1891,7 @@ function endPointer(e) {
     if (downPos && !panning) {
       if (S.placing) placeTurretAt(downPos.x, downPos.y); // placement eats the tap
       else if (tryChipDoubleTap(downPos.x, downPos.y)) { /* debug level grant */ }
-      else tapCoin(downPos.x, downPos.y);
+      else if (!tapCoin(downPos.x, downPos.y)) tapGather(downPos.x, downPos.y);
     }
     downPos = null; panning = false;
   } else if (pointers.size === 1) {
