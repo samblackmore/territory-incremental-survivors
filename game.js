@@ -206,10 +206,10 @@ function hexToRgb(hex) {
 let TERRAIN_LIGHT = [76, 175, 80];
 let TERRAIN_DARK = [29, 67, 30];
 let TERRAIN = [];
-let CAVE_CSS = '#6b543a';
-let CAVE_RGB = [107, 84, 58];
+let CAVE_CSS = '#4caf50';
+let CAVE_RGB = [76, 175, 80];
 function rebuildColors() {
-  const base = hexToRgb(inTerrain.value || '#4caf50');
+  const base = hexToRgb(inTerrain.value || '#6b543a');
   TERRAIN_LIGHT = base;
   TERRAIN_DARK = base.map(v => Math.round(v * 0.38));
   TERRAIN = [];
@@ -217,7 +217,7 @@ function rebuildColors() {
     const t = (m - 3) / 7;
     TERRAIN[m] = [0, 1, 2].map(j => Math.round(TERRAIN_LIGHT[j] + (TERRAIN_DARK[j] - TERRAIN_LIGHT[j]) * t));
   }
-  CAVE_CSS = inEmpty.value || '#6b543a';
+  CAVE_CSS = inEmpty.value || '#4caf50';
   CAVE_RGB = hexToRgb(CAVE_CSS);
 }
 const BLUE_RGB = [59, 130, 246];
