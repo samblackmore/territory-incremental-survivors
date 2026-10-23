@@ -910,15 +910,15 @@ function checkLevel() {
 // `needs` gates an upgrade on owning a turret it actually affects — no
 // steering card before you've got a rocket.
 const CARD_POOL = [
-  { kind: 'turret', type: 'cannon', title: 'Cannon', sub: 'New turret' },
-  { kind: 'turret', type: 'rocket', title: 'Rocket', sub: 'Homing missiles' },
-  { kind: 'turret', type: 'laser', title: 'Laser', sub: 'Snipes weak blocks' },
-  { kind: 'turret', type: 'bloom', title: 'Bloom', sub: 'Grows territory' },
-  { kind: 'turret', type: 'lantern', title: 'Lantern', sub: 'Clears fog' },
+  { kind: 'turret', type: 'cannon', title: 'Cannon', sub: 'Sweeps shots in an arc, blasting rock.' },
+  { kind: 'turret', type: 'rocket', title: 'Rocket', sub: 'Fires homing missiles that crash and splash-dig.' },
+  { kind: 'turret', type: 'laser', title: 'Laser', sub: 'Zaps the weakest visible block.' },
+  { kind: 'turret', type: 'bloom', title: 'Bloom', sub: 'Grows territory that harvests gold coins.' },
+  { kind: 'turret', type: 'lantern', title: 'Lantern', sub: 'Pushes back the fog of war.' },
   // (no global fire-rate / damage cards — weapon levels are the single
   // linear upgrade track: each level is +10% rate, +1 damage, or +5% crit)
-  { kind: 'passive', passive: 'bounce', title: 'Bounce', sub: 'Bounce chance', needs: ['cannon'] },
-  { kind: 'passive', passive: 'gather', title: 'Gather', sub: 'Auto-collect' },
+  { kind: 'passive', passive: 'bounce', title: 'Bounce', sub: 'Shots ricochet off rock.', needs: ['cannon'] },
+  { kind: 'passive', passive: 'gather', title: 'Gather', sub: 'Pickups collect themselves.' },
   { kind: 'steer', mult: 1.3, title: '+30%', sub: 'Missile steering', needs: ['rocket'] },
   { kind: 'bloom', mult: 0.8, title: '−20%', sub: 'Bloom speed', needs: ['bloom'] },
 ];
