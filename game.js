@@ -22,10 +22,16 @@ const GATHER_BASE_RANGE = 6;         // pickup pull range in cells
 const GATHER_RANGE_PER_LEVEL = 2;    // +range per Gather level
 const GATHER_COOLDOWN = 6;           // seconds between pulls
 const GATHER_FLASH_DUR = 1.5;        // range ring flash duration on pull (s)
-// Shared icons (emoji) for weapons/passives — used in cards and HUD badges.
+// Shared icons (inline SVG) for cards — matching the canvas badge shapes.
 const ICONS = {
-  cannon: '🔺', rocket: '🚀', laser: '💎', bloom: '🌱', lantern: '🏮',
-  gather: '🧲', bounce: '⚡', steer: '🚀',
+  cannon: '<svg viewBox="0 0 24 24" width="36" height="36"><polygon points="20,6 8,18 20,18" fill="#3b82f6"/></svg>',
+  rocket: '<svg viewBox="0 0 24 24" width="36" height="36"><polygon points="20,12 12,8 12,16" fill="#3b82f6"/><rect x="6" y="9.5" width="7" height="5" fill="#3b82f6"/></svg>',
+  laser: '<svg viewBox="0 0 24 24" width="36" height="36"><polygon points="12,5 17,12 12,19 7,12" fill="#3b82f6"/></svg>',
+  bloom: '<svg viewBox="0 0 24 24" width="36" height="36"><circle cx="12" cy="12" r="5.5" fill="#3b82f6"/></svg>',
+  lantern: '<svg viewBox="0 0 24 24" width="36" height="36"><rect x="7" y="6" width="10" height="12" fill="none" stroke="#3b82f6" stroke-width="1.5"/><circle cx="12" cy="12" r="2.5" fill="#fef3c7"/></svg>',
+  gather: '<svg viewBox="0 0 24 24" width="36" height="36"><path d="M7,6 A5,5 0 0,0 17,6" stroke="#3b82f6" stroke-width="2.5" fill="none"/><circle cx="7" cy="15.5" r="1.8" fill="#3b82f6"/><circle cx="17" cy="15.5" r="1.8" fill="#3b82f6"/><circle cx="12" cy="12" r="2" fill="#3b82f6"/></svg>',
+  bounce: '<svg viewBox="0 0 24 24" width="36" height="36"><polyline points="5,17 9,7 13,17 17,7" stroke="#fb923c" stroke-width="2" fill="none"/></svg>',
+  steer: '<svg viewBox="0 0 24 24" width="36" height="36"><polygon points="20,12 12,8 12,16" fill="#3b82f6"/><rect x="6" y="9.5" width="7" height="5" fill="#3b82f6"/></svg>',
 };
 const TURRET = {
   cannon: { name: 'Cannon', hp: 8, interval: 1.0, dmg: 1 },
@@ -1778,9 +1784,12 @@ function render() {
     ctx.lineWidth = 1; ctx.strokeStyle = '#2a3145';
     rr(8, ppy, bw, bh, 6); ctx.stroke();
     const iy = ppy + bh / 2;
-    ctx.font = '13px system-ui, sans-serif';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(ICONS[key], 12, iy + 1);
+    ctx.strokeStyle = '#fb923c';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(13, iy + 5); ctx.lineTo(17, iy - 5);
+    ctx.lineTo(21, iy + 5); ctx.lineTo(25, iy - 5);
+    ctx.stroke();
     // level pips
     for (let i = 0; i < 8; i++) {
       ctx.beginPath();
@@ -1800,11 +1809,32 @@ function render() {
     ctx.lineWidth = 1; ctx.strokeStyle = '#2a3145';
     rr(8, ppy, bw, bh, 6); ctx.stroke();
     const iy = ppy + bh / 2;
-    ctx.font = '13px system-ui, sans-serif';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(ICONS[type], 12, iy + 1);
+    const col = CELL_COLORS[BLUE];
+    ctx.fillStyle = col;
+    ctx.strokeStyle = col;
+    if (type === 'cannon') {
+      ctx.beginPath(); ctx.moveTo(26, iy - 6); ctx.lineTo(14, iy + 5); ctx.lineTo(26, iy + 5); ctx.closePath(); ctx.fill();
+    } else if (type === 'rocket') {
+      ctx.beginPath(); ctx.moveTo(26, iy); ctx.lineTo(18, iy - 4); ctx.lineTo(18, iy + 4); ctx.closePath(); ctx.fill();
+      ctx.fillRect(12, iy - 2.5, 7, 5);
+    } else if (type === 'laser') {
+      ctx.beginPath(); ctx.moveTo(20, iy - 7); ctx.lineTo(25, iy); ctx.lineTo(20, iy + 7); ctx.lineTo(15, iy); ctx.closePath(); ctx.fill();
+    } else if (type === 'bloom') {
+      ctx.beginPath(); ctx.arc(20, iy, 5.5, 0, Math.PI * 2); ctx.fill();
+    } else if (type === 'gather') {
+      ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.arc(20, iy, 5, Math.PI * 0.15, Math.PI * 0.85, true); ctx.stroke();
+      ctx.beginPath(); ctx.arc(15.5, iy + 3.5, 1.8, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(24.5, iy + 3.5, 1.8, 0, Math.PI * 2); ctx.fill();
+    } else { // lantern
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(15, iy - 6, 10, 12);
+      ctx.fillStyle = '#fef3c7';
+      ctx.beginPath(); ctx.arc(20, iy, 2.5, 0, Math.PI * 2); ctx.fill();
+    }
     ctx.fillStyle = '#dfe5f2';
     ctx.font = 'bold 12px system-ui, sans-serif';
+    ctx.textBaseline = 'middle';
     ctx.fillText('Lv ' + w.level, 34, iy + 1);
     ppy += bh + 6;
   }
