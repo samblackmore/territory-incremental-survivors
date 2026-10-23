@@ -47,7 +47,9 @@ Gather there is no auto-collect; each level multiplies the interval by 0.75.
 **Weapons level up.** Each owned weapon type has a level (shown as "Lv N"
 next to its icon in the top-left, no cap — cannons can hit level 50).
 Picking a weapon card for a type you already own usually levels it up, but
-sometimes offers a fresh placement (so you can field a second cannon). The card shows exactly what you'll get, e.g.
+sometimes offers a fresh placement (so you can field a second cannon).
+First time bringing a weapon or passive into the run, the card says NEW
+(VS-style). The card shows exactly what you'll get, e.g.
 "Cannon Lv4" / "+20% fire rate". Cannon rotates +20% rate / +1 damage /
 +5% crit; rocket and laser get +20% rate or +1 damage; Bloom gets +20%
 growth speed; Lantern gets +2 max HP.
