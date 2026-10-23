@@ -315,10 +315,10 @@ function readDebug() {
     .sort((a, b) => a - b);
   cfg = {
     cols, rows,
-    projSpeed: clampNum(inSpeed.value, 40, 2000, 260),   // px/s
+    projSpeed: clampNum(inSpeed.value, 40, 2000, 200),   // px/s
     freq: clampNum(inFreq.value, 0.1, 20, 1),            // shots/s (both cannons)
     arc: clampNum(inArc.value, 0, 360, 120),             // degrees
-    turnRate: clampNum(inTurn.value, 0, 720, 120),          // cannon sweep speed (deg/s)
+    turnRate: clampNum(inTurn.value, 0, 720, 100),          // cannon sweep speed (deg/s)
     bouncePerLevel: clampNum(inBounce.value, 0, 1, 0.12),     // bounce chance per passive level
     caveChance: clampNum(inCave.value, 0, 0.95, 0.38),      // CA cave fill
     coinChance: clampNum(inCoin.value, 0, 1, 0.3),          // coin drop per block excavated by blue
