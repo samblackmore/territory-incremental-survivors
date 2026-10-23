@@ -319,7 +319,7 @@ function readDebug() {
     freq: clampNum(inFreq.value, 0.1, 20, 1),            // shots/s (both cannons)
     arc: clampNum(inArc.value, 0, 360, 120),             // degrees
     turnRate: clampNum(inTurn.value, 0, 720, 120),          // cannon sweep speed (deg/s)
-    bounceChance: clampNum(inBounce.value, 0, 1, 0),         // block-bounce chance per hit
+    bouncePerLevel: clampNum(inBounce.value, 0, 1, 0.12),     // bounce chance per passive level
     caveChance: clampNum(inCave.value, 0, 0.95, 0.38),      // CA cave fill
     coinChance: clampNum(inCoin.value, 0, 1, 0.3),          // coin drop per block excavated by blue
     collectInterval: clampNum(inCollect.value, 0, 60, 30),  // auto-collect timer (s, 0 = off)
@@ -337,7 +337,7 @@ function readDebug() {
   inSpeed.value = cfg.projSpeed; inFreq.value = cfg.freq;
   inArc.value = cfg.arc; inCave.value = cfg.caveChance;
   inTurn.value = cfg.turnRate;
-  inBounce.value = cfg.bounceChance;
+  inBounce.value = cfg.bouncePerLevel;
   inCoin.value = cfg.coinChance;
   inCollect.value = cfg.collectInterval;
   inPopHold.value = cfg.popHold; inPopDur.value = cfg.popDur;
@@ -470,7 +470,10 @@ function newGame() {
         coins: [], floaters: [], gold: 0, chipPulse: 0, time: 0,
         particles: [], particlesSpawned: 0, rings: [], dmgNums: [],
         destroyed: 0, destroyedBlue: 0, collectT: 0,
-        bounceChance: cfg.bounceChance, suctionMult: 1,
+        bounceChance: 0, suctionMult: 1,
+        // passives (VS-style): level 0 = not owned, max 8. Proposed once
+        // active; upgrades stop at 8.
+        passives: { suction: 0, bounce: 0 },
         // auto-battler state
         turrets: [], missiles: [], beams: [],
         wave: 0, redQueue: [], redTimer: 0, waveBreak: 0, redKills: 0,
@@ -502,6 +505,13 @@ function newGame() {
   const pA = { x: cfg.cols * 0.15, y: cfg.rows * 0.85 };
   const pi = nearestCave(pA.x, pA.y, -1);
   const pc = pi >= 0 ? { x: pi % cfg.cols, y: Math.floor(pi / cfg.cols) } : snapAnchor(pA);
+  const pci = pc.y * cfg.cols + pc.x;
+  if (S.cells[pci] !== EMPTY) {
+    // The starter always gets open ground: clear its cell (the snapAnchor
+    // fallback can land on terrain when there are no caves at all).
+    S.cells[pci] = EMPTY;
+    S.hp[pci] = 0; S.maxhp[pci] = 0;
+  }
   S.turrets.push(mkTurret(pc.x, pc.y, BLUE, starterType));
   startWave(1);
   computeFog();   // fog of war: only the home cave + fogDist is visible
@@ -873,8 +883,8 @@ const CARD_POOL = [
   { kind: 'turret', type: 'lantern', title: 'Lantern', sub: 'Clears fog' },
   { kind: 'freq', mult: 1.25, title: '+25%', sub: 'Fire rate' },
   { kind: 'damage', add: 1, title: '+1', sub: 'Damage', needs: ['cannon', 'rocket', 'laser'] },
-  { kind: 'bounce', add: 0.25, title: '+25%', sub: 'Bounce chance', needs: ['cannon'] },
-  { kind: 'suction', mult: 0.75, title: '−25%', sub: 'Suction time' },
+  { kind: 'passive', passive: 'bounce', title: 'Bounce', sub: 'Bounce chance', needs: ['cannon'] },
+  { kind: 'passive', passive: 'suction', title: 'Suction', sub: 'Auto-collect' },
   { kind: 'steer', mult: 1.3, title: '+30%', sub: 'Missile steering', needs: ['rocket'] },
   { kind: 'bloom', mult: 0.8, title: '−20%', sub: 'Bloom speed', needs: ['bloom'] },
 ];
@@ -886,10 +896,12 @@ function hasTurretTypes(types) {
   return false;
 }
 function availableCards() {
-  // Locked weapons never appear in a run's drafts.
+  // Locked weapons never appear in a run's drafts. Passives are proposed
+  // until maxed (level 8); the obtain (level 1) is how you get them.
   return CARD_POOL.filter(c =>
     (!c.needs || hasTurretTypes(c.needs)) &&
-    (c.kind !== 'turret' || meta.unlocks[c.type]));
+    (c.kind !== 'turret' || meta.unlocks[c.type]) &&
+    (c.kind !== 'passive' || S.passives[c.passive] < 8));
 }
 function offerCards() {
   const pool = availableCards().slice();
@@ -901,7 +913,10 @@ function offerCards() {
     el.dataset.type = p.type || '';
     el.dataset.mult = p.mult || '';
     el.dataset.add = p.add || '';
-    el.innerHTML = '<b>' + p.title + '</b><span>' + p.sub + '</span>';
+    el.dataset.passive = p.passive || '';
+    const lv = p.kind === 'passive' ? S.passives[p.passive] : 0;
+    const title = p.kind === 'passive' && lv > 0 ? `${p.title} Lv${lv + 1}` : p.title;
+    el.innerHTML = '<b>' + title + '</b><span>' + p.sub + '</span>';
   }
 }
 
@@ -917,10 +932,13 @@ document.querySelectorAll('.card').forEach(card => {
       enterPlacement(card.dataset.type);
       return;
     }
-    if (kind === 'bounce') {
-      S.bounceChance = Math.min(0.95, S.bounceChance + parseFloat(card.dataset.add));
-    } else if (kind === 'suction') {
-      S.suctionMult = Math.max(0.2, S.suctionMult * parseFloat(card.dataset.mult));
+    if (kind === 'passive') {
+      const p = card.dataset.passive;
+      if (S.passives[p] < 8) {
+        S.passives[p]++;
+        if (p === 'suction') S.suctionMult = Math.max(0.2, S.suctionMult * 0.75);
+        else if (p === 'bounce') S.bounceChance = Math.min(0.95, S.passives.bounce * cfg.bouncePerLevel);
+      }
     } else if (kind === 'damage') {
       S.dmgBonus += parseInt(card.dataset.add, 10);
     } else if (kind === 'steer') {
@@ -993,8 +1011,9 @@ function placeTurretAt(sx, sy) {
   }
 }
 
-// Effective auto-collect interval after suction upgrades
+// Effective auto-collect interval. No suction passive = no auto-collect.
 function suctionInterval() {
+  if (S.passives.suction === 0) return Infinity;
   return cfg.collectInterval * S.suctionMult;
 }
 
@@ -1327,25 +1346,7 @@ function render() {
     ctx.strokeStyle = 'rgba(255,255,255,.85)';
     ctx.stroke();
   }
-  // Coins (idle ones pulse gently so they beg to be tapped)
-  for (const c of S.coins) {
-    const px = c.x * CELL_PX, py = c.y * CELL_PX;
-    let r = 5.5;
-    if (c.state === 'idle') r += Math.sin(S.time * 4 + c.phase) * 1.2;
-    else r *= 1 - 0.4 * Math.min(1, c.t / COIN_FLY_DUR);
-    const isGold = c.kind === 'gold';
-    ctx.beginPath(); ctx.arc(px, py, r + 2.5, 0, Math.PI * 2);
-    ctx.fillStyle = isGold ? 'rgba(255, 200, 60, 0.22)' : 'rgba(125, 211, 252, 0.25)';
-    ctx.fill(); // glow
-    ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2);
-    ctx.fillStyle = isGold ? '#f5b301' : '#7dd3fc';
-    ctx.fill();
-    ctx.lineWidth = 1.5;
-    ctx.strokeStyle = isGold ? '#8a5b00' : '#0369a1';
-    ctx.stroke();
-    ctx.beginPath(); ctx.arc(px - r * 0.3, py - r * 0.3, r * 0.28, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fill(); // shine
-  }
+  // (Coins/orbs render after the fog, below — they shine through the dark.)
   // Chip particles (no fade: they shrink to nothing, then pop out of existence)
   for (const pt of S.particles) {
     ctx.fillStyle = pt.color;
@@ -1459,6 +1460,26 @@ function render() {
       else if (f === 1) { ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX); }
     }
   }
+  // Pickups (XP orbs + gold coins) shine through the fog — idle ones pulse
+  // gently so they beg to be tapped.
+  for (const c of S.coins) {
+    const px = c.x * CELL_PX, py = c.y * CELL_PX;
+    let r = 5.5;
+    if (c.state === 'idle') r += Math.sin(S.time * 4 + c.phase) * 1.2;
+    else r *= 1 - 0.4 * Math.min(1, c.t / COIN_FLY_DUR);
+    const isGold = c.kind === 'gold';
+    ctx.beginPath(); ctx.arc(px, py, r + 2.5, 0, Math.PI * 2);
+    ctx.fillStyle = isGold ? 'rgba(255, 200, 60, 0.22)' : 'rgba(125, 211, 252, 0.25)';
+    ctx.fill(); // glow
+    ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2);
+    ctx.fillStyle = isGold ? '#f5b301' : '#7dd3fc';
+    ctx.fill();
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = isGold ? '#8a5b00' : '#0369a1';
+    ctx.stroke();
+    ctx.beginPath(); ctx.arc(px - r * 0.3, py - r * 0.3, r * 0.28, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fill(); // shine
+  }
   ctx.restore(); // ---- end world pass; screen pass below (chip, floaters) ----
   // Coin-counter chip, top-left: the zip target. Pops on collect.
   const pulse = S.chipPulse;
@@ -1480,6 +1501,41 @@ function render() {
   ctx.textBaseline = 'middle';
   ctx.fillText('× ' + meta.gold, CHIP_CX - chw / 2 + 26, CHIP_CY + 1);
   ctx.restore();
+  // Passive badges, top-left under the gold chip: icon + level pips (8 max).
+  let ppy = CHIP_CY + 32;
+  for (const key of ['suction', 'bounce']) {
+    const lvl = S.passives[key];
+    if (lvl === 0) continue;
+    const bw = 96, bh = 20;
+    ctx.fillStyle = 'rgba(10, 13, 22, 0.85)';
+    rr(8, ppy, bw, bh, 6); ctx.fill();
+    ctx.lineWidth = 1; ctx.strokeStyle = '#2a3145';
+    rr(8, ppy, bw, bh, 6); ctx.stroke();
+    const iy = ppy + bh / 2;
+    if (key === 'suction') {
+      // inward arrows: the magnet pull
+      ctx.fillStyle = '#7dd3fc';
+      ctx.beginPath(); ctx.moveTo(14, iy - 4); ctx.lineTo(19, iy); ctx.lineTo(14, iy + 4); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(26, iy - 4); ctx.lineTo(21, iy); ctx.lineTo(26, iy + 4); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.arc(20, iy, 2.5, 0, Math.PI * 2); ctx.fill();
+    } else {
+      // zigzag: the bouncing ball path
+      ctx.strokeStyle = '#fb923c';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(13, iy + 5); ctx.lineTo(17, iy - 5);
+      ctx.lineTo(21, iy + 5); ctx.lineTo(25, iy - 5);
+      ctx.stroke();
+    }
+    // level pips
+    for (let i = 0; i < 8; i++) {
+      ctx.beginPath();
+      ctx.arc(34 + i * 7.5, iy, 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = i < lvl ? '#ffd75e' : '#2a3145';
+      ctx.fill();
+    }
+    ppy += bh + 6;
+  }
   // "+1" floaters
   for (const f of S.floaters) {
     const k = f.t / 0.7;
@@ -1528,7 +1584,7 @@ function updateHud() {
     `<div>Blocks excavated: <b>${S.destroyed}</b> · Red turrets destroyed: <b>${S.redKills}</b></div>` +
     `<div>Map seed: <b>${S.seed}</b></div>` +
     `<div>Fire rate: <b>${effFreq}/s</b> (×${S.freqMult.toFixed(2)}) · Damage: <b>+${S.dmgBonus}</b> · Steering: <b>×${S.steerMult.toFixed(2)}</b> · Bloom: <b>×${S.bloomMult.toFixed(2)}</b></div>` +
-    `<div>Bounce chance: <b>${Math.round(S.bounceChance * 100)}%</b> · Suction every: <b>${suctionInterval().toFixed(1)}s</b></div>` +
+    `<div>Bounce: <b>Lv${S.passives.bounce}</b> (${Math.round(S.bounceChance * 100)}%) · Suction: <b>Lv${S.passives.suction}</b> (${S.passives.suction === 0 ? 'off' : suctionInterval().toFixed(1) + 's'})</div>` +
     `<div>Projectiles alive: <b>${S.projs.length}</b> · Missiles: <b>${S.missiles.length}</b></div>` +
     `<div>Pickups: <b>${S.coins.length}</b> on field · Gold this run: <b>${S.gold}</b> · Total: <b>${meta.gold}</b></div>`;
 }
@@ -1674,7 +1730,7 @@ document.getElementById('d-copylink').addEventListener('click', () => {
   readDebug();
   const q = new URLSearchParams({
     cols: cfg.cols, rows: cfg.rows, speed: cfg.projSpeed, freq: cfg.freq, arc: cfg.arc,
-    turn: cfg.turnRate, bounce: cfg.bounceChance, cave: cfg.caveChance, seed: inSeed.value.trim(), coin: cfg.coinChance,
+    turn: cfg.turnRate, bounce: cfg.bouncePerLevel, cave: cfg.caveChance, seed: inSeed.value.trim(), coin: cfg.coinChance,
     collect: cfg.collectInterval, pophold: cfg.popHold, popdur: cfg.popDur, poppush: cfg.popPush,
     ripple: cfg.rippleAmp, trail: cfg.trailT, gravity: cfg.gravity, thresh: cfg.thresholds.join(','),
     terrain: inTerrain.value, empty: inEmpty.value, fogdist: cfg.fogDist,

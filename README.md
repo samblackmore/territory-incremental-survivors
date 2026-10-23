@@ -29,12 +29,20 @@ through caves and crash-splash into walls; **Laser** — hitscan zaps that alway
 snipe the weakest *visible* block; **Bloom** — Tiberium-style territory: every
 5s it grows one increment on the nearest open *visible* cell, 10 increments
 bloom it into solid blue territory with a pop-in dot animation; **Lantern** —
-clears fog around it) plus upgrades (fire rate, damage, bounce chance, suction
-time, missile steering, bloom speed). Picking a turret card enters **placement
-mode**: tap a revealed cell to deploy it (combat units and Blooms need open
-ground; Lanterns take empty or terrain). Turrets have HP and die. Enemy units
-are **disabled for now** while the early game takes shape — red waves, the coin
+clears fog around it) plus upgrades (fire rate, damage, missile steering,
+bloom speed) and **passives** (VS-style). Picking a turret card enters
+**placement mode**: tap a revealed cell to deploy it (combat units and Blooms
+need open ground; Lanterns take empty or terrain). The starter always spawns
+on open ground inside a cave. Turrets have HP and die. Enemy units are
+**disabled for now** while the early game takes shape — red waves, the coin
 jackpot, and the run-over screen are parked behind `ENEMIES_ENABLED`.
+
+**Passives.** Suction (auto-collect) and Bounce are VS-style passives: each
+has 8 levels, shown as badges with level pips in the top-left under the gold
+chip. A passive's upgrade card only appears once you own it (level 1+), and
+stops appearing at level 8. Without the Bounce passive there is no bounce
+chance at all; each level adds 12% (tunable via the debug panel). Without
+Suction there is no auto-collect; each level multiplies the interval by 0.75.
 
 **Two currencies (Vampire Survivors style).** Breaking terrain drops light-blue
 **XP orbs** (tap them; they zip to the XP bar and fill it toward the next
