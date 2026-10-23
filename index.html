@@ -221,13 +221,24 @@
     color: var(--text);
     cursor: pointer;
     display: flex; flex-direction: column;
-    align-items: center; justify-content: center; gap: 10px;
+    align-items: center; justify-content: center; gap: 8px;
     font-size: 14px;
     transition: transform 120ms ease, box-shadow 120ms ease;
+    opacity: 0;
+    transform: translateY(20px);
+    pointer-events: none;
+  }
+  .card.dealt {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+    transition: opacity 250ms ease, transform 250ms ease;
   }
   .card:hover { transform: translateY(-6px); box-shadow: 0 10px 30px rgba(59,130,246,.35); }
-  .card b { font-size: 30px; color: #7db4ff; }
-  .card span { color: var(--muted); font-size: 12px; letter-spacing: .05em; text-transform: uppercase; }
+  .card .icon { font-size: 36px; line-height: 1; }
+  .card b { font-size: 20px; color: #7db4ff; white-space: nowrap; }
+  .card b .lv { color: #fff; }
+  .card span { color: var(--muted); font-size: 12px; letter-spacing: .05em; text-transform: uppercase; text-align: center; }
   .card .newtag { color: #ffd75e; font-size: 15px; font-weight: bold; letter-spacing: .03em; }
   /* Banners: placement prompt + wave announcements */
   .banner {
@@ -376,6 +387,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=45"></script>
+<script src="game.js?v=46"></script>
 </body>
 </html>

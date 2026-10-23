@@ -963,17 +963,17 @@ function checkLevel() {
 // `needs` gates an upgrade on owning a turret it actually affects — no
 // steering card before you've got a rocket.
 const CARD_POOL = [
-  { kind: 'turret', type: 'cannon', title: 'Cannon', sub: 'Sweeps shots in an arc, blasting rock.' },
-  { kind: 'turret', type: 'rocket', title: 'Rocket', sub: 'Fires homing missiles that crash and splash-dig.' },
-  { kind: 'turret', type: 'laser', title: 'Laser', sub: 'Zaps the weakest visible block.' },
-  { kind: 'turret', type: 'bloom', title: 'Bloom', sub: 'Grows territory that harvests gold coins.' },
-  { kind: 'turret', type: 'lantern', title: 'Lantern', sub: 'Pushes back the fog of war.' },
-  { kind: 'turret', type: 'gather', title: 'Gather', sub: 'Pulls in nearby pickups.' },
+  { kind: 'turret', type: 'cannon', title: 'Cannon', icon: '🔺', sub: 'Sweeps shots in an arc, blasting rock.' },
+  { kind: 'turret', type: 'rocket', title: 'Rocket', icon: '🚀', sub: 'Fires homing missiles that crash and splash-dig.' },
+  { kind: 'turret', type: 'laser', title: 'Laser', icon: '💎', sub: 'Zaps the weakest visible block.' },
+  { kind: 'turret', type: 'bloom', title: 'Bloom', icon: '🌱', sub: 'Grows territory that harvests gold coins.' },
+  { kind: 'turret', type: 'lantern', title: 'Lantern', icon: '🏮', sub: 'Pushes back the fog of war.' },
+  { kind: 'turret', type: 'gather', title: 'Gather', icon: '🧲', sub: 'Pulls in nearby pickups.' },
   // (no global fire-rate / damage cards — weapon levels are the single
   // linear upgrade track: each level is +10% rate, +1 damage, or +5% crit)
-  { kind: 'passive', passive: 'bounce', title: 'Bounce', sub: 'Shots ricochet off rock.', needs: ['cannon'] },
-  { kind: 'steer', mult: 1.3, title: '+30%', sub: 'Missile steering', needs: ['rocket'] },
-  { kind: 'bloom', mult: 0.8, title: '−20%', sub: 'Bloom speed', needs: ['bloom'] },
+  { kind: 'passive', passive: 'bounce', title: 'Bounce', icon: '⚡', sub: 'Shots ricochet off rock.', needs: ['cannon'] },
+  { kind: 'steer', mult: 1.3, title: '+30%', icon: '🚀', sub: 'Missile steering', needs: ['rocket'] },
+  { kind: 'bloom', mult: 0.8, title: '+25%', icon: '🌱', sub: 'Bloom grow frequency', needs: ['bloom'] },
 ];
 function hasTurretTypes(types) {
   for (const t of S.turrets) {
@@ -993,6 +993,8 @@ function availableCards() {
 function offerCards() {
   const pool = availableCards().slice();
   const els = document.querySelectorAll('.card');
+  // Clear previous deal animation.
+  els.forEach(el => el.classList.remove('dealt'));
   for (let k = 0; k < els.length && pool.length; k++) {
     const p = pool.splice((Math.random() * pool.length) | 0, 1)[0];
     const el = els[k];
@@ -1004,10 +1006,15 @@ function offerCards() {
     el.dataset.stat = '';
     const lv = p.kind === 'passive' ? S.passives[p.passive] : 0;
     let title = p.title, sub = p.sub, newTag = '';
+    const icon = `<div class="icon">${p.icon || ''}</div>`;
     // VS-style: first time bringing it into the run gets a yellow "New!" tag,
     // separate from the name.
     if (p.kind === 'passive' && lv === 0) newTag = '<span class="newtag">New!</span>';
-    else if (p.kind === 'passive' && lv > 0) title = `${p.title} Lv${lv + 1}`;
+    else if (p.kind === 'passive' && lv > 0) {
+      title = `${p.title} <span class="lv">Lv${lv + 1}</span>`;
+      // Show the stat change, not just the description.
+      if (p.passive === 'bounce') sub = `+${Math.round(cfg.bouncePerLevel * 100)}% bounce chance`;
+    }
     else if (p.kind === 'turret' && !S.weapons[p.type]) newTag = '<span class="newtag">New!</span>';
     else if (p.kind === 'turret' && S.weapons[p.type]) {
       // Owned weapon: usually a level-up, sometimes a fresh placement
@@ -1021,7 +1028,7 @@ function offerCards() {
         // Level-up: roll the stat now so the card shows exactly what
         // you'll get — "Cannon Lv2 / +20% FIRE RATE". Stats fit the weapon:
         // Bloom grows faster, Lantern gets tougher.
-        title = `${p.title} Lv${w.level + 1}`;
+        title = `${p.title} <span class="lv">Lv${w.level + 1}</span>`;
         let stat;
         if (p.type === 'bloom') {
           stat = 'rate'; sub = '+20% growth speed';
@@ -1041,7 +1048,9 @@ function offerCards() {
         el.dataset.stat = stat;
       }
     }
-    el.innerHTML = newTag + '<b>' + title + '</b><span>' + sub + '</span>';
+    el.innerHTML = icon + newTag + '<b>' + title + '</b><span>' + sub + '</span>';
+    // Staggered deal: cards appear one by one (prevents accidental taps).
+    setTimeout(() => el.classList.add('dealt'), 150 + k * 120);
   }
 }
 
