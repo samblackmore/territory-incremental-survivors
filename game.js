@@ -22,6 +22,7 @@ const HARVEST_CHANCE = 0.2;         // ...per territory cell, per tick
 const GATHER_BASE_RANGE = 6;         // pickup pull range in cells
 const GATHER_RANGE_PER_LEVEL = 2;    // +range per Gather level
 const GATHER_COOLDOWN = 6;           // seconds between pulls
+const GATHER_FLASH_DUR = 1.5;        // range ring flash duration on pull (s)
 const TURRET = {
   cannon: { name: 'Cannon', hp: 8, interval: 1.0, dmg: 1 },
   rocket: { name: 'Rocket', hp: 6, interval: 2.5, dmg: 3 },
@@ -1349,6 +1350,7 @@ function update(dt) {
     t.coolT += dt;
     if (t.coolT >= GATHER_COOLDOWN) {
       t.coolT = 0;
+      t.showRange = GATHER_FLASH_DUR; // flash the range on every pull
       const r2 = gatherRange() * gatherRange();
       for (const c of S.coins) {
         if (c.state !== 'idle') continue;
@@ -1587,10 +1589,11 @@ function render() {
       ctx.arc(px, py, 12, -Math.PI / 2, -Math.PI / 2 + k * Math.PI * 2);
       ctx.stroke();
       ctx.restore();
-      // Tapped: flash the pull range.
+      // Tapped or just pulled: flash the pull range, fading out.
       if (t.showRange > 0) {
+        const fade = Math.min(1, t.showRange / GATHER_FLASH_DUR);
         ctx.save();
-        ctx.strokeStyle = 'rgba(250, 204, 21, 0.6)';
+        ctx.strokeStyle = `rgba(250, 204, 21, ${0.6 * fade})`;
         ctx.lineWidth = 2;
         ctx.setLineDash([6, 6]);
         ctx.beginPath();
