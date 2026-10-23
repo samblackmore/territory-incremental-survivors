@@ -404,6 +404,11 @@ function gatherRange() {
   const lv = w ? w.level : 1;
   return GATHER_BASE_RANGE + (lv - 1) * GATHER_RANGE_PER_LEVEL;
 }
+// Gather pickups per pull.
+function gatherCount() {
+  const w = S.weapons.gather;
+  return w && w.count ? w.count : 1;
+}
 // Turret occupying a cell, if any (skips the dead).
 function turretAt(cx, cy) {
   for (const t of S.turrets) {
@@ -1046,7 +1051,8 @@ function offerCards() {
         } else if (p.type === 'lantern') {
           stat = 'hp'; sub = '+2 max HP';
         } else if (p.type === 'gather') {
-          stat = 'range'; sub = `+${GATHER_RANGE_PER_LEVEL} pickup range`;
+          if (Math.random() < 0.5) { stat = 'range'; sub = `+${GATHER_RANGE_PER_LEVEL} pickup range`; }
+          else { stat = 'count'; sub = '+1 pickup per pull'; }
         } else if (p.type === 'cannon') {
           const roll = Math.random();
           if (roll < 1 / 3) { stat = 'rate'; sub = '+20% fire rate'; }
@@ -1084,6 +1090,7 @@ document.querySelectorAll('.card').forEach(card => {
           }
         }
         else if (stat === 'range') { /* range derives from w.level via gatherRange() */ }
+        else if (stat === 'count') { w.count = (w.count || 1) + 1; }
         else w.dmgBonus += 1;
         S.pending--;
         if (S.pending <= 0) {
@@ -1164,7 +1171,10 @@ function placeTurretAt(sx, sy) {
     S.cells[pi] = EMPTY; // clear a pad
   }
   S.turrets.push(mkTurret(cx, cy, BLUE, type));
-  if (!S.weapons[type]) S.weapons[type] = { level: 1, rateMult: 1, dmgBonus: 0, critChance: 0 };
+  if (!S.weapons[type]) {
+    S.weapons[type] = { level: 1, rateMult: 1, dmgBonus: 0, critChance: 0 };
+    if (type === 'gather') S.weapons[type].count = 1;
+  }
   spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[BLUE]);
   if (type === 'lantern') computeFog(); // the lantern pushes back the dark
   S.placing = null;
@@ -1407,8 +1417,8 @@ function update(dt) {
   S.floaters = S.floaters.filter(f => f.t < 0.7);
   S.chipPulse = Math.max(0, S.chipPulse - dt * 3);
 
-  // Gather units: every cooldown, each living Gather pulls all idle pickups
-  // within its range toward itself.
+  // Gather units: every cooldown, each living Gather pulls up to N idle
+  // pickups within its range toward itself (nearest first).
   for (const t of S.turrets) {
     if (t.dead || t.color !== BLUE || t.type !== 'gather') continue;
     if (t.showRange > 0) t.showRange -= dt;
@@ -1417,12 +1427,18 @@ function update(dt) {
       t.coolT = 0;
       t.showRange = GATHER_FLASH_DUR; // flash the range on every pull
       const r2 = gatherRange() * gatherRange();
+      const inRange = [];
       for (const c of S.coins) {
         if (c.state !== 'idle') continue;
         const dx = c.x - (t.x + 0.5), dy = c.y - (t.y + 0.5);
-        if (dx * dx + dy * dy <= r2) {
-          c.state = 'gather'; c.sx = c.x; c.sy = c.y; c.gx = t.x + 0.5; c.gy = t.y + 0.5; c.t = 0;
-        }
+        const d2 = dx * dx + dy * dy;
+        if (d2 <= r2) inRange.push({ c, d2 });
+      }
+      inRange.sort((a, b) => a.d2 - b.d2);
+      const n = Math.min(gatherCount(), inRange.length);
+      for (let k = 0; k < n; k++) {
+        const c = inRange[k].c;
+        c.state = 'gather'; c.sx = c.x; c.sy = c.y; c.gx = t.x + 0.5; c.gy = t.y + 0.5; c.t = 0;
       }
     }
   }
