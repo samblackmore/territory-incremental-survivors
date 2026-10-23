@@ -950,11 +950,12 @@ function offerCards() {
     el.dataset.passive = p.passive || '';
     el.dataset.stat = '';
     const lv = p.kind === 'passive' ? S.passives[p.passive] : 0;
-    let title = p.title, sub = p.sub;
-    // VS-style: first time bringing it into the run gets a "NEW" tag.
-    if (p.kind === 'passive' && lv === 0) title = `NEW ${p.title}`;
+    let title = p.title, sub = p.sub, newTag = '';
+    // VS-style: first time bringing it into the run gets a yellow "New!" tag,
+    // separate from the name.
+    if (p.kind === 'passive' && lv === 0) newTag = '<span class="newtag">New!</span>';
     else if (p.kind === 'passive' && lv > 0) title = `${p.title} Lv${lv + 1}`;
-    else if (p.kind === 'turret' && !S.weapons[p.type]) title = `NEW ${p.title}`;
+    else if (p.kind === 'turret' && !S.weapons[p.type]) newTag = '<span class="newtag">New!</span>';
     else if (p.kind === 'turret' && S.weapons[p.type]) {
       // Owned weapon: usually a level-up, sometimes a fresh placement
       // (so you can field a second cannon, not just a stronger one).
@@ -985,7 +986,7 @@ function offerCards() {
         el.dataset.stat = stat;
       }
     }
-    el.innerHTML = '<b>' + title + '</b><span>' + sub + '</span>';
+    el.innerHTML = newTag + '<b>' + title + '</b><span>' + sub + '</span>';
   }
 }
 
