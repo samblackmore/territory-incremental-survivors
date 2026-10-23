@@ -759,6 +759,16 @@ function bloomGrowth(t) {
     S.growN[bi] = 0; S.growBy[bi] = 0;
     spawnBurst(bx + 0.5, by + 0.5, CELL_COLORS[t.color]);
     S.rings.push({ x: bx + 0.5, y: by + 0.5, t: 0, css: CELL_COLORS[t.color], dead: false });
+    // A finished bloom drops a pickup: usually XP, sometimes gold.
+    if (t.color === BLUE) {
+      const kind = Math.random() < 0.2 ? 'gold' : 'xp';
+      S.coins.push({ x: bx + 0.5, y: by + 0.5, state: 'idle', kind,
+                     phase: Math.random() * 6.283, sx: 0, sy: 0, t: 0, dead: false });
+      if (S.coins.length > 800) {
+        const i = S.coins.findIndex(c => c.state === 'idle');
+        if (i >= 0) S.coins.splice(i, 1);
+      }
+    }
   }
 }
 // Deterministic dot position for growth increment k of a cell: the k-th
@@ -932,26 +942,34 @@ function offerCards() {
     let title = p.title, sub = p.sub;
     if (p.kind === 'passive' && lv > 0) title = `${p.title} Lv${lv + 1}`;
     else if (p.kind === 'turret' && S.weapons[p.type]) {
-      // Owned weapon: this card is a level-up. Roll the stat now so the
-      // card shows exactly what you'll get — "Cannon Lv2 / +20% FIRE RATE".
-      // Stats fit the weapon: Bloom grows faster, Lantern gets tougher.
+      // Owned weapon: usually a level-up, sometimes a fresh placement
+      // (so you can field a second cannon, not just a stronger one).
       const w = S.weapons[p.type];
-      title = `${p.title} Lv${w.level + 1}`;
-      let stat;
-      if (p.type === 'bloom') {
-        stat = 'rate'; sub = '+20% growth speed';
-      } else if (p.type === 'lantern') {
-        stat = 'hp'; sub = '+2 max HP';
-      } else if (p.type === 'cannon') {
-        const roll = Math.random();
-        if (roll < 1 / 3) { stat = 'rate'; sub = '+20% fire rate'; }
-        else if (roll < 2 / 3) { stat = 'dmg'; sub = '+1 damage'; }
-        else { stat = 'crit'; sub = '+5% crit chance'; }
+      if (Math.random() < 0.3) {
+        title = p.title;
+        sub = 'New turret';
+        el.dataset.stat = 'place';
       } else {
-        if (Math.random() < 0.5) { stat = 'rate'; sub = '+20% fire rate'; }
-        else { stat = 'dmg'; sub = '+1 damage'; }
+        // Level-up: roll the stat now so the card shows exactly what
+        // you'll get — "Cannon Lv2 / +20% FIRE RATE". Stats fit the weapon:
+        // Bloom grows faster, Lantern gets tougher.
+        title = `${p.title} Lv${w.level + 1}`;
+        let stat;
+        if (p.type === 'bloom') {
+          stat = 'rate'; sub = '+20% growth speed';
+        } else if (p.type === 'lantern') {
+          stat = 'hp'; sub = '+2 max HP';
+        } else if (p.type === 'cannon') {
+          const roll = Math.random();
+          if (roll < 1 / 3) { stat = 'rate'; sub = '+20% fire rate'; }
+          else if (roll < 2 / 3) { stat = 'dmg'; sub = '+1 damage'; }
+          else { stat = 'crit'; sub = '+5% crit chance'; }
+        } else {
+          if (Math.random() < 0.5) { stat = 'rate'; sub = '+20% fire rate'; }
+          else { stat = 'dmg'; sub = '+1 damage'; }
+        }
+        el.dataset.stat = stat;
       }
-      el.dataset.stat = stat;
     }
     el.innerHTML = '<b>' + title + '</b><span>' + sub + '</span>';
   }
@@ -963,7 +981,7 @@ document.querySelectorAll('.card').forEach(card => {
     if (kind === 'turret') {
       const type = card.dataset.type;
       const w = S.weapons[type];
-      if (w) {
+      if (w && card.dataset.stat !== 'place') {
         // Owned: apply the level-up the card promised (rolled at offer time).
         w.level++;
         const stat = card.dataset.stat || 'dmg';
