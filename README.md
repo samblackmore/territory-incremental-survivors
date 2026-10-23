@@ -47,9 +47,13 @@ Suction there is no auto-collect; each level multiplies the interval by 0.75.
 **Weapons level up.** Each owned weapon type has a level (shown as "Lv N"
 next to its icon in the top-left, no cap — cannons can hit level 50).
 Picking a weapon card for a type you already own levels it up instead of
-placing a new turret: each level is +10% fire rate or +1 damage (50/50,
-not hardcoded). Picking a card for a type you don't own enters placement
-mode as before. The XP bar animates to full before the level-up cards appear.
+placing a new turret. The card shows exactly what you'll get, e.g.
+"Cannon Lv4" / "+10% fire rate". Cannon rotates through +10% rate, +1
+damage, +5% crit chance; other weapons get +10% rate or +1 damage.
+Picking a card for a type you don't own enters placement mode as before.
+There are no separate global fire-rate/damage cards — the weapon track is
+the single linear upgrade path. The XP bar animates to full before the
+level-up cards appear.
 
 **Two currencies (Vampire Survivors style).** Breaking terrain drops light-blue
 **XP orbs** (tap them; they zip to the XP bar and fill it toward the next

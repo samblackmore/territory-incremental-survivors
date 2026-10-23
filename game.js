@@ -673,6 +673,11 @@ function fireTurret(t) {
   if (w && w.critChance > 0 && Math.random() < w.critChance) {
     dmg *= 2 + Math.floor(Math.random() * 2); // 2x or 3x, whole numbers
     crit = true;
+  } else {
+    // Damage variance (non-crit): sometimes +1, rarely +2 over base.
+    const r = Math.random();
+    if (r < 0.05) dmg += 2;
+    else if (r < 0.25) dmg += 1;
   }
   S.projs.push({
     x: mx, y: my,
@@ -888,8 +893,8 @@ const CARD_POOL = [
   { kind: 'turret', type: 'laser', title: 'Laser', sub: 'Snipes weak blocks' },
   { kind: 'turret', type: 'bloom', title: 'Bloom', sub: 'Grows territory' },
   { kind: 'turret', type: 'lantern', title: 'Lantern', sub: 'Clears fog' },
-  { kind: 'freq', mult: 1.25, title: '+25%', sub: 'Fire rate' },
-  { kind: 'damage', add: 1, title: '+1', sub: 'Damage', needs: ['cannon', 'rocket', 'laser'] },
+  // (no global fire-rate / damage cards — weapon levels are the single
+  // linear upgrade track: each level is +10% rate, +1 damage, or +5% crit)
   { kind: 'passive', passive: 'bounce', title: 'Bounce', sub: 'Bounce chance', needs: ['cannon'] },
   { kind: 'passive', passive: 'suction', title: 'Suction', sub: 'Auto-collect' },
   { kind: 'steer', mult: 1.3, title: '+30%', sub: 'Missile steering', needs: ['rocket'] },
@@ -921,11 +926,28 @@ function offerCards() {
     el.dataset.mult = p.mult || '';
     el.dataset.add = p.add || '';
     el.dataset.passive = p.passive || '';
+    el.dataset.stat = '';
     const lv = p.kind === 'passive' ? S.passives[p.passive] : 0;
-    let title = p.title;
+    let title = p.title, sub = p.sub;
     if (p.kind === 'passive' && lv > 0) title = `${p.title} Lv${lv + 1}`;
-    else if (p.kind === 'turret' && S.weapons[p.type]) title = `${p.title} Lv${S.weapons[p.type].level + 1}`;
-    el.innerHTML = '<b>' + title + '</b><span>' + p.sub + '</span>';
+    else if (p.kind === 'turret' && S.weapons[p.type]) {
+      // Owned weapon: this card is a level-up. Roll the stat now so the
+      // card shows exactly what you'll get — "Cannon Lv2 / +10% FIRE RATE".
+      const w = S.weapons[p.type];
+      title = `${p.title} Lv${w.level + 1}`;
+      let stat;
+      if (p.type === 'cannon') {
+        const roll = Math.random();
+        if (roll < 1 / 3) stat = 'rate';
+        else if (roll < 2 / 3) stat = 'dmg';
+        else stat = 'crit';
+      } else {
+        stat = Math.random() < 0.5 ? 'rate' : 'dmg';
+      }
+      el.dataset.stat = stat;
+      sub = stat === 'rate' ? '+10% fire rate' : stat === 'dmg' ? '+1 damage' : '+5% crit chance';
+    }
+    el.innerHTML = '<b>' + title + '</b><span>' + sub + '</span>';
   }
 }
 
@@ -936,16 +958,11 @@ document.querySelectorAll('.card').forEach(card => {
       const type = card.dataset.type;
       const w = S.weapons[type];
       if (w) {
-        // Owned: level it up instead of placing another. Cannon rotates
-        // through +10% rate / +1 damage / +5% crit chance; other weapons
-        // get +10% rate or +1 damage (50/50). Nothing hardcoded per level.
+        // Owned: apply the level-up the card promised (rolled at offer time).
         w.level++;
-        if (type === 'cannon') {
-          const roll = Math.random();
-          if (roll < 1 / 3) w.rateMult *= 1.1;
-          else if (roll < 2 / 3) w.dmgBonus += 1;
-          else w.critChance = Math.min(1, (w.critChance || 0) + 0.05);
-        } else if (Math.random() < 0.5) w.rateMult *= 1.1;
+        const stat = card.dataset.stat || 'dmg';
+        if (stat === 'rate') w.rateMult *= 1.1;
+        else if (stat === 'crit') w.critChance = Math.min(1, (w.critChance || 0) + 0.05);
         else w.dmgBonus += 1;
         S.pending--;
         if (S.pending <= 0) {
@@ -971,8 +988,6 @@ document.querySelectorAll('.card').forEach(card => {
         if (p === 'suction') S.suctionMult = Math.max(0.2, S.suctionMult * 0.75);
         else if (p === 'bounce') S.bounceChance = Math.min(0.95, S.passives.bounce * cfg.bouncePerLevel);
       }
-    } else if (kind === 'damage') {
-      S.dmgBonus += parseInt(card.dataset.add, 10);
     } else if (kind === 'steer') {
       S.steerMult *= parseFloat(card.dataset.mult);
     } else if (kind === 'bloom') {
