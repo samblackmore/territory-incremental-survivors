@@ -21,8 +21,8 @@ All units must be placed on fully-revealed cells. The **Lantern** (a new
 placeable unit) sits on any visible ground — empty or terrain — and pushes
 the fog back in a radius around it.
 
-**Turrets, not cannons.** Leveling up (XP thresholds now start at 3 XP:
-`3,8,16,28,44,64,90,120,160,210`) offers 3 cards: 5 turret types
+**Turrets, not cannons.** Leveling up (XP needed is linear: level N needs N+2
+XP — 3, 4, 5... — and XP resets to zero each level) offers 3 cards: 5 turret types
 (**Cannon** — sweeping shots with a jittered interval so the sweep doesn't
 phase-lock; **Rocket** — homing missiles with a limited turn rate that weave
 through caves and crash-splash into walls; **Laser** — hitscan zaps that always
@@ -92,7 +92,6 @@ restarts the game:
 - Map seed (blank = random; the stats line shows the seed in use)
 - Coin drop chance (probability per block excavated by blue)
 - Auto-collect interval (seconds between free coin collections, 0 = off)
-- Level thresholds (XP per level, comma-separated)
 - Hit feel: pop hold/shrink time, knockback push, neighbor ripple, projectile
   trail, particle gravity
 - Colors: terrain base color (green) and empty base color (brown) pickers

@@ -66,7 +66,6 @@ const inCave   = document.getElementById('d-cave');
 const inSeed   = document.getElementById('d-seed');
 const inCoin   = document.getElementById('d-coin');
 const inCollect = document.getElementById('d-collect');
-const inThresh = document.getElementById('d-thresh');
 const inTerrain = document.getElementById('d-terrain');
 const inEmpty = document.getElementById('d-empty');
 const inFogDist = document.getElementById('d-fogdist');
@@ -309,10 +308,6 @@ function clampNum(v, lo, hi, fallback) {
 function readDebug() {
   const cols = Math.round(clampNum(inCols.value, 8, 120, 48));
   const rows = Math.round(clampNum(inRows.value, 8, 120, 36));
-  const thresholds = inThresh.value.split(',')
-    .map(s => parseFloat(s.trim()))
-    .filter(v => isFinite(v) && v > 0)
-    .sort((a, b) => a - b);
   cfg = {
     cols, rows,
     projSpeed: clampNum(inSpeed.value, 40, 2000, 200),   // px/s
@@ -330,7 +325,6 @@ function readDebug() {
     trailT: clampNum(inTrail.value, 0, 1, 0.1),               // projectile trail (s)
     gravity: clampNum(inGravity.value, 0, 40, 9),            // particle gravity (cells/s^2)
     fogDist: clampNum(inFogDist.value, 0, 20, 6),              // fog reveal distance (cells)
-    thresholds: thresholds.length ? thresholds : [15],
   };
   // reflect clamped values back into the panel
   inCols.value = cols; inRows.value = rows;
@@ -345,7 +339,6 @@ function readDebug() {
   inTrail.value = cfg.trailT;
   inGravity.value = cfg.gravity;
   inFogDist.value = cfg.fogDist;
-  inThresh.value = cfg.thresholds.join(',');
   rebuildColors();
 }
 
@@ -451,6 +444,13 @@ function snapAnchor(a) { // fallback spawn when there are no caves at all
 }
 
 function newGame() {
+  // Bank the previous run's gold into the outer total.
+  let banked = 0;
+  if (S && S.gold > 0) {
+    banked = S.gold;
+    meta.gold += banked;
+    saveMeta();
+  }
   readDebug();
   const seedStr = inSeed.value.trim();
   const seed = seedStr === '' ? (Math.random() * 1e9) | 0 : parseInt(seedStr, 10) || 0;
@@ -468,7 +468,7 @@ function newGame() {
   const popDY = new Float32Array(n);
   S = { cells, hp, maxhp, hitBy, popT, popAmp, popCol, popDX, popDY, projs: [], xp: 0, level: 1, pending: 0,
         freqMult: 1, paused: false, frame: 0, seed,
-        coins: [], floaters: [], gold: 0, chipPulse: 0, time: 0,
+        coins: [], floaters: [], gold: 0, chipPulse: 0, time: 0, lastBanked: banked,
         // XP bar animation: xpShown eases toward xp; level-up cards wait
         // for the bar to finish filling.
         xpShown: 0, awaitingLevel: false,
@@ -1106,33 +1106,28 @@ function weaponRateMult(t) {
 function weaponDmgBonus(t) {
   return (t.color === BLUE && S.weapons[t.type]) ? S.weapons[t.type].dmgBonus : 0;
 }
+// XP needed to go from the current level to the next: linear, +1 per level
+// (3, 4, 5...). XP resets to zero on every level-up.
+function xpNeed() { return S.level + 2; }
 function update(dt) {
   const arcRad = (cfg.arc * Math.PI) / 180;
   const turnRate = (cfg.turnRate * Math.PI) / 180; // rad/s
   // XP bar animates toward the true XP (full bar in ~0.6s); the level-up
-  // cards wait until the bar finishes filling to the threshold.
+  // cards wait until the bar finishes filling.
   if (S.xpShown < S.xp) {
-    const t = cfg.thresholds;
-    const next = S.level - 1 < t.length ? t[S.level - 1] : S.xp;
-    const prev = S.level > 1 ? t[S.level - 2] : 0;
-    const rate = Math.max(1, next - prev) / 0.6;
-    S.xpShown = Math.min(S.xp, S.xpShown + rate * dt);
+    const need = xpNeed();
+    S.xpShown = Math.min(S.xp, S.xpShown + (need / 0.6) * dt);
   }
-  if (!S.awaitingLevel) {
-    const t = cfg.thresholds;
-    if (S.level - 1 < t.length && S.xp >= t[S.level - 1]) S.awaitingLevel = true;
-  }
-  if (S.awaitingLevel) {
-    const t = cfg.thresholds;
-    if (S.level - 1 < t.length && S.xpShown >= t[S.level - 1]) {
-      S.awaitingLevel = false;
-      S.level++;
-      S.pending++;
-      S.paused = true;
-      offerCards();
-      overlay.classList.remove('hidden');
-      updateHud();
-    }
+  if (!S.awaitingLevel && S.xp >= xpNeed()) S.awaitingLevel = true;
+  if (S.awaitingLevel && S.xpShown >= xpNeed()) {
+    S.awaitingLevel = false;
+    S.level++;
+    S.xp = 0; S.xpShown = 0; // reset for the next level
+    S.pending++;
+    S.paused = true;
+    offerCards();
+    overlay.classList.remove('hidden');
+    updateHud();
   }
   for (const t of S.turrets) {
     if (t.dead) continue;
@@ -1274,9 +1269,7 @@ function update(dt) {
       if (k >= 1) {
         c.dead = true;
         if (c.kind === 'gold') {
-          S.gold++;
-          meta.gold++;
-          saveMeta();
+          S.gold++; // run gold only — banked to the meta total when the run ends
           S.chipPulse = 1; // the "blurp": chip pops
           S.floaters.push({ x: CHIP_CX + 30, y: CHIP_CY, t: 0 });
         } else {
@@ -1297,9 +1290,7 @@ function update(dt) {
       if (k >= 1) {
         c.dead = true;
         if (c.kind === 'gold') {
-          S.gold++;
-          meta.gold++;
-          saveMeta();
+          S.gold++; // run gold only — banked to the meta total when the run ends
           S.chipPulse = 1;
           spawnBurst(px, py, '#f5b301');
         } else {
@@ -1698,17 +1689,10 @@ function render() {
 
 // ---- HUD ----
 function updateHud() {
-  const t = cfg.thresholds;
   const lvl = S.level;
-  let pct = 1, label;
-  if (lvl - 1 < t.length) {
-    const next = t[lvl - 1];
-    const prev = lvl > 1 ? t[lvl - 2] : 0;
-    pct = Math.min(1, Math.max(0, (S.xpShown - prev) / (next - prev)));
-    label = `LV ${lvl} &nbsp;·&nbsp; ${Math.floor(S.xpShown)}/${next} XP`;
-  } else {
-    label = `LV ${lvl} &nbsp;·&nbsp; MAX (${S.xp} XP)`;
-  }
+  const need = xpNeed();
+  const pct = Math.min(1, Math.max(0, S.xpShown / need));
+  const label = `LV ${lvl} &nbsp;·&nbsp; ${Math.floor(S.xpShown)}/${need} XP`;
   xpfill.style.width = (pct * 100).toFixed(1) + '%';
   xplabel.innerHTML = label;
 
@@ -1751,7 +1735,7 @@ function frame(now) {
 }
 
 // ---- Debug wiring: any change restarts the game ----
-[inCols, inRows, inSpeed, inFreq, inArc, inTurn, inBounce, inCave, inCoin, inCollect, inSeed, inThresh,
+[inCols, inRows, inSpeed, inFreq, inArc, inTurn, inBounce, inCave, inCoin, inCollect, inSeed,
  inPopHold, inPopDur, inPopPush, inRipple, inTrail, inGravity].forEach(el => {
   el.addEventListener('change', newGame);
 });
@@ -1835,8 +1819,7 @@ function tryChipDoubleTap(sx, sy) {
   return false; // first tap falls through to tapCoin
 }
 function debugGrantLevel() {
-  const t = cfg.thresholds;
-  const need = (S.level - 1 < t.length) ? t[S.level - 1] - S.xp : 100;
+  const need = xpNeed() - S.xp;
   if (need <= 0) return;
   S.xp += need;
   S.chipPulse = 1;
@@ -1866,7 +1849,7 @@ function applyUrlParams() {
   const map = { cols: inCols, rows: inRows, speed: inSpeed, freq: inFreq, arc: inArc,
     turn: inTurn, bounce: inBounce, cave: inCave, seed: inSeed, coin: inCoin, collect: inCollect,
     pophold: inPopHold, popdur: inPopDur,
-    poppush: inPopPush, ripple: inRipple, trail: inTrail, gravity: inGravity, thresh: inThresh,
+    poppush: inPopPush, ripple: inRipple, trail: inTrail, gravity: inGravity,
     terrain: inTerrain, empty: inEmpty, fogdist: inFogDist };
   for (const k of Object.keys(map)) if (q.has(k)) map[k].value = q.get(k);
 }
@@ -1881,7 +1864,7 @@ document.getElementById('d-copylink').addEventListener('click', () => {
     cols: cfg.cols, rows: cfg.rows, speed: cfg.projSpeed, freq: cfg.freq, arc: cfg.arc,
     turn: cfg.turnRate, bounce: cfg.bouncePerLevel, cave: cfg.caveChance, seed: inSeed.value.trim(), coin: cfg.coinChance,
     collect: cfg.collectInterval, pophold: cfg.popHold, popdur: cfg.popDur, poppush: cfg.popPush,
-    ripple: cfg.rippleAmp, trail: cfg.trailT, gravity: cfg.gravity, thresh: cfg.thresholds.join(','),
+    ripple: cfg.rippleAmp, trail: cfg.trailT, gravity: cfg.gravity,
     terrain: inTerrain.value, empty: inEmpty.value, fogdist: cfg.fogDist,
   });
   const url = location.origin + location.pathname + '?' + q.toString();
@@ -1901,6 +1884,14 @@ const WEAPON_DESC = {
 };
 function renderStartScreen() {
   document.getElementById('startgold').textContent = meta.gold;
+  const banked = document.getElementById('bankedmsg');
+  if (S.lastBanked > 0) {
+    banked.textContent = `+${S.lastBanked} gold from last run banked!`;
+    banked.classList.remove('hidden');
+    S.lastBanked = 0; // show it once
+  } else {
+    banked.classList.add('hidden');
+  }
   const list = document.getElementById('weaponlist');
   list.innerHTML = '';
   for (const type of ['cannon', 'rocket', 'laser', 'bloom', 'lantern']) {
