@@ -526,21 +526,13 @@ function newGame() {
     }
   }
 
-  // Gold nuggets: 1% of rock cells seed a cluster of 1-5 contiguous cells.
+  // Gold nuggets: 1% of rock cells hold a single nugget (no clusters).
   // The gold is locked until the rock is broken.
   for (let y = 0; y < cfg.rows; y++) {
     for (let x = 0; x < cfg.cols; x++) {
       const i = y * cfg.cols + x;
-      if (cells[i] !== WHITE || goldNug[i] || rng() >= 0.01) continue;
-      const size = 1 + Math.floor(rng() * 5);
-      let cx = x, cy = y;
-      for (let s = 0; s < size; s++) {
-        const ci = cy * cfg.cols + cx;
-        if (cells[ci] === WHITE) goldNug[ci] = 1;
-        const d = Math.floor(rng() * 4);
-        cx = Math.max(0, Math.min(cfg.cols - 1, cx + [1, -1, 0, 0][d]));
-        cy = Math.max(0, Math.min(cfg.rows - 1, cy + [0, 0, 1, -1][d]));
-      }
+      if (cells[i] !== WHITE || rng() >= 0.01) continue;
+      goldNug[i] = 1;
     }
   }
 
