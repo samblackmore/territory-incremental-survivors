@@ -1619,7 +1619,7 @@ function render() {
   ctx.fillStyle = '#dfe5f2';
   ctx.font = 'bold 13px system-ui, sans-serif';
   ctx.textBaseline = 'middle';
-  ctx.fillText('× ' + meta.gold, CHIP_CX - chw / 2 + 26, CHIP_CY + 1);
+  ctx.fillText('× ' + S.gold, CHIP_CX - chw / 2 + 26, CHIP_CY + 1);
   ctx.restore();
   // Passive badges, top-left under the gold chip: icon + level pips (8 max).
   let ppy = CHIP_CY + 32;
