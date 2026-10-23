@@ -468,6 +468,12 @@ function newGame() {
   S = { cells, hp, maxhp, hitBy, popT, popAmp, popCol, popDX, popDY, projs: [], xp: 0, level: 1, pending: 0,
         freqMult: 1, paused: false, frame: 0, seed,
         coins: [], floaters: [], gold: 0, chipPulse: 0, time: 0,
+        // XP bar animation: xpShown eases toward xp; level-up cards wait
+        // for the bar to finish filling.
+        xpShown: 0, awaitingLevel: false,
+        // weapons (VS-style): per-type level + stat mults. Picking a card
+        // for an owned weapon levels it up instead of placing a new one.
+        weapons: {},
         particles: [], particlesSpawned: 0, rings: [], dmgNums: [],
         destroyed: 0, destroyedBlue: 0, collectT: 0,
         bounceChance: 0, suctionMult: 1,
@@ -513,6 +519,7 @@ function newGame() {
     S.hp[pci] = 0; S.maxhp[pci] = 0;
   }
   S.turrets.push(mkTurret(pc.x, pc.y, BLUE, starterType));
+  S.weapons[starterType] = { level: 1, rateMult: 1, dmgBonus: 0 };
   startWave(1);
   computeFog();   // fog of war: only the home cave + fogDist is visible
 
@@ -665,7 +672,7 @@ function fireTurret(t) {
     vx: Math.cos(t.angle) * speed,
     vy: Math.sin(t.angle) * speed,
     color: t.color,
-    dmg: TURRET.cannon.dmg + S.dmgBonus,
+    dmg: TURRET.cannon.dmg + S.dmgBonus + weaponDmgBonus(t),
     bounces: 0,
     dead: false,
   });
@@ -679,7 +686,7 @@ function fireMissile(t) {
     x: t.x + 0.5, y: t.y + 0.5,
     vx: Math.cos(t.base) * sp, vy: Math.sin(t.base) * sp,
     speed: sp, color: t.color,
-    dmg: TURRET.rocket.dmg + S.dmgBonus,
+    dmg: TURRET.rocket.dmg + S.dmgBonus + weaponDmgBonus(t),
     dead: false,
   });
   spawnBurst(t.x + 0.5, t.y + 0.5, '#fb923c');
@@ -705,7 +712,7 @@ function fireLaser(t) {
   if (!tgt) return; // nowhere left to dig
   S.beams.push({ x1: (t.x + 0.5) * CELL_PX, y1: (t.y + 0.5) * CELL_PX,
                  x2: (tgt.x + 0.5) * CELL_PX, y2: (tgt.y + 0.5) * CELL_PX, t: 0 });
-  damageBlock(tgt.i, TURRET.laser.dmg + S.dmgBonus, t.color,
+  damageBlock(tgt.i, TURRET.laser.dmg + S.dmgBonus + weaponDmgBonus(t), t.color,
               t.x + 0.5, t.y + 0.5, tgt.x - t.x, tgt.y - t.y);
 }
 // Bloom: Tiberium-style territory. Every interval it makes one growth
@@ -860,16 +867,9 @@ function damageBlock(idx, dmg, color, sx, sy, vx, vy) {
 
 // ---- Level-ups ----
 function checkLevel() {
-  const t = cfg.thresholds;
-  while (S.level - 1 < t.length && S.xp >= t[S.level - 1]) {
-    S.level++;
-    S.pending++;
-  }
-  if (S.pending > 0 && !S.paused) {
-    S.paused = true;
-    offerCards();
-    overlay.classList.remove('hidden');
-  }
+  // The update loop queues the level-up once the XP bar finishes animating
+  // to the threshold; this just refreshes the HUD.
+  updateHud();
 }
 
 // Card pool: 4 turret cards (placement = the skill expression) + 5 upgrades.
@@ -915,7 +915,9 @@ function offerCards() {
     el.dataset.add = p.add || '';
     el.dataset.passive = p.passive || '';
     const lv = p.kind === 'passive' ? S.passives[p.passive] : 0;
-    const title = p.kind === 'passive' && lv > 0 ? `${p.title} Lv${lv + 1}` : p.title;
+    let title = p.title;
+    if (p.kind === 'passive' && lv > 0) title = `${p.title} Lv${lv + 1}`;
+    else if (p.kind === 'turret' && S.weapons[p.type]) title = `${p.title} Lv${S.weapons[p.type].level + 1}`;
     el.innerHTML = '<b>' + title + '</b><span>' + p.sub + '</span>';
   }
 }
@@ -924,12 +926,29 @@ document.querySelectorAll('.card').forEach(card => {
   card.addEventListener('click', () => {
     const kind = card.dataset.kind || 'freq';
     if (kind === 'turret') {
+      const type = card.dataset.type;
+      const w = S.weapons[type];
+      if (w) {
+        // Owned: level it up instead of placing another. Each level is
+        // +10% fire rate or +1 damage (50/50, not hardcoded).
+        w.level++;
+        if (Math.random() < 0.5) w.rateMult *= 1.1;
+        else w.dmgBonus += 1;
+        S.pending--;
+        if (S.pending <= 0) {
+          S.pending = 0;
+          S.paused = false;
+          overlay.classList.add('hidden');
+        }
+        updateHud();
+        return;
+      }
       // Placement mode: tap the map to deploy. The game stays paused until
       // the turret is down — no cancel, there's always room somewhere.
       S.pending--;
       overlay.classList.add('hidden');
       updateHud();
-      enterPlacement(card.dataset.type);
+      enterPlacement(type);
       return;
     }
     if (kind === 'passive') {
@@ -997,6 +1016,7 @@ function placeTurretAt(sx, sy) {
     S.cells[pi] = EMPTY; // clear a pad
   }
   S.turrets.push(mkTurret(cx, cy, BLUE, type));
+  if (!S.weapons[type]) S.weapons[type] = { level: 1, rateMult: 1, dmgBonus: 0 };
   spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[BLUE]);
   if (type === 'lantern') computeFog(); // the lantern pushes back the dark
   S.placing = null;
@@ -1018,12 +1038,44 @@ function suctionInterval() {
 }
 
 // ---- Update ----
+// Per-type weapon stats (blue only; reds use base stats).
+function weaponRateMult(t) {
+  return (t.color === BLUE && S.weapons[t.type]) ? S.weapons[t.type].rateMult : 1;
+}
+function weaponDmgBonus(t) {
+  return (t.color === BLUE && S.weapons[t.type]) ? S.weapons[t.type].dmgBonus : 0;
+}
 function update(dt) {
   const arcRad = (cfg.arc * Math.PI) / 180;
   const turnRate = (cfg.turnRate * Math.PI) / 180; // rad/s
+  // XP bar animates toward the true XP (full bar in ~0.6s); the level-up
+  // cards wait until the bar finishes filling to the threshold.
+  if (S.xpShown < S.xp) {
+    const t = cfg.thresholds;
+    const next = S.level - 1 < t.length ? t[S.level - 1] : S.xp;
+    const prev = S.level > 1 ? t[S.level - 2] : 0;
+    const rate = Math.max(1, next - prev) / 0.6;
+    S.xpShown = Math.min(S.xp, S.xpShown + rate * dt);
+  }
+  if (!S.awaitingLevel) {
+    const t = cfg.thresholds;
+    if (S.level - 1 < t.length && S.xp >= t[S.level - 1]) S.awaitingLevel = true;
+  }
+  if (S.awaitingLevel) {
+    const t = cfg.thresholds;
+    if (S.level - 1 < t.length && S.xpShown >= t[S.level - 1]) {
+      S.awaitingLevel = false;
+      S.level++;
+      S.pending++;
+      S.paused = true;
+      offerCards();
+      overlay.classList.remove('hidden');
+      updateHud();
+    }
+  }
   for (const t of S.turrets) {
     if (t.dead) continue;
-    const rateMult = cfg.freq * (t.color === BLUE ? S.freqMult : 1);
+    const rateMult = cfg.freq * (t.color === BLUE ? S.freqMult : 1) * weaponRateMult(t);
     if (t.type === 'cannon') {
       // Sweep the aim within the turn arc (full 360 = continuous spin)
       if (cfg.arc >= 360) {
@@ -1536,6 +1588,40 @@ function render() {
     }
     ppy += bh + 6;
   }
+  // Weapon badges: icon + level number (levels go to 50+, so no pips).
+  for (const type of ['cannon', 'rocket', 'laser', 'bloom', 'lantern']) {
+    const w = S.weapons[type];
+    if (!w) continue;
+    const bw = 96, bh = 20;
+    ctx.fillStyle = 'rgba(10, 13, 22, 0.85)';
+    rr(8, ppy, bw, bh, 6); ctx.fill();
+    ctx.lineWidth = 1; ctx.strokeStyle = '#2a3145';
+    rr(8, ppy, bw, bh, 6); ctx.stroke();
+    const iy = ppy + bh / 2;
+    const col = CELL_COLORS[BLUE];
+    ctx.fillStyle = col;
+    ctx.strokeStyle = col;
+    if (type === 'cannon') {
+      ctx.beginPath(); ctx.moveTo(26, iy - 6); ctx.lineTo(14, iy + 5); ctx.lineTo(26, iy + 5); ctx.closePath(); ctx.fill();
+    } else if (type === 'rocket') {
+      ctx.beginPath(); ctx.moveTo(26, iy); ctx.lineTo(18, iy - 4); ctx.lineTo(18, iy + 4); ctx.closePath(); ctx.fill();
+      ctx.fillRect(12, iy - 2.5, 7, 5);
+    } else if (type === 'laser') {
+      ctx.beginPath(); ctx.moveTo(20, iy - 7); ctx.lineTo(25, iy); ctx.lineTo(20, iy + 7); ctx.lineTo(15, iy); ctx.closePath(); ctx.fill();
+    } else if (type === 'bloom') {
+      ctx.beginPath(); ctx.arc(20, iy, 5.5, 0, Math.PI * 2); ctx.fill();
+    } else { // lantern
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(15, iy - 6, 10, 12);
+      ctx.fillStyle = '#fef3c7';
+      ctx.beginPath(); ctx.arc(20, iy, 2.5, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.fillStyle = '#dfe5f2';
+    ctx.font = 'bold 12px system-ui, sans-serif';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Lv ' + w.level, 34, iy + 1);
+    ppy += bh + 6;
+  }
   // "+1" floaters
   for (const f of S.floaters) {
     const k = f.t / 0.7;
@@ -1556,8 +1642,8 @@ function updateHud() {
   if (lvl - 1 < t.length) {
     const next = t[lvl - 1];
     const prev = lvl > 1 ? t[lvl - 2] : 0;
-    pct = Math.min(1, Math.max(0, (S.xp - prev) / (next - prev)));
-    label = `LV ${lvl} &nbsp;·&nbsp; ${S.xp}/${next} XP`;
+    pct = Math.min(1, Math.max(0, (S.xpShown - prev) / (next - prev)));
+    label = `LV ${lvl} &nbsp;·&nbsp; ${Math.floor(S.xpShown)}/${next} XP`;
   } else {
     label = `LV ${lvl} &nbsp;·&nbsp; MAX (${S.xp} XP)`;
   }

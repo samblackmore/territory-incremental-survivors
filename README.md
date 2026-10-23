@@ -44,6 +44,13 @@ stops appearing at level 8. Without the Bounce passive there is no bounce
 chance at all; each level adds 12% (tunable via the debug panel). Without
 Suction there is no auto-collect; each level multiplies the interval by 0.75.
 
+**Weapons level up.** Each owned weapon type has a level (shown as "Lv N"
+next to its icon in the top-left, no cap — cannons can hit level 50).
+Picking a weapon card for a type you already own levels it up instead of
+placing a new turret: each level is +10% fire rate or +1 damage (50/50,
+not hardcoded). Picking a card for a type you don't own enters placement
+mode as before. The XP bar animates to full before the level-up cards appear.
+
 **Two currencies (Vampire Survivors style).** Breaking terrain drops light-blue
 **XP orbs** (tap them; they zip to the XP bar and fill it toward the next
 level). Territory fields generate **gold coins** on harvest ticks (tap them;
