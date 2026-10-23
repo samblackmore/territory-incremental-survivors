@@ -162,6 +162,48 @@
     z-index: 10;
   }
   #levelup.hidden { display: none; }
+  /* Pre-game start screen */
+  #startscreen {
+    position: fixed; inset: 0;
+    background: rgba(5, 8, 15, 0.92);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 20;
+  }
+  #startscreen.hidden { display: none; }
+  .startpanel { text-align: center; max-width: 560px; padding: 20px; }
+  .startpanel h2 {
+    color: #ffd75e;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin: 0 0 6px;
+    text-shadow: 0 2px 12px rgba(255, 215, 94, .35);
+  }
+  .startgold { color: var(--text); margin-bottom: 16px; font-size: 18px; }
+  .startgold b { color: #ffd75e; }
+  #weaponlist { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
+  .weapon {
+    display: flex; align-items: center; gap: 12px;
+    background: linear-gradient(180deg, #27314d, #1a2138);
+    border: 2px solid #3a4666;
+    border-radius: 10px;
+    color: var(--text);
+    padding: 10px 14px;
+    text-align: left;
+  }
+  .weapon.selected { border-color: #ffd75e; }
+  .weapon.locked { opacity: 0.65; }
+  .weapon .winfo { flex: 1; }
+  .weapon .wname { font-weight: bold; font-size: 16px; }
+  .weapon .wdesc { color: var(--muted); font-size: 13px; }
+  .weapon button {
+    background: var(--blue); color: #fff; border: none; border-radius: 6px;
+    padding: 8px 14px; font-size: 14px; cursor: pointer;
+  }
+  .weapon button:disabled { background: #3a4666; cursor: default; }
+  #startbtn {
+    background: #ffd75e; color: #1a2138; border: none; border-radius: 8px;
+    padding: 12px 36px; font-size: 18px; font-weight: bold; cursor: pointer;
+  }
   .cards { text-align: center; }
   .cards h2 {
     color: #ffd75e;
@@ -262,14 +304,14 @@
     <label>Map seed (blank = random)
       <input id="d-seed" type="text" value="" placeholder="random">
     </label>
-    <label>Coin drop chance (0–1)
+    <label>XP orb drop chance (0–1, per block excavated by blue)
       <input id="d-coin" type="number" min="0" max="1" step="0.05" value="0.3">
     </label>
     <label>Auto-collect interval (s, 0 = off)
       <input id="d-collect" type="number" min="0" max="60" step="0.5" value="30">
     </label>
     <label>Level thresholds (XP per level, comma-separated)
-      <input id="d-thresh" type="text" value="15,40,80,140,220,320,450,600,800,1050">
+      <input id="d-thresh" type="text" value="3,8,16,28,44,64,90,120,160,210">
     </label>
     <h3>Hit feel</h3>
     <label>Pop hold at full size (s)
@@ -310,6 +352,14 @@
 <div id="placebanner" class="banner hidden"></div>
 <div id="wavebanner" class="banner hidden"></div>
 
+<div id="startscreen" class="hidden">
+  <div class="startpanel">
+    <h2>Territory</h2>
+    <div class="startgold">Gold: <b id="startgold">0</b></div>
+    <div id="weaponlist"></div>
+    <button id="startbtn">Start Run</button>
+  </div>
+</div>
 <div id="levelup" class="hidden">
   <div class="cards">
     <h2>Level up! Choose an upgrade</h2>
@@ -330,6 +380,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=21"></script>
+<script src="game.js?v=22"></script>
 </body>
 </html>

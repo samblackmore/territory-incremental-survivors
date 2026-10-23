@@ -349,6 +349,25 @@ function readDebug() {
   rebuildColors();
 }
 
+// ---- Meta progression (persisted): gold + weapon unlocks ----------------
+// Gold is earned from territory fields and persists across runs. Weapons
+// cost gold to unlock; only unlocked weapons can start a run or appear
+// in level-up drafts.
+const UNLOCK_COST = { rocket: 20, laser: 30, bloom: 40, lantern: 10 }; // cannon is free
+const meta = { gold: 0, unlocks: { cannon: true, rocket: false, laser: false, bloom: false, lantern: false } };
+function loadMeta() {
+  try {
+    const m = JSON.parse(localStorage.getItem('tis_meta'));
+    if (m && typeof m.gold === 'number') meta.gold = m.gold;
+    if (m && m.unlocks) for (const k of Object.keys(meta.unlocks)) meta.unlocks[k] = !!m.unlocks[k];
+  } catch (e) { /* fresh save */ }
+}
+function saveMeta() {
+  try { localStorage.setItem('tis_meta', JSON.stringify(meta)); } catch (e) { /* ignore */ }
+}
+// The starter weapon for the next run (chosen on the pre-game screen).
+let starterType = 'cannon';
+
 // ---- Game state ----
 let S = null;
 
@@ -448,7 +467,7 @@ function newGame() {
   const popDY = new Float32Array(n);
   S = { cells, hp, maxhp, hitBy, popT, popAmp, popCol, popDX, popDY, projs: [], xp: 0, level: 1, pending: 0,
         freqMult: 1, paused: false, frame: 0, seed,
-        coins: [], floaters: [], coinsCollected: 0, chipPulse: 0, time: 0,
+        coins: [], floaters: [], gold: 0, chipPulse: 0, time: 0,
         particles: [], particlesSpawned: 0, rings: [], dmgNums: [],
         destroyed: 0, destroyedBlue: 0, collectT: 0,
         bounceChance: cfg.bounceChance, suctionMult: 1,
@@ -483,7 +502,7 @@ function newGame() {
   const pA = { x: cfg.cols * 0.15, y: cfg.rows * 0.85 };
   const pi = nearestCave(pA.x, pA.y, -1);
   const pc = pi >= 0 ? { x: pi % cfg.cols, y: Math.floor(pi / cfg.cols) } : snapAnchor(pA);
-  S.turrets.push(mkTurret(pc.x, pc.y, BLUE, 'cannon'));
+  S.turrets.push(mkTurret(pc.x, pc.y, BLUE, starterType));
   startWave(1);
   computeFog();   // fog of war: only the home cave + fogDist is visible
 
@@ -621,7 +640,7 @@ function checkRunOver() {
       'Survived <b>' + Math.round(S.time) + 's</b> · ' +
       'Excavated <b>' + S.destroyed + '</b> · ' +
       'Red turrets destroyed <b>' + S.redKills + '</b> · ' +
-      'Coins <b>' + S.coinsCollected + '</b>';
+      'Gold <b>' + meta.gold + '</b>';
     runover.classList.remove('hidden');
   }
 }
@@ -819,7 +838,7 @@ function damageBlock(idx, dmg, color, sx, sy, vx, vy) {
   computeFog(); // the cave grew: push the fog boundary out
   spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[color]); // the block cracks: debris + ring
   if (color === BLUE && Math.random() < cfg.coinChance) {
-    S.coins.push({ x: cx + 0.5, y: cy + 0.5, state: 'idle',
+    S.coins.push({ x: cx + 0.5, y: cy + 0.5, state: 'idle', kind: 'xp',
                    phase: Math.random() * 6.283, sx: 0, sy: 0, t: 0, dead: false });
     if (S.coins.length > 800) { // safety valve: drop oldest idle coin
       const i = S.coins.findIndex(c => c.state === 'idle');
@@ -867,7 +886,10 @@ function hasTurretTypes(types) {
   return false;
 }
 function availableCards() {
-  return CARD_POOL.filter(c => !c.needs || hasTurretTypes(c.needs));
+  // Locked weapons never appear in a run's drafts.
+  return CARD_POOL.filter(c =>
+    (!c.needs || hasTurretTypes(c.needs)) &&
+    (c.kind !== 'turret' || meta.unlocks[c.type]));
 }
 function offerCards() {
   const pool = availableCards().slice();
@@ -996,13 +1018,15 @@ function update(dt) {
         t.angle = t.base;
       }
       t.cd -= dt;
-      if (t.cd <= 0) { t.cd = 1 / rateMult; fireTurret(t); }
+      // Jittered interval: a fixed cadence phase-locks to the sweep arc and
+      // keeps hitting the same spots. ±20% breaks the pattern up.
+      if (t.cd <= 0) { t.cd = (1 / rateMult) * (0.8 + Math.random() * 0.4); fireTurret(t); }
     } else if (t.type === 'rocket') {
       t.cd -= dt;
-      if (t.cd <= 0) { t.cd = TURRET.rocket.interval / rateMult; fireMissile(t); }
+      if (t.cd <= 0) { t.cd = (TURRET.rocket.interval / rateMult) * (0.8 + Math.random() * 0.4); fireMissile(t); }
     } else if (t.type === 'laser') {
       t.cd -= dt;
-      if (t.cd <= 0) { t.cd = TURRET.laser.interval / rateMult; fireLaser(t); }
+      if (t.cd <= 0) { t.cd = (TURRET.laser.interval / rateMult) * (0.8 + Math.random() * 0.4); fireLaser(t); }
     } else if (t.type === 'bloom') {
       t.cd -= dt;
       if (t.cd <= 0) { t.cd = TURRET.bloom.interval / rateMult * S.bloomMult; bloomGrowth(t); }
@@ -1094,33 +1118,42 @@ function update(dt) {
       const cx = i % cfg.cols, cy = (i / cfg.cols) | 0;
       if (coinAt(cx, cy) || Math.random() >= HARVEST_CHANCE) continue;
       if (S.coins.length >= 800) break;
-      S.coins.push({ x: cx + 0.5, y: cy + 0.5, state: 'idle',
+      S.coins.push({ x: cx + 0.5, y: cy + 0.5, state: 'idle', kind: 'gold',
                      phase: Math.random() * 6.283, sx: 0, sy: 0, t: 0, dead: false });
     }
   }
 
-  // Tapped coins zip to the top-left chip (accelerating = satisfying).
-  // The chip lives in screen space, so re-project its target every frame.
+  // Tapped pickups zip to their HUD target (accelerating = satisfying).
+  // Targets live in screen space, so re-project every frame.
   S.time += dt;
   const tgt = screenToWorld(CHIP_CX, CHIP_CY);
   const TX = tgt.x / CELL_PX, TY = tgt.y / CELL_PX;
+  const xtgt = screenToWorld(view.w / 2, 18); // XP bar, top-center
+  const XX = xtgt.x / CELL_PX, XY = xtgt.y / CELL_PX;
   for (const c of S.coins) {
     if (c.state === 'fly') {
       c.t += dt;
       const k = Math.min(1, c.t / COIN_FLY_DUR);
       const e = k * k;
-      c.x = c.sx + (TX - c.sx) * e;
-      c.y = c.sy + (TY - c.sy) * e;
+      // XP orbs fly to the XP bar; gold coins fly to the gold chip.
+      const gx = c.kind === 'gold' ? TX : XX, gy = c.kind === 'gold' ? TY : XY;
+      c.x = c.sx + (gx - c.sx) * e;
+      c.y = c.sy + (gy - c.sy) * e;
       if (k >= 1) {
         c.dead = true;
-        S.xp++;
-        S.coinsCollected++;
-        S.chipPulse = 1; // the "blurp": chip pops
-        S.floaters.push({ x: CHIP_CX + 30, y: CHIP_CY, t: 0 });
-        checkLevel();
+        if (c.kind === 'gold') {
+          S.gold++;
+          meta.gold++;
+          saveMeta();
+          S.chipPulse = 1; // the "blurp": chip pops
+          S.floaters.push({ x: CHIP_CX + 30, y: CHIP_CY, t: 0 });
+        } else {
+          S.xp++;
+          checkLevel();
+        }
       }
     } else if (c.state === 'cannon') {
-      // auto-collected: lerps into the nearest blue turret, pops gold on arrival
+      // auto-collected: lerps into the nearest blue turret, pops on arrival
       const pt = nearestBlueTurret(c.x, c.y);
       if (!pt) { c.state = 'idle'; continue; } // no turrets left: coin stays put
       c.t += dt;
@@ -1131,11 +1164,17 @@ function update(dt) {
       c.y = c.sy + (py - c.sy) * e;
       if (k >= 1) {
         c.dead = true;
-        S.xp++;
-        S.coinsCollected++;
-        S.chipPulse = 1;
-        spawnBurst(px, py, '#f5b301');
-        checkLevel();
+        if (c.kind === 'gold') {
+          S.gold++;
+          meta.gold++;
+          saveMeta();
+          S.chipPulse = 1;
+          spawnBurst(px, py, '#f5b301');
+        } else {
+          S.xp++;
+          spawnBurst(px, py, '#7dd3fc');
+          checkLevel();
+        }
       }
     }
   }
@@ -1294,11 +1333,16 @@ function render() {
     let r = 5.5;
     if (c.state === 'idle') r += Math.sin(S.time * 4 + c.phase) * 1.2;
     else r *= 1 - 0.4 * Math.min(1, c.t / COIN_FLY_DUR);
+    const isGold = c.kind === 'gold';
     ctx.beginPath(); ctx.arc(px, py, r + 2.5, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(255, 200, 60, 0.22)'; ctx.fill(); // glow
+    ctx.fillStyle = isGold ? 'rgba(255, 200, 60, 0.22)' : 'rgba(125, 211, 252, 0.25)';
+    ctx.fill(); // glow
     ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2);
-    ctx.fillStyle = '#f5b301'; ctx.fill();
-    ctx.lineWidth = 1.5; ctx.strokeStyle = '#8a5b00'; ctx.stroke();
+    ctx.fillStyle = isGold ? '#f5b301' : '#7dd3fc';
+    ctx.fill();
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = isGold ? '#8a5b00' : '#0369a1';
+    ctx.stroke();
     ctx.beginPath(); ctx.arc(px - r * 0.3, py - r * 0.3, r * 0.28, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fill(); // shine
   }
@@ -1434,7 +1478,7 @@ function render() {
   ctx.fillStyle = '#dfe5f2';
   ctx.font = 'bold 13px system-ui, sans-serif';
   ctx.textBaseline = 'middle';
-  ctx.fillText('× ' + S.coinsCollected, CHIP_CX - chw / 2 + 26, CHIP_CY + 1);
+  ctx.fillText('× ' + meta.gold, CHIP_CX - chw / 2 + 26, CHIP_CY + 1);
   ctx.restore();
   // "+1" floaters
   for (const f of S.floaters) {
@@ -1486,7 +1530,7 @@ function updateHud() {
     `<div>Fire rate: <b>${effFreq}/s</b> (×${S.freqMult.toFixed(2)}) · Damage: <b>+${S.dmgBonus}</b> · Steering: <b>×${S.steerMult.toFixed(2)}</b> · Bloom: <b>×${S.bloomMult.toFixed(2)}</b></div>` +
     `<div>Bounce chance: <b>${Math.round(S.bounceChance * 100)}%</b> · Suction every: <b>${suctionInterval().toFixed(1)}s</b></div>` +
     `<div>Projectiles alive: <b>${S.projs.length}</b> · Missiles: <b>${S.missiles.length}</b></div>` +
-    `<div>Coins: <b>${S.coins.length}</b> on field · <b>${S.coinsCollected}</b> collected</div>`;
+    `<div>Pickups: <b>${S.coins.length}</b> on field · Gold this run: <b>${S.gold}</b> · Total: <b>${meta.gold}</b></div>`;
 }
 
 // ---- Main loop ----
@@ -1590,7 +1634,6 @@ function debugGrantLevel() {
   const need = (S.level - 1 < t.length) ? t[S.level - 1] - S.xp : 100;
   if (need <= 0) return;
   S.xp += need;
-  S.coinsCollected += need; // the chip counter reflects the grant too
   S.chipPulse = 1;
   checkLevel();
   updateHud();
@@ -1643,6 +1686,66 @@ document.getElementById('d-copylink').addEventListener('click', () => {
     () => flashButton(btn, 'Copy failed'));
 });
 
+// ---- Pre-game start screen: pick a starter, unlock weapons with gold ----
+const WEAPON_DESC = {
+  cannon: 'Sweeping shots',
+  rocket: 'Homing missiles that crash-splash',
+  laser: 'Snipes the weakest visible block',
+  bloom: 'Grows coin-generating territory',
+  lantern: 'Pushes back the fog',
+};
+function renderStartScreen() {
+  document.getElementById('startgold').textContent = meta.gold;
+  const list = document.getElementById('weaponlist');
+  list.innerHTML = '';
+  for (const type of ['cannon', 'rocket', 'laser', 'bloom', 'lantern']) {
+    const unlocked = meta.unlocks[type];
+    const cost = UNLOCK_COST[type] || 0;
+    const div = document.createElement('div');
+    div.className = 'weapon' + (unlocked ? '' : ' locked') + (starterType === type ? ' selected' : '');
+    const info = document.createElement('div');
+    info.className = 'winfo';
+    const name = document.createElement('div');
+    name.className = 'wname';
+    name.textContent = TURRET[type].name;
+    const desc = document.createElement('div');
+    desc.className = 'wdesc';
+    desc.textContent = WEAPON_DESC[type] + (unlocked ? '' : ` — unlock for ${cost}g`);
+    info.appendChild(name);
+    info.appendChild(desc);
+    div.appendChild(info);
+    const btn = document.createElement('button');
+    if (unlocked) {
+      btn.textContent = starterType === type ? 'Selected' : 'Select';
+      btn.disabled = starterType === type;
+      btn.addEventListener('click', () => { starterType = type; renderStartScreen(); });
+    } else {
+      btn.textContent = `Unlock ${cost}g`;
+      btn.disabled = meta.gold < cost;
+      btn.addEventListener('click', () => {
+        if (meta.gold < cost || meta.unlocks[type]) return;
+        meta.gold -= cost;
+        meta.unlocks[type] = true;
+        starterType = type;
+        saveMeta();
+        renderStartScreen();
+      });
+    }
+    div.appendChild(btn);
+    list.appendChild(div);
+  }
+}
+document.getElementById('startbtn').addEventListener('click', () => {
+  // Locked weapons can't start a run (defensive; the UI never selects them).
+  if (!meta.unlocks[starterType]) starterType = 'cannon';
+  document.getElementById('startscreen').classList.add('hidden');
+  newGame();
+});
+
 applyUrlParams();
+loadMeta();
 newGame();
+S.paused = true; // behind the start screen until the player picks a starter
+renderStartScreen();
+document.getElementById('startscreen').classList.remove('hidden');
 requestAnimationFrame(frame);

@@ -21,21 +21,33 @@ All units must be placed on fully-revealed cells. The **Lantern** (a new
 placeable unit) sits on any visible ground — empty or terrain — and pushes
 the fog back in a radius around it.
 
-**Turrets, not cannons.** Leveling up offers 3 cards: 5 turret types
-(**Cannon** — sweeping shots; **Rocket** — homing missiles with a limited turn
-rate that weave through caves and crash-splash into walls; **Laser** — hitscan
-zaps that always snipe the weakest *visible* block; **Bloom** — Tiberium-style
-territory: every 5s it grows one increment on the nearest open *visible* cell,
-10 increments bloom it into solid blue territory with a pop-in dot animation;
-**Lantern** — clears fog around it) plus upgrades (fire rate, damage, bounce
-chance, suction time, missile steering, bloom speed). Picking a turret card
-enters **placement mode**: tap a revealed cell to deploy it (combat units and
-Blooms need open ground; Lanterns take empty or terrain). Turrets have HP and
-die. Enemy units are **disabled for now** while the early game takes shape —
-red waves, the coin jackpot, and the run-over screen are parked behind
-`ENEMIES_ENABLED`. Territory generates coins on harvest ticks. The canvas
-fills the viewport with a pan/pinch camera (1-finger drag pans, 2-finger
-pinch zooms, always crisp); new games start fully zoomed out.
+**Turrets, not cannons.** Leveling up (XP thresholds now start at 3 XP:
+`3,8,16,28,44,64,90,120,160,210`) offers 3 cards: 5 turret types
+(**Cannon** — sweeping shots with a jittered interval so the sweep doesn't
+phase-lock; **Rocket** — homing missiles with a limited turn rate that weave
+through caves and crash-splash into walls; **Laser** — hitscan zaps that always
+snipe the weakest *visible* block; **Bloom** — Tiberium-style territory: every
+5s it grows one increment on the nearest open *visible* cell, 10 increments
+bloom it into solid blue territory with a pop-in dot animation; **Lantern** —
+clears fog around it) plus upgrades (fire rate, damage, bounce chance, suction
+time, missile steering, bloom speed). Picking a turret card enters **placement
+mode**: tap a revealed cell to deploy it (combat units and Blooms need open
+ground; Lanterns take empty or terrain). Turrets have HP and die. Enemy units
+are **disabled for now** while the early game takes shape — red waves, the coin
+jackpot, and the run-over screen are parked behind `ENEMIES_ENABLED`.
+
+**Two currencies (Vampire Survivors style).** Breaking terrain drops light-blue
+**XP orbs** (tap them; they zip to the XP bar and fill it toward the next
+level). Territory fields generate **gold coins** on harvest ticks (tap them;
+they zip to the gold chip). Gold persists in `localStorage` across runs and
+buys weapon unlocks.
+
+**Pre-game screen.** Pick your starter weapon before each run. Only the Cannon
+is unlocked at first — Rocket (20g), Laser (30g), Bloom (40g), and Lantern
+(10g) cost gold to unlock. Locked weapons can't be chosen as the starter and
+never appear in level-up drafts. The canvas fills the viewport with a
+pan/pinch camera (1-finger drag pans, 2-finger pinch zooms, always crisp); new
+games start fully zoomed out.
 
 ## Run it
 
