@@ -526,13 +526,21 @@ function newGame() {
     }
   }
 
-  // Gold nuggets: 1% of rock cells hold a single nugget (no clusters).
+  // Gold nuggets: 1% of rock cells seed a cluster of 1-5 contiguous cells.
   // The gold is locked until the rock is broken.
   for (let y = 0; y < cfg.rows; y++) {
     for (let x = 0; x < cfg.cols; x++) {
       const i = y * cfg.cols + x;
-      if (cells[i] !== WHITE || rng() >= 0.01) continue;
-      goldNug[i] = 1;
+      if (cells[i] !== WHITE || goldNug[i] || rng() >= 0.01) continue;
+      const size = 1 + Math.floor(rng() * 5);
+      let cx = x, cy = y;
+      for (let s = 0; s < size; s++) {
+        const ci = cy * cfg.cols + cx;
+        if (cells[ci] === WHITE) goldNug[ci] = 1;
+        const d = Math.floor(rng() * 4);
+        cx = Math.max(0, Math.min(cfg.cols - 1, cx + [1, -1, 0, 0][d]));
+        cy = Math.max(0, Math.min(cfg.rows - 1, cy + [0, 0, 1, -1][d]));
+      }
     }
   }
 
@@ -1451,17 +1459,13 @@ function drawWhiteCell(x, y) {
   } else {
     ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX);
   }
-  // Gold nugget: deterministic flecks so the player can spot the treasure.
+  // Gold nugget: a single circle per cell so clusters read as a group
+  // of cells, not a clump within one cell.
   if (S.goldNug[i]) {
-    const h = (x * 73856093) ^ (y * 19349663);
     ctx.fillStyle = '#ffd75e';
-    for (let k = 0; k < 3; k++) {
-      const fx = x * CELL_PX + 4 + ((h >> (k * 5)) & 7);
-      const fy = y * CELL_PX + 4 + ((h >> (k * 5 + 3)) & 7);
-      ctx.beginPath();
-      ctx.arc(fx, fy, 1.8, 0, Math.PI * 2);
-      ctx.fill();
-    }
+    ctx.beginPath();
+    ctx.arc(x * CELL_PX + CELL_PX / 2, y * CELL_PX + CELL_PX / 2, 3, 0, Math.PI * 2);
+    ctx.fill();
   }
 }
 
