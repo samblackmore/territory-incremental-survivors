@@ -89,6 +89,55 @@
     cursor: pointer;
     box-shadow: 0 4px 16px rgba(0,0,0,.4);
   }
+  /* Minimap: territory coverage, top-right under the XP bar */
+  #minimap-wrap {
+    position: fixed;
+    top: 38px; right: 12px;
+    z-index: 7;
+    background: rgba(10, 13, 22, 0.85);
+    border: 1px solid #2a3145;
+    border-radius: 8px;
+    padding: 6px;
+  }
+  #minimap { display: block; background: #000; border-radius: 4px; }
+  #minimap-stats {
+    display: flex; gap: 12px; margin-top: 5px;
+    font-size: 12px; font-weight: 700; color: #fff;
+  }
+  #minimap-stats .dot {
+    display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+    margin-right: 4px; vertical-align: 0px;
+  }
+  #minimap-stats .dot.blue { background: #3b82f6; }
+  #minimap-stats .dot.red { background: #ef4444; }
+  /* Finish round: appears when the enemy bloom is fully wiped out */
+  #finishbtn {
+    position: fixed;
+    top: 44px; left: 50%; transform: translateX(-50%);
+    z-index: 8;
+    background: #ffd75e; color: #1a2138; border: none; border-radius: 999px;
+    padding: 10px 24px; font-size: 16px; font-weight: bold; cursor: pointer;
+    box-shadow: 0 4px 20px rgba(255, 215, 94, 0.4);
+  }
+  #finishbtn.hidden { display: none; }
+  /* Victory banner: the full map shows behind it */
+  #victory {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    z-index: 8; text-align: center; padding: 24px 12px 32px;
+    background: linear-gradient(180deg, transparent, rgba(5, 8, 15, 0.85));
+    pointer-events: none;
+  }
+  #victory.hidden { display: none; }
+  #victory .vtext {
+    color: #ffd75e; font-size: 28px; font-weight: bold; letter-spacing: 0.08em;
+    text-transform: uppercase; margin-bottom: 12px;
+    text-shadow: 0 2px 12px rgba(255, 215, 94, 0.4);
+  }
+  #continuebtn {
+    pointer-events: auto;
+    background: #ffd75e; color: #1a2138; border: none; border-radius: 8px;
+    padding: 12px 32px; font-size: 18px; font-weight: bold; cursor: pointer;
+  }
   /* Debug panel floats over the game: right side on desktop, bottom sheet on phones */
   #debug {
     position: fixed;
@@ -319,6 +368,18 @@
 <div id="layout">
   <button id="debug-toggle">&lt;&gt;</button>
   <button id="fsbtn" title="Fullscreen">⛶</button>
+  <div id="minimap-wrap">
+    <canvas id="minimap"></canvas>
+    <div id="minimap-stats">
+      <div><span class="dot blue"></span><span id="minimap-blue">0%</span></div>
+      <div><span class="dot red"></span><span id="minimap-red">0%</span></div>
+    </div>
+  </div>
+  <button id="finishbtn" class="hidden">Finish Round</button>
+  <div id="victory" class="hidden">
+    <div class="vtext">Round complete!</div>
+    <button id="continuebtn">Tap to continue</button>
+  </div>
   <canvas id="game"></canvas>
 
   <aside id="debug">
@@ -423,6 +484,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=61"></script>
+<script src="game.js?v=62"></script>
 </body>
 </html>

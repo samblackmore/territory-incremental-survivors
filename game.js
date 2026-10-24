@@ -85,6 +85,73 @@ const statsEl = document.getElementById('d-stats');
 const overlay = document.getElementById('levelup');
 const lvfx = document.getElementById('lvfx');
 const lvctx = lvfx ? lvfx.getContext('2d') : null;
+// Minimap: black + one pixel per red/blue bloom cell, top-right.
+const minimap = document.getElementById('minimap');
+const mmctx = minimap ? minimap.getContext('2d') : null;
+const mmBlue = document.getElementById('minimap-blue');
+const mmRed = document.getElementById('minimap-red');
+const finishbtn = document.getElementById('finishbtn');
+const victory = document.getElementById('victory');
+const continuebtn = document.getElementById('continuebtn');
+// Win condition: the red bloom spawned, and now no red bloom turret
+// survives and no red cells remain — the field is fully wiped out.
+function checkWin() {
+  if (!S || !S.redBloomSpawned || S.finished || S.runOver) return;
+  if (finishbtn && !finishbtn.classList.contains('hidden')) return; // already offered
+  for (const t of S.turrets) {
+    if (!t.dead && t.color === RED && t.type === 'bloom') return;
+  }
+  for (let i = 0; i < S.cells.length; i++) {
+    if (S.cells[i] === RED) return;
+  }
+  if (finishbtn) finishbtn.classList.remove('hidden');
+}
+if (finishbtn) {
+  finishbtn.addEventListener('click', () => {
+    // Reveal the full map: zoom all the way out, lift all fog.
+    S.finished = true;
+    S.paused = true;
+    finishbtn.classList.add('hidden');
+    resetCamera();
+    S.fog.fill(0);
+    if (victory) victory.classList.remove('hidden');
+  });
+}
+if (continuebtn) {
+  continuebtn.addEventListener('click', () => {
+    // Bank the run's gold, then back to the start screen showing the
+    // new total and the "+N" that was just added.
+    if (S && S.gold > 0) {
+      S.lastBanked = S.gold;
+      meta.gold += S.gold;
+      S.gold = 0;
+      saveMeta();
+    }
+    if (victory) victory.classList.add('hidden');
+    document.getElementById('startscreen').classList.remove('hidden');
+    renderStartScreen();
+  });
+}
+function drawMinimap() {
+  if (!mmctx || !S) return;
+  const cols = cfg.cols, rows = cfg.rows;
+  const px = 2; // px per cell
+  if (minimap.width !== cols * px) minimap.width = cols * px;
+  if (minimap.height !== rows * px) minimap.height = rows * px;
+  mmctx.fillStyle = '#000';
+  mmctx.fillRect(0, 0, minimap.width, minimap.height);
+  let blue = 0, red = 0;
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      const c = S.cells[y * cols + x];
+      if (c === BLUE) { mmctx.fillStyle = '#3b82f6'; mmctx.fillRect(x * px, y * px, px, px); blue++; }
+      else if (c === RED) { mmctx.fillStyle = '#ef4444'; mmctx.fillRect(x * px, y * px, px, px); red++; }
+    }
+  }
+  const total = cols * rows;
+  if (mmBlue) mmBlue.textContent = Math.round(blue / total * 100) + '%';
+  if (mmRed) mmRed.textContent = Math.round(red / total * 100) + '%';
+}
 // Celebration particles pouring down from the XP bar while cards show.
 const lvParticles = [];
 function stepLvParticles(dt) {
@@ -543,6 +610,9 @@ function newGame() {
     meta.gold += banked;
     saveMeta();
   }
+  // A fresh run clears any finish/victory UI from the last one.
+  if (typeof finishbtn !== 'undefined' && finishbtn) finishbtn.classList.add('hidden');
+  if (typeof victory !== 'undefined' && victory) victory.classList.add('hidden');
   readDebug();
   const seedStr = inSeed.value.trim();
   const seed = seedStr === '' ? (Math.random() * 1e9) | 0 : parseInt(seedStr, 10) || 0;
@@ -636,7 +706,9 @@ function newGame() {
   S.turrets.push(mkTurret(pc.x, pc.y, BLUE, starterType));
   S.weapons[starterType] = { level: 1, rateMult: 1, dmgBonus: 0, critChance: 0 };
   // Red Bloom: 60% chance to spawn in a distant cave (not the starter's).
-  // It grows red territory — a reason to push out and kill it.
+  // It grows red territory — a reason to push out and kill it. Wiping it
+  // out (turret + all red cells) is the round's win condition.
+  S.redBloomSpawned = false;
   if (rng() < 0.6) {
     const far = [];
     for (let y = 0; y < cfg.rows; y++) {
@@ -650,6 +722,7 @@ function newGame() {
     if (far.length) {
       const spot = far[Math.floor(rng() * far.length)];
       S.turrets.push(mkTurret(spot.x, spot.y, RED, 'bloom'));
+      S.redBloomSpawned = true;
     }
   }
   startWave(1);
@@ -798,9 +871,10 @@ function checkRunOver() {
 function fireTurret(t) {
   const speed = cfg.projSpeed / CELL_PX; // cells per second
   const w = t.color === BLUE ? S.weapons.cannon : null;
-  // Projectile count: 1 base + multishot. EVO Sprayer fires a 10-shot fan.
-  const nShots = w && w.evo ? 10 : 1 + (w && w.proj ? w.proj : 0);
-  const spread = w && w.evo ? 0.9 : 0.18; // radians between shots in the fan
+  // Projectile count from the track (1 base + multishot). EVO doesn't add
+  // a fan — it keeps the sweep and just fires far faster (see update loop).
+  const nShots = 1 + (w && w.proj ? w.proj : 0);
+  const spread = 0.18; // radians between shots in the fan
   for (let s = 0; s < nShots; s++) {
     const ang = t.angle + (s - (nShots - 1) / 2) * spread;
     const mx = t.x + 0.5 + Math.cos(ang) * 1.1;
@@ -1109,7 +1183,7 @@ function offerCards() {
       if (p.type === 'cannon' && w.level >= CANNON_MAX_LEVEL && !w.evo) {
         // Cannon maxed: offer the EVO.
         title = `Sprayer <span class="lv">EVO</span>`;
-        sub = '10-shot continuous fan';
+        sub = 'Blazing-fast sweep spray';
         el.dataset.stat = 'evo';
       } else if (w.evo || Math.random() < 0.3 && !(p.type === 'cannon' && w.level >= CANNON_MAX_LEVEL)) {
         // EVO'd cannon only offers fresh placements (no more levels).
@@ -1339,7 +1413,10 @@ function update(dt) {
       t.cd -= dt;
       // Jittered interval: a fixed cadence phase-locks to the sweep arc and
       // keeps hitting the same spots. ±20% breaks the pattern up.
-      if (t.cd <= 0) { t.cd = (1 / rateMult) * (0.8 + Math.random() * 0.4); fireTurret(t); }
+      // EVO Sprayer: same sweep, but ~12x faster — a continuous spray.
+      const w = t.color === BLUE ? S.weapons.cannon : null;
+      const evoBoost = w && w.evo ? 0.08 : 1;
+      if (t.cd <= 0) { t.cd = (1 / rateMult) * evoBoost * (0.8 + Math.random() * 0.4); fireTurret(t); }
     } else if (t.type === 'rocket') {
       t.cd -= dt;
       if (t.cd <= 0) { t.cd = (TURRET.rocket.interval / rateMult) * (0.8 + Math.random() * 0.4); fireMissile(t); }
@@ -2056,6 +2133,8 @@ function frame(now) {
   render();
   S.frame++;
   if (S.frame % 2 === 0 || S.paused) updateHud(); // XP bar stays live
+  if (S.frame % 6 === 0) drawMinimap(); // territory map, throttled
+  if (S.frame % 30 === 0) checkWin(); // win check, throttled
   stepLvParticles(dt); // celebration rain while cards show (also when paused)
   requestAnimationFrame(frame);
 }
