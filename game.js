@@ -516,7 +516,7 @@ function mkTurret(x, y, color, type) {
   const w = color === BLUE && S.weapons[type] ? S.weapons[type] : null;
   const maxhp = Math.max(1, Math.round(spec.hp * hpScale)) + (w && w.hpBonus ? w.hpBonus : 0);
   const t = { x, y, color, type, hp: maxhp, maxhp, base, angle: base, dir: 1,
-              cd: Math.random(), dead: false, coolT: 0 };
+              cd: Math.random(), dead: false, coolT: 0, burstLeft: 0, burstT: 0 };
   if (type === 'mole') {
     // Digger: burrows through rock, turning randomly, dies after N cells.
     t.moleDir = Math.floor(Math.random() * 4);
@@ -868,39 +868,36 @@ function checkRunOver() {
 }
 
 // ---- Firing ----
+// Fires ONE cannon shot along the current sweep angle. Multishot is a
+// staggered burst (see the cannon update: shoot, brief pause, shoot),
+// not a simultaneous fan — the sweep itself spreads the shots.
 function fireTurret(t) {
   const speed = cfg.projSpeed / CELL_PX; // cells per second
   const w = t.color === BLUE ? S.weapons.cannon : null;
-  // Projectile count from the track (1 base + multishot). EVO doesn't add
-  // a fan — it keeps the sweep and just fires far faster (see update loop).
-  const nShots = 1 + (w && w.proj ? w.proj : 0);
-  const spread = 0.18; // radians between shots in the fan
-  for (let s = 0; s < nShots; s++) {
-    const ang = t.angle + (s - (nShots - 1) / 2) * spread;
-    const mx = t.x + 0.5 + Math.cos(ang) * 1.1;
-    const my = t.y + 0.5 + Math.sin(ang) * 1.1;
-    let dmg = TURRET.cannon.dmg + S.dmgBonus + weaponDmgBonus(t);
-    let crit = false;
-    if (w && w.critChance > 0 && Math.random() < w.critChance) {
-      dmg *= 2 + Math.floor(Math.random() * 2); // 2x or 3x, whole numbers
-      crit = true;
-    } else {
-      // Damage variance (non-crit): sometimes +1, rarely +2 over base.
-      const r = Math.random();
-      if (r < 0.05) dmg += 2;
-      else if (r < 0.25) dmg += 1;
-    }
-    S.projs.push({
-      x: mx, y: my,
-      vx: Math.cos(ang) * speed,
-      vy: Math.sin(ang) * speed,
-      color: t.color,
-      dmg, crit,
-      bounces: 0,
-      dead: false,
-    });
+  const mx = t.x + 0.5 + Math.cos(t.angle) * 1.1;
+  const my = t.y + 0.5 + Math.sin(t.angle) * 1.1;
+  let dmg = TURRET.cannon.dmg + S.dmgBonus + weaponDmgBonus(t);
+  let crit = false;
+  if (w && w.critChance > 0 && Math.random() < w.critChance) {
+    dmg *= 2 + Math.floor(Math.random() * 2); // 2x or 3x, whole numbers
+    crit = true;
+  } else {
+    // Damage variance (non-crit): sometimes +1, rarely +2 over base.
+    const r = Math.random();
+    if (r < 0.05) dmg += 2;
+    else if (r < 0.25) dmg += 1;
   }
+  S.projs.push({
+    x: mx, y: my,
+    vx: Math.cos(t.angle) * speed,
+    vy: Math.sin(t.angle) * speed,
+    color: t.color,
+    dmg, crit,
+    bounces: 0,
+    dead: false,
+  });
 }
+const BURST_GAP = 0.09; // seconds between staggered multishot rounds
 // Rocket: launches a homing missile. It steers toward the nearest enemy
 // turret but can only turn STEER_RATE rad/s — momentum carries it into walls,
 // where it crashes and splash-digs the 3x3.
@@ -1416,7 +1413,20 @@ function update(dt) {
       // EVO Sprayer: same sweep, but ~12x faster — a continuous spray.
       const w = t.color === BLUE ? S.weapons.cannon : null;
       const evoBoost = w && w.evo ? 0.08 : 1;
-      if (t.cd <= 0) { t.cd = (1 / rateMult) * evoBoost * (0.8 + Math.random() * 0.4); fireTurret(t); }
+      // Staggered burst: multishot fires one round, pauses a split second,
+      // fires the next — the sweep spreads them, not a simultaneous fan.
+      if (t.burstLeft > 0) {
+        t.burstT -= dt;
+        if (t.burstT <= 0) {
+          fireTurret(t);
+          t.burstLeft--;
+          t.burstT = BURST_GAP;
+        }
+      } else if (t.cd <= 0) {
+        t.cd = (1 / rateMult) * evoBoost * (0.8 + Math.random() * 0.4);
+        t.burstLeft = 1 + (w && w.proj ? w.proj : 0);
+        t.burstT = 0; // first round fires immediately
+      }
     } else if (t.type === 'rocket') {
       t.cd -= dt;
       if (t.cd <= 0) { t.cd = (TURRET.rocket.interval / rateMult) * (0.8 + Math.random() * 0.4); fireMissile(t); }
@@ -2072,7 +2082,18 @@ function render() {
     ctx.fillStyle = '#dfe5f2';
     ctx.font = 'bold 12px system-ui, sans-serif';
     ctx.textBaseline = 'middle';
-    ctx.fillText('Lv ' + w.level, 34, iy + 1);
+    if (type === 'cannon') {
+      // Cannon is capped at 8: show level dots like the passive pips.
+      // EVO fills them all gold (level 8 = maxed).
+      for (let i = 0; i < CANNON_MAX_LEVEL; i++) {
+        ctx.beginPath();
+        ctx.arc(34 + i * 7.5, iy, 2.5, 0, Math.PI * 2);
+        ctx.fillStyle = i < w.level ? '#ffd75e' : '#2a3145';
+        ctx.fill();
+      }
+    } else {
+      ctx.fillText('Lv ' + w.level, 34, iy + 1);
+    }
     ppy += bh + 6;
   }
   // "+1" floaters
