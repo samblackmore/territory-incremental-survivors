@@ -2182,6 +2182,15 @@ if (debugToggle && debugPanel) {
   if (window.innerWidth < 720) debugPanel.classList.add('collapsed'); // start tucked away on phones
 }
 
+// ---- Fullscreen: hide the browser UI ----
+const fsbtn = document.getElementById('fsbtn');
+if (fsbtn) {
+  fsbtn.addEventListener('click', () => {
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    else document.documentElement.requestFullscreen().catch(() => {});
+  });
+}
+
 // ---- Share link: encode the whole debug config into the URL ----
 function applyUrlParams() {
   if (typeof location === 'undefined' || !location.search) return;

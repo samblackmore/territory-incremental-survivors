@@ -76,6 +76,19 @@
     cursor: pointer;
     box-shadow: 0 4px 16px rgba(0,0,0,.4);
   }
+  #fsbtn {
+    position: fixed;
+    right: 12px; bottom: 58px;
+    z-index: 7;
+    padding: 10px 14px;
+    background: var(--panel);
+    border: 1px solid #2a3145;
+    border-radius: 999px;
+    color: var(--accent);
+    font-size: 16px;
+    cursor: pointer;
+    box-shadow: 0 4px 16px rgba(0,0,0,.4);
+  }
   /* Debug panel floats over the game: right side on desktop, bottom sheet on phones */
   #debug {
     position: fixed;
@@ -305,6 +318,7 @@
 
 <div id="layout">
   <button id="debug-toggle">&lt;&gt;</button>
+  <button id="fsbtn" title="Fullscreen">⛶</button>
   <canvas id="game"></canvas>
 
   <aside id="debug">
@@ -409,6 +423,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=60"></script>
+<script src="game.js?v=61"></script>
 </body>
 </html>
