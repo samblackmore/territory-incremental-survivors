@@ -83,6 +83,38 @@ const xpfill = document.getElementById('xpfill');
 const xplabel = document.getElementById('xplabel');
 const statsEl = document.getElementById('d-stats');
 const overlay = document.getElementById('levelup');
+const lvfx = document.getElementById('lvfx');
+const lvctx = lvfx ? lvfx.getContext('2d') : null;
+// Celebration particles pouring down from the XP bar while cards show.
+const lvParticles = [];
+function stepLvParticles(dt) {
+  if (!lvctx || overlay.classList.contains('hidden')) { lvParticles.length = 0; return; }
+  const w = lvfx.width = (typeof innerWidth !== 'undefined' ? innerWidth : 800),
+        h = lvfx.height = (typeof innerHeight !== 'undefined' ? innerHeight : 600);
+  // Spawn: ~90/s from the XP bar strip at the top.
+  const spawn = Math.round(90 * dt);
+  for (let k = 0; k < spawn; k++) {
+    lvParticles.push({
+      x: Math.random() * w, y: 30 + Math.random() * 8,
+      vx: (Math.random() - 0.5) * 40, vy: 30 + Math.random() * 60,
+      r: 1.5 + Math.random() * 2.5, life: 0, max: 1.2 + Math.random() * 0.8,
+      col: ['#5aa2ff', '#7dd3fc', '#2f6fe4', '#a5d8ff'][Math.floor(Math.random() * 4)],
+    });
+  }
+  lvctx.clearRect(0, 0, w, h);
+  for (let i = lvParticles.length - 1; i >= 0; i--) {
+    const p = lvParticles[i];
+    p.life += dt;
+    if (p.life >= p.max || p.y > h) { lvParticles.splice(i, 1); continue; }
+    p.vy += 120 * dt; // gravity
+    p.x += p.vx * dt; p.y += p.vy * dt;
+    const a = 1 - p.life / p.max;
+    lvctx.globalAlpha = a;
+    lvctx.fillStyle = p.col;
+    lvctx.beginPath(); lvctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); lvctx.fill();
+  }
+  lvctx.globalAlpha = 1;
+}
 const placebanner = document.getElementById('placebanner');
 const wavebanner = document.getElementById('wavebanner');
 const runover = document.getElementById('runover');
@@ -1122,6 +1154,9 @@ function offerCards() {
 document.querySelectorAll('.card').forEach(card => {
   card.addEventListener('click', () => {
     const kind = card.dataset.kind || 'freq';
+    // Choosing an upgrade resets the XP bar to zero (it stayed full
+    // while the cards were showing).
+    S.xp = 0; S.xpShown = 0;
     if (kind === 'turret') {
       const type = card.dataset.type;
       const w = S.weapons[type];
@@ -1274,7 +1309,8 @@ function update(dt) {
   if (S.awaitingLevel && S.xpShown >= xpNeed()) {
     S.awaitingLevel = false;
     S.level++;
-    S.xp = 0; S.xpShown = 0; // reset for the next level
+    // XP stays full while the cards show (so you see what caused the
+    // level-up); it resets to zero only when you pick a card.
     S.pending++;
     S.paused = true;
     offerCards();
@@ -2014,6 +2050,7 @@ function frame(now) {
   render();
   S.frame++;
   if (S.frame % 2 === 0 || S.paused) updateHud(); // XP bar stays live
+  stepLvParticles(dt); // celebration rain while cards show (also when paused)
   requestAnimationFrame(frame);
 }
 

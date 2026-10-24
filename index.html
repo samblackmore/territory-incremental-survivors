@@ -26,11 +26,12 @@
     position: fixed; inset: 0; /* the game owns the viewport; nothing scrolls */
     overscroll-behavior: none;
   }
-  /* Vampire-survivors-esque XP bar across the top */
+  /* Vampire-survivors-esque XP bar across the top — above the level-up
+     dim so it stays visible (and full) while cards show */
   #xpbar {
     position: fixed;
     top: 0; left: 0; right: 0;
-    z-index: 5;
+    z-index: 15;
     height: 30px;
     background: #0b0e16;
     border-bottom: 1px solid #2a3145;
@@ -162,6 +163,13 @@
     z-index: 10;
   }
   #levelup.hidden { display: none; }
+  /* Celebration particles pouring from the XP bar, behind the cards */
+  #lvfx {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+  }
+  #levelup .cards { position: relative; z-index: 1; }
   /* Pre-game start screen */
   #startscreen {
     position: fixed; inset: 0;
@@ -381,6 +389,7 @@
   <button id="clearbtn">Clear save</button>
 </div>
 <div id="levelup" class="hidden">
+  <canvas id="lvfx"></canvas>
   <div class="cards">
     <h2>Level up! Choose an upgrade</h2>
     <div class="cardrow">
@@ -400,6 +409,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=55"></script>
+<script src="game.js?v=56"></script>
 </body>
 </html>
