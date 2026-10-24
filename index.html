@@ -211,6 +211,10 @@
     background: #ffd75e; color: #1a2138; border: none; border-radius: 8px;
     padding: 12px 36px; font-size: 18px; font-weight: bold; cursor: pointer;
   }
+  #clearbtn {
+    background: none; color: var(--muted); border: none; cursor: pointer;
+    font-size: 13px; margin-top: 14px; text-decoration: underline;
+  }
   .cards { text-align: center; }
   .cards h2 {
     color: #ffd75e;
@@ -372,6 +376,7 @@
     <div id="bankedmsg" class="hidden" style="color: #7dd3fc; margin-bottom: 12px;"></div>
     <div id="weaponlist"></div>
     <button id="startbtn">Start Run</button>
+    <div><button id="clearbtn">Clear save</button></div>
   </div>
 </div>
 <div id="levelup" class="hidden">
@@ -394,6 +399,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=53"></script>
+<script src="game.js?v=54"></script>
 </body>
 </html>

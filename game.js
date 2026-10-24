@@ -2238,6 +2238,14 @@ document.getElementById('startbtn').addEventListener('click', () => {
   document.getElementById('startscreen').classList.add('hidden');
   newGame();
 });
+document.getElementById('clearbtn').addEventListener('click', () => {
+  // Wipe the meta save (gold + unlocks) back to a fresh player.
+  try { localStorage.removeItem('tis_meta'); } catch (e) { /* ignore */ }
+  meta.gold = 0;
+  for (const k of Object.keys(meta.unlocks)) meta.unlocks[k] = (k === 'cannon');
+  starterType = 'cannon';
+  renderStartScreen();
+});
 
 applyUrlParams();
 loadMeta();
