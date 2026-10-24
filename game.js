@@ -1636,7 +1636,7 @@ function drawWhiteCell(x, y) {
 // ---- Render ----
 function render() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // draw in CSS px: crisp on hidpi
-  ctx.fillStyle = '#0b0e16';
+  ctx.fillStyle = '#000'; // void beyond the map matches the fog (no seam)
   ctx.fillRect(0, 0, view.w, view.h);
   // ---- world pass: everything through the camera ----
   ctx.save();
