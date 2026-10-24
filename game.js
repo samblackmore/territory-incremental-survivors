@@ -168,10 +168,12 @@ function clampCamera() {
   cam.zoom = Math.min(Math.max(cam.zoom, mz), mz * 8);
   const hw = view.w / cam.zoom / 2, hh = view.h / cam.zoom / 2;
   const W = cfg.cols * CELL_PX, H = cfg.rows * CELL_PX;
-  const pad = 2 * CELL_PX;
+  // No slack: the view's edge stops exactly at the map's edge, so you
+  // never see void past the world (bars top/bottom on portrait are the
+  // map itself being shorter than the screen, not overshoot).
   // When the view is wider/taller than the map, pin to center instead of sliding
-  cam.x = hw * 2 >= W ? W / 2 : Math.min(Math.max(cam.x, hw - pad), W - hw + pad);
-  cam.y = hh * 2 >= H ? H / 2 : Math.min(Math.max(cam.y, hh - pad), H - hh + pad);
+  cam.x = hw * 2 >= W ? W / 2 : Math.min(Math.max(cam.x, hw), W - hw);
+  cam.y = hh * 2 >= H ? H / 2 : Math.min(Math.max(cam.y, hh), H - hh);
 }
 function screenToWorld(sx, sy) {
   return { x: (sx - view.w / 2) / cam.zoom + cam.x,
