@@ -22,6 +22,19 @@ const GATHER_BASE_RANGE = 6;         // pickup pull range in cells
 const GATHER_RANGE_PER_LEVEL = 2;    // +range per Gather level
 const GATHER_COOLDOWN = 6;           // seconds between pulls
 const GATHER_FLASH_DUR = 1.5;        // range ring flash duration on pull (s)
+// Cannon hand-designed 8-level track (VS-style: predictable, no random rolls).
+// Index 0 = L1 base (unused); index N = upgrade from LN to LN+1.
+const CANNON_TRACK = [
+  null,
+  { dmg: 1 },                 // L2: +1 damage
+  { proj: 1 },                // L3: +1 projectile
+  { proj: 1, rate: 0.25 },    // L4: +1 projectile, +25% rate
+  { dmg: 1 },                 // L5: +1 damage
+  { proj: 1 },                // L6: +1 projectile
+  { rate: 0.25, crit: 0.10 }, // L7: +25% rate, +10% crit
+  { proj: 1, dmg: 1 },        // L8: +1 projectile, +1 damage
+];
+const CANNON_MAX_LEVEL = 8;
 // Shared icons (inline SVG) for cards — matching the canvas badge shapes.
 const ICONS = {
   cannon: '<svg viewBox="0 0 24 24" width="36" height="36"><polygon points="20,6 8,18 20,18" fill="#3b82f6"/></svg>',
@@ -32,6 +45,7 @@ const ICONS = {
   gather: '<svg viewBox="0 0 24 24" width="36" height="36"><path d="M7,6 A5,5 0 0,0 17,6" stroke="#3b82f6" stroke-width="2.5" fill="none"/><circle cx="7" cy="15.5" r="1.8" fill="#3b82f6"/><circle cx="17" cy="15.5" r="1.8" fill="#3b82f6"/><circle cx="12" cy="12" r="2" fill="#3b82f6"/></svg>',
   bounce: '<svg viewBox="0 0 24 24" width="36" height="36"><polyline points="5,17 9,7 13,17 17,7" stroke="#fb923c" stroke-width="2" fill="none"/></svg>',
   steer: '<svg viewBox="0 0 24 24" width="36" height="36"><polygon points="20,12 12,8 12,16" fill="#3b82f6"/><rect x="6" y="9.5" width="7" height="5" fill="#3b82f6"/></svg>',
+  mole: '<svg viewBox="0 0 24 24" width="36" height="36"><ellipse cx="12" cy="14" rx="7" ry="5" fill="#8b5a2b"/><circle cx="9" cy="12" r="1.2" fill="#1a2138"/><circle cx="15" cy="12" r="1.2" fill="#1a2138"/><polygon points="12,16 10,19 14,19" fill="#d4a574"/></svg>',
 };
 const TURRET = {
   cannon: { name: 'Cannon', hp: 8, interval: 1.0, dmg: 1 },
@@ -40,7 +54,11 @@ const TURRET = {
   bloom:  { name: 'Bloom',  hp: 4, interval: GROW_INTERVAL, dmg: 0 },
   lantern:{ name: 'Lantern',hp: 4, interval: 0, dmg: 0 }, // pure vision, no firing
   gather: { name: 'Gather', hp: 5, interval: GATHER_COOLDOWN, dmg: 0 }, // pulls pickups in range
+  mole:   { name: 'Mole',   hp: 6, interval: 1.0, dmg: 2 }, // digs through rock, then dies
 };
+const MOLE_LIFETIME_MIN = 10;      // cells dug before dying (min)
+const MOLE_LIFETIME_MAX = 20;      // ... (max)
+const MOLE_TURN_EVERY = 3;         // cells before random turn
 const COIN_FLY_DUR = 0.45;           // seconds for a tapped coin to zip to the corner
 const RING_DUR = 0.3;                // conversion shockwave ring lifetime (s)
 const CHIP_CX = 41, CHIP_CY = 48;    // coin-counter chip center, in screen (CSS) px
@@ -395,8 +413,16 @@ function mkTurret(x, y, color, type) {
   const hpScale = color === RED ? 1 + 0.2 * (S.wave - 1) : 1;
   const w = color === BLUE && S.weapons[type] ? S.weapons[type] : null;
   const maxhp = Math.max(1, Math.round(spec.hp * hpScale)) + (w && w.hpBonus ? w.hpBonus : 0);
-  return { x, y, color, type, hp: maxhp, maxhp, base, angle: base, dir: 1,
-           cd: Math.random(), dead: false, coolT: 0 };
+  const t = { x, y, color, type, hp: maxhp, maxhp, base, angle: base, dir: 1,
+              cd: Math.random(), dead: false, coolT: 0 };
+  if (type === 'mole') {
+    // Digger: burrows through rock, turning randomly, dies after N cells.
+    t.moleDir = Math.floor(Math.random() * 4);
+    t.dug = 0;
+    t.lifetime = MOLE_LIFETIME_MIN + Math.floor(Math.random() * (MOLE_LIFETIME_MAX - MOLE_LIFETIME_MIN + 1));
+    t.digT = 0;
+  }
+  return t;
 }
 // Gather pull range in cells, from its weapon level.
 function gatherRange() {
@@ -736,29 +762,35 @@ function checkRunOver() {
 // ---- Firing ----
 function fireTurret(t) {
   const speed = cfg.projSpeed / CELL_PX; // cells per second
-  const mx = t.x + 0.5 + Math.cos(t.angle) * 1.1;
-  const my = t.y + 0.5 + Math.sin(t.angle) * 1.1;
-  let dmg = TURRET.cannon.dmg + S.dmgBonus + weaponDmgBonus(t);
-  let crit = false;
   const w = t.color === BLUE ? S.weapons.cannon : null;
-  if (w && w.critChance > 0 && Math.random() < w.critChance) {
-    dmg *= 2 + Math.floor(Math.random() * 2); // 2x or 3x, whole numbers
-    crit = true;
-  } else {
-    // Damage variance (non-crit): sometimes +1, rarely +2 over base.
-    const r = Math.random();
-    if (r < 0.05) dmg += 2;
-    else if (r < 0.25) dmg += 1;
+  // Projectile count: 1 base + multishot. EVO Sprayer fires a 10-shot fan.
+  const nShots = w && w.evo ? 10 : 1 + (w && w.proj ? w.proj : 0);
+  const spread = w && w.evo ? 0.9 : 0.18; // radians between shots in the fan
+  for (let s = 0; s < nShots; s++) {
+    const ang = t.angle + (s - (nShots - 1) / 2) * spread;
+    const mx = t.x + 0.5 + Math.cos(ang) * 1.1;
+    const my = t.y + 0.5 + Math.sin(ang) * 1.1;
+    let dmg = TURRET.cannon.dmg + S.dmgBonus + weaponDmgBonus(t);
+    let crit = false;
+    if (w && w.critChance > 0 && Math.random() < w.critChance) {
+      dmg *= 2 + Math.floor(Math.random() * 2); // 2x or 3x, whole numbers
+      crit = true;
+    } else {
+      // Damage variance (non-crit): sometimes +1, rarely +2 over base.
+      const r = Math.random();
+      if (r < 0.05) dmg += 2;
+      else if (r < 0.25) dmg += 1;
+    }
+    S.projs.push({
+      x: mx, y: my,
+      vx: Math.cos(ang) * speed,
+      vy: Math.sin(ang) * speed,
+      color: t.color,
+      dmg, crit,
+      bounces: 0,
+      dead: false,
+    });
   }
-  S.projs.push({
-    x: mx, y: my,
-    vx: Math.cos(t.angle) * speed,
-    vy: Math.sin(t.angle) * speed,
-    color: t.color,
-    dmg, crit,
-    bounces: 0,
-    dead: false,
-  });
 }
 // Rocket: launches a homing missile. It steers toward the nearest enemy
 // turret but can only turn STEER_RATE rad/s — momentum carries it into walls,
@@ -985,6 +1017,7 @@ const CARD_POOL = [
   { kind: 'turret', type: 'bloom', title: 'Bloom', icon: ICONS.bloom, sub: 'Grows territory that harvests gold coins.' },
   { kind: 'turret', type: 'lantern', title: 'Lantern', icon: ICONS.lantern, sub: 'Pushes back the fog of war.' },
   { kind: 'turret', type: 'gather', title: 'Gather', icon: ICONS.gather, sub: 'Pulls in nearby pickups.' },
+  { kind: 'turret', type: 'mole', title: 'Mole', icon: ICONS.mole, sub: 'Digs tunnels through rock.' },
   // (no global fire-rate / damage cards — weapon levels are the single
   // linear upgrade track: each level is +10% rate, +1 damage, or +5% crit)
   { kind: 'passive', passive: 'bounce', title: 'Bounce', icon: ICONS.bounce, sub: 'Shots ricochet off rock.', needs: ['cannon'] },
@@ -1003,7 +1036,7 @@ function availableCards() {
   // until maxed (level 8); the obtain (level 1) is how you get them.
   return CARD_POOL.filter(c =>
     (!c.needs || hasTurretTypes(c.needs)) &&
-    (c.kind !== 'turret' || c.type === 'bloom' || c.type === 'gather' || meta.unlocks[c.type]) &&
+    (c.kind !== 'turret' || c.type === 'bloom' || c.type === 'gather' || c.type === 'mole' || meta.unlocks[c.type]) &&
     (c.kind !== 'passive' || S.passives[c.passive] < 8));
 }
 function offerCards() {
@@ -1036,33 +1069,45 @@ function offerCards() {
       // Owned weapon: usually a level-up, sometimes a fresh placement
       // (so you can field a second cannon, not just a stronger one).
       const w = S.weapons[p.type];
-      if (Math.random() < 0.3) {
+      if (p.type === 'cannon' && w.level >= CANNON_MAX_LEVEL && !w.evo) {
+        // Cannon maxed: offer the EVO.
+        title = `Sprayer <span class="lv">EVO</span>`;
+        sub = '10-shot continuous fan';
+        el.dataset.stat = 'evo';
+      } else if (w.evo || Math.random() < 0.3 && !(p.type === 'cannon' && w.level >= CANNON_MAX_LEVEL)) {
+        // EVO'd cannon only offers fresh placements (no more levels).
         title = p.title;
-        sub = 'New turret';
+        sub = w.evo ? 'New sprayer' : 'New turret';
         el.dataset.stat = 'place';
       } else {
-        // Level-up: roll the stat now so the card shows exactly what
-        // you'll get — "Cannon Lv2 / +20% FIRE RATE". Stats fit the weapon:
-        // Bloom grows faster, Lantern gets tougher.
+        // Level-up: for Cannon, follow the hand-designed track.
+        // Other weapons roll their stat.
         title = `${p.title} <span class="lv">Lv${w.level + 1}</span>`;
         let stat;
-        if (p.type === 'bloom') {
+        if (p.type === 'cannon') {
+          const up = CANNON_TRACK[w.level]; // w.level is current, up is next
+          const parts = [];
+          if (up.dmg) { stat = 'dmg'; parts.push(`+${up.dmg} damage`); }
+          if (up.proj) { stat = stat ? stat + '+proj' : 'proj'; parts.push(`+${up.proj} projectile`); }
+          if (up.rate) { stat = stat ? stat + '+rate' : 'rate'; parts.push(`+${Math.round(up.rate * 100)}% fire rate`); }
+          if (up.crit) { stat = stat ? stat + '+crit' : 'crit'; parts.push(`+${Math.round(up.crit * 100)}% crit`); }
+          sub = parts.join(', ');
+          el.dataset.stat = 'track';
+          el.dataset.trackIdx = w.level; // index into CANNON_TRACK
+        } else if (p.type === 'bloom') {
           stat = 'rate'; sub = '+20% growth speed';
         } else if (p.type === 'lantern') {
           stat = 'hp'; sub = '+2 max HP';
         } else if (p.type === 'gather') {
           if (Math.random() < 0.5) { stat = 'range'; sub = `+${GATHER_RANGE_PER_LEVEL} pickup range`; }
           else { stat = 'count'; sub = '+1 pickup per pull'; }
-        } else if (p.type === 'cannon') {
-          const roll = Math.random();
-          if (roll < 1 / 3) { stat = 'rate'; sub = '+20% fire rate'; }
-          else if (roll < 2 / 3) { stat = 'dmg'; sub = '+1 damage'; }
-          else { stat = 'crit'; sub = '+5% crit chance'; }
+        } else if (p.type === 'mole') {
+          stat = 'dmg'; sub = '+1 dig damage';
         } else {
           if (Math.random() < 0.5) { stat = 'rate'; sub = '+20% fire rate'; }
           else { stat = 'dmg'; sub = '+1 damage'; }
         }
-        el.dataset.stat = stat;
+        if (p.type !== 'cannon') el.dataset.stat = stat;
       }
     }
     el.innerHTML = icon + newTag + '<b>' + title + '</b><span>' + sub + '</span>';
@@ -1079,19 +1124,32 @@ document.querySelectorAll('.card').forEach(card => {
       const w = S.weapons[type];
       if (w && card.dataset.stat !== 'place') {
         // Owned: apply the level-up the card promised (rolled at offer time).
-        w.level++;
         const stat = card.dataset.stat || 'dmg';
-        if (stat === 'rate') w.rateMult *= 1.2;
-        else if (stat === 'crit') w.critChance = Math.min(1, (w.critChance || 0) + 0.05);
-        else if (stat === 'hp') {
-          w.hpBonus = (w.hpBonus || 0) + 2;
-          for (const t of S.turrets) {
-            if (!t.dead && t.color === BLUE && t.type === type) { t.maxhp += 2; t.hp += 2; }
+        if (stat === 'evo') {
+          // Cannon EVO: becomes the Sprayer.
+          w.evo = true;
+        } else if (stat === 'track') {
+          // Cannon hand-designed track.
+          const up = CANNON_TRACK[parseInt(card.dataset.trackIdx, 10)];
+          w.level++;
+          if (up.dmg) w.dmgBonus += up.dmg;
+          if (up.proj) w.proj = (w.proj || 0) + up.proj;
+          if (up.rate) w.rateMult *= (1 + up.rate);
+          if (up.crit) w.critChance = Math.min(1, (w.critChance || 0) + up.crit);
+        } else {
+          w.level++;
+          if (stat === 'rate') w.rateMult *= 1.2;
+          else if (stat === 'crit') w.critChance = Math.min(1, (w.critChance || 0) + 0.05);
+          else if (stat === 'hp') {
+            w.hpBonus = (w.hpBonus || 0) + 2;
+            for (const t of S.turrets) {
+              if (!t.dead && t.color === BLUE && t.type === type) { t.maxhp += 2; t.hp += 2; }
+            }
           }
+          else if (stat === 'range') { /* range derives from w.level via gatherRange() */ }
+          else if (stat === 'count') { w.count = (w.count || 1) + 1; }
+          else w.dmgBonus += 1;
         }
-        else if (stat === 'range') { /* range derives from w.level via gatherRange() */ }
-        else if (stat === 'count') { w.count = (w.count || 1) + 1; }
-        else w.dmgBonus += 1;
         S.pending--;
         if (S.pending <= 0) {
           S.pending = 0;
@@ -1250,6 +1308,36 @@ function update(dt) {
       if (t.cd <= 0) { t.cd = TURRET.bloom.interval / rateMult * S.bloomMult; bloomGrowth(t); }
     } else if (t.type === 'lantern') {
       // Lanterns don't fire — they just hold back the fog.
+    } else if (t.type === 'mole') {
+      // Digger: chews through rock in its direction, turns randomly,
+      // dies after its lifetime (cells dug).
+      t.digT += dt;
+      if (t.digT >= TURRET.mole.interval) {
+        t.digT = 0;
+        const dirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+        const [dx, dy] = dirs[t.moleDir];
+        const nx = t.x + dx, ny = t.y + dy;
+        if (nx < 0 || ny < 0 || nx >= cfg.cols || ny >= cfg.rows) {
+          t.moleDir = Math.floor(Math.random() * 4); // edge: turn
+        } else {
+          const ni = ny * cfg.cols + nx;
+          if (S.cells[ni] === WHITE) {
+            // Dig: damage the rock. If it breaks, move in.
+            const w = S.weapons.mole;
+            const dmg = TURRET.mole.dmg + (w ? w.dmgBonus : 0);
+            const broken = damageBlock(ni, dmg, t.color, t.x + 0.5, t.y + 0.5, 0, 0, false);
+            if (broken) {
+              t.x = nx; t.y = ny;
+              t.dug++;
+              if (t.dug >= t.lifetime) { t.dead = true; continue; }
+              if (t.dug % MOLE_TURN_EVERY === 0) t.moleDir = Math.floor(Math.random() * 4);
+            }
+          } else {
+            // Not rock: turn to find something to dig.
+            t.moleDir = Math.floor(Math.random() * 4);
+          }
+        }
+      }
     }
   }
   S.turrets = S.turrets.filter(t => !t.dead);
@@ -1666,6 +1754,14 @@ function render() {
       ctx.beginPath(); ctx.arc(-5.5, 4.5, 2, 0, Math.PI * 2); ctx.fill();
       ctx.beginPath(); ctx.arc(5.5, 4.5, 2, 0, Math.PI * 2); ctx.fill();
       ctx.beginPath(); ctx.arc(0, 0, 2.5, 0, Math.PI * 2); ctx.fill(); // core
+    } else if (t.type === 'mole') { // a mole: brown body, snout, eyes
+      ctx.fillStyle = '#8b5a2b';
+      ctx.beginPath(); ctx.ellipse(0, 2, 7, 5, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#d4a574';
+      ctx.beginPath(); ctx.arc(0, -2, 3, 0, Math.PI * 2); ctx.fill(); // snout
+      ctx.fillStyle = '#1a2138';
+      ctx.beginPath(); ctx.arc(-3, 0, 1.2, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(3, 0, 1.2, 0, Math.PI * 2); ctx.fill();
     } else { // lantern: a little glowing lantern
       ctx.strokeStyle = col;
       ctx.fillStyle = col;
@@ -1816,7 +1912,7 @@ function render() {
     ppy += bh + 6;
   }
   // Weapon badges: icon + level number (levels go to 50+, so no pips).
-  for (const type of ['cannon', 'rocket', 'laser', 'bloom', 'lantern', 'gather']) {
+  for (const type of ['cannon', 'rocket', 'laser', 'bloom', 'lantern', 'gather', 'mole']) {
     const w = S.weapons[type];
     if (!w) continue;
     const bw = 96, bh = 20;
@@ -1842,6 +1938,11 @@ function render() {
       ctx.beginPath(); ctx.arc(20, iy, 5, Math.PI * 0.15, Math.PI * 0.85, true); ctx.stroke();
       ctx.beginPath(); ctx.arc(15.5, iy + 3.5, 1.8, 0, Math.PI * 2); ctx.fill();
       ctx.beginPath(); ctx.arc(24.5, iy + 3.5, 1.8, 0, Math.PI * 2); ctx.fill();
+    } else if (type === 'mole') {
+      ctx.fillStyle = '#8b5a2b';
+      ctx.beginPath(); ctx.ellipse(20, iy + 1, 5, 3.5, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#d4a574';
+      ctx.beginPath(); ctx.arc(20, iy - 1.5, 2, 0, Math.PI * 2); ctx.fill();
     } else { // lantern
       ctx.lineWidth = 1.5;
       ctx.strokeRect(15, iy - 6, 10, 12);
