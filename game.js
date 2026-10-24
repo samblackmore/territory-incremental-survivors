@@ -2217,7 +2217,7 @@ function renderStartScreen() {
       btn.addEventListener('click', () => { starterType = type; renderStartScreen(); });
     } else {
       btn.className = 'unlock';
-      btn.textContent = `Unlock ${cost}g`;
+      btn.innerHTML = `${cost}<span class="coin"></span>`;
       btn.disabled = meta.gold < cost;
       btn.addEventListener('click', () => {
         if (meta.gold < cost || meta.unlocks[type]) return;
