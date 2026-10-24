@@ -1156,7 +1156,7 @@ document.querySelectorAll('.card').forEach(card => {
     const kind = card.dataset.kind || 'freq';
     // Choosing an upgrade resets the XP bar to zero (it stayed full
     // while the cards were showing).
-    S.xp = 0; S.xpShown = 0;
+    S.xp = 0; S.xpShown = 0; S.levelUpNeed = 0;
     if (kind === 'turret') {
       const type = card.dataset.type;
       const w = S.weapons[type];
@@ -1308,6 +1308,8 @@ function update(dt) {
   if (!S.awaitingLevel && S.xp >= xpNeed()) S.awaitingLevel = true;
   if (S.awaitingLevel && S.xpShown >= xpNeed()) {
     S.awaitingLevel = false;
+    S.levelUpNeed = xpNeed(); // freeze the threshold just met — the bar
+    // must read full (3/3) while cards show, not 3/4 against the new level
     S.level++;
     // XP stays full while the cards show (so you see what caused the
     // level-up); it resets to zero only when you pick a card.
@@ -2009,7 +2011,9 @@ function render() {
 // ---- HUD ----
 function updateHud() {
   const lvl = S.level;
-  const need = xpNeed();
+  // While cards show, the bar measures against the frozen threshold that
+  // was just met (so it reads full), not the new level's higher need.
+  const need = S.levelUpNeed || xpNeed();
   const pct = Math.min(1, Math.max(0, S.xpShown / need));
   const label = `LV ${lvl} &nbsp;·&nbsp; ${Math.floor(S.xpShown)}/${need} XP`;
   xpfill.style.width = (pct * 100).toFixed(1) + '%';
