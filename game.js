@@ -384,8 +384,9 @@ function readDebug() {
 // Gold is earned from territory fields and persists across runs. Weapons
 // cost gold to unlock; only unlocked weapons can start a run or appear
 // in level-up drafts.
-const UNLOCK_COST = { rocket: 20, laser: 30, bloom: 40, lantern: 10 }; // cannon is free
-const meta = { gold: 0, unlocks: { cannon: true, rocket: false, laser: false, bloom: false, lantern: false } };
+const UNLOCK_COST = { gather: 10, mole: 20, bloom: 40 }; // cannon is free
+// Temporarily removed: rocket (20), laser (30), lantern (10) — focus is cannon/mole/bloom/gather.
+const meta = { gold: 0, unlocks: { cannon: true, gather: false, mole: false, bloom: false } };
 function loadMeta() {
   try {
     const m = JSON.parse(localStorage.getItem('tis_meta'));
@@ -1034,9 +1035,11 @@ function hasTurretTypes(types) {
 function availableCards() {
   // Locked weapons never appear in a run's drafts. Passives are proposed
   // until maxed (level 8); the obtain (level 1) is how you get them.
+  // Temporarily removed: rocket, laser, lantern (focus is cannon/mole/bloom/gather).
   return CARD_POOL.filter(c =>
+    (c.kind !== 'turret' || !['rocket', 'laser', 'lantern'].includes(c.type)) &&
     (!c.needs || hasTurretTypes(c.needs)) &&
-    (c.kind !== 'turret' || c.type === 'bloom' || c.type === 'gather' || c.type === 'mole' || meta.unlocks[c.type]) &&
+    (c.kind !== 'turret' || meta.unlocks[c.type]) &&
     (c.kind !== 'passive' || S.passives[c.passive] < 8));
 }
 function offerCards() {
@@ -2171,10 +2174,9 @@ document.getElementById('d-copylink').addEventListener('click', () => {
 // ---- Pre-game start screen: pick a starter, unlock weapons with gold ----
 const WEAPON_DESC = {
   cannon: 'Sweeping shots',
-  rocket: 'Homing missiles that crash-splash',
-  laser: 'Snipes the weakest visible block',
+  mole: 'Digs tunnels through rock',
   bloom: 'Grows coin-generating territory',
-  lantern: 'Pushes back the fog',
+  gather: 'Pulls in nearby pickups',
 };
 function renderStartScreen() {
   document.getElementById('startgold').textContent = meta.gold;
@@ -2188,11 +2190,15 @@ function renderStartScreen() {
   }
   const list = document.getElementById('weaponlist');
   list.innerHTML = '';
-  for (const type of ['cannon', 'rocket', 'laser', 'bloom', 'lantern']) {
+  for (const type of ['cannon', 'mole', 'bloom', 'gather']) {
     const unlocked = meta.unlocks[type];
     const cost = UNLOCK_COST[type] || 0;
     const div = document.createElement('div');
     div.className = 'weapon' + (unlocked ? '' : ' locked') + (starterType === type ? ' selected' : '');
+    const icon = document.createElement('div');
+    icon.className = 'wicon';
+    icon.innerHTML = ICONS[type] || '';
+    div.appendChild(icon);
     const info = document.createElement('div');
     info.className = 'winfo';
     const name = document.createElement('div');
@@ -2200,7 +2206,7 @@ function renderStartScreen() {
     name.textContent = TURRET[type].name;
     const desc = document.createElement('div');
     desc.className = 'wdesc';
-    desc.textContent = WEAPON_DESC[type] + (unlocked ? '' : ` — unlock for ${cost}g`);
+    desc.textContent = WEAPON_DESC[type];
     info.appendChild(name);
     info.appendChild(desc);
     div.appendChild(info);
@@ -2210,6 +2216,7 @@ function renderStartScreen() {
       btn.disabled = starterType === type;
       btn.addEventListener('click', () => { starterType = type; renderStartScreen(); });
     } else {
+      btn.className = 'unlock';
       btn.textContent = `Unlock ${cost}g`;
       btn.disabled = meta.gold < cost;
       btn.addEventListener('click', () => {

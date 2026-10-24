@@ -180,26 +180,29 @@
   }
   .startgold { color: var(--text); margin-bottom: 16px; font-size: 18px; }
   .startgold b { color: #ffd75e; }
-  #weaponlist { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
+  #weaponlist { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 18px; }
   .weapon {
-    display: flex; align-items: center; gap: 12px;
+    display: flex; align-items: center; gap: 10px;
     background: linear-gradient(180deg, #27314d, #1a2138);
     border: 2px solid #3a4666;
     border-radius: 10px;
     color: var(--text);
-    padding: 10px 14px;
+    padding: 10px 12px;
     text-align: left;
   }
   .weapon.selected { border-color: #ffd75e; }
   .weapon.locked { opacity: 0.65; }
-  .weapon .winfo { flex: 1; }
+  .weapon .wicon { flex-shrink: 0; display: flex; align-items: center; }
+  .weapon .wicon svg { width: 36px; height: 36px; }
+  .weapon .winfo { flex: 1; min-width: 0; }
   .weapon .wname { font-weight: bold; font-size: 16px; }
   .weapon .wdesc { color: var(--muted); font-size: 13px; }
   .weapon button {
     background: var(--blue); color: #fff; border: none; border-radius: 6px;
-    padding: 8px 14px; font-size: 14px; cursor: pointer;
+    padding: 8px 12px; font-size: 13px; cursor: pointer; flex-shrink: 0;
   }
-  .weapon button:disabled { background: #3a4666; cursor: default; }
+  .weapon button.unlock { background: #ffd75e; color: #1a2138; font-weight: bold; }
+  .weapon button:disabled { background: #3a4666; color: #8a93a8; cursor: default; }
   #startbtn {
     background: #ffd75e; color: #1a2138; border: none; border-radius: 8px;
     padding: 12px 36px; font-size: 18px; font-weight: bold; cursor: pointer;
@@ -387,6 +390,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=51"></script>
+<script src="game.js?v=52"></script>
 </body>
 </html>
