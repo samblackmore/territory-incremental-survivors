@@ -18,7 +18,7 @@ const HARVEST_EVERY = 8;           // territory: seconds between pickups per cel
 
 // Turret roster: distinct damage patterns, no homing except the missile's
 // steering (which is deliberately dumb: limited turn rate, walls win).
-const GATHER_BASE_RANGE = 6;         // pickup pull range in cells
+const GATHER_BASE_RANGE = 3;         // pickup pull range in cells
 const GATHER_RANGE_PER_LEVEL = 2;    // +range per Gather level
 const GATHER_COOLDOWN = 6;           // seconds between pulls
 const GATHER_FLASH_DUR = 1.5;        // range ring flash duration on pull (s)
