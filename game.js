@@ -705,11 +705,11 @@ function newGame() {
   }
   S.turrets.push(mkTurret(pc.x, pc.y, BLUE, starterType));
   S.weapons[starterType] = { level: 1, rateMult: 1, dmgBonus: 0, critChance: 0 };
-  // Red Bloom: 60% chance to spawn in a distant cave (not the starter's).
+  // Red Bloom: always spawns in a distant cave (not the starter's).
   // It grows red territory — a reason to push out and kill it. Wiping it
   // out (turret + all red cells) is the round's win condition.
   S.redBloomSpawned = false;
-  if (rng() < 0.6) {
+  {
     const far = [];
     for (let y = 0; y < cfg.rows; y++) {
       for (let x = 0; x < cfg.cols; x++) {
