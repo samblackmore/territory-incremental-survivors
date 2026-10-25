@@ -498,9 +498,6 @@ function loadMeta() {
 function saveMeta() {
   try { localStorage.setItem('tis_meta', JSON.stringify(meta)); } catch (e) { /* ignore */ }
 }
-// The starter weapon for the next run (chosen on the pre-game screen).
-let starterType = 'cannon';
-
 // ---- Game state ----
 let S = null;
 
@@ -703,8 +700,9 @@ function newGame() {
     S.cells[pci] = EMPTY;
     S.hp[pci] = 0; S.maxhp[pci] = 0;
   }
-  S.turrets.push(mkTurret(pc.x, pc.y, BLUE, starterType));
-  S.weapons[starterType] = { level: 1, rateMult: 1, dmgBonus: 0, critChance: 0 };
+  // The starter is always Cannon; the shop only gates mid-run drafts.
+  S.turrets.push(mkTurret(pc.x, pc.y, BLUE, 'cannon'));
+  S.weapons.cannon = { level: 1, rateMult: 1, dmgBonus: 0, critChance: 0 };
   // Red Bloom: always spawns in a distant cave (not the starter's).
   // It grows red territory — a reason to push out and kill it. Wiping it
   // out (turret + all red cells) is the round's win condition.
@@ -2323,7 +2321,8 @@ document.getElementById('d-copylink').addEventListener('click', () => {
     () => flashButton(btn, 'Copy failed'));
 });
 
-// ---- Pre-game start screen: pick a starter, unlock weapons with gold ----
+// ---- Pre-game start screen: a shop. Cannon is always the starter;
+// Mole, Bloom, Gather are gold unlocks that then appear in mid-run drafts ----
 const WEAPON_DESC = {
   cannon: 'Sweeping shots',
   mole: 'Digs tunnels through rock',
@@ -2346,7 +2345,7 @@ function renderStartScreen() {
     const unlocked = meta.unlocks[type];
     const cost = UNLOCK_COST[type] || 0;
     const div = document.createElement('div');
-    div.className = 'weapon' + (unlocked ? '' : ' locked') + (starterType === type ? ' selected' : '');
+    div.className = 'weapon' + (unlocked ? '' : ' locked') + (type === 'cannon' ? ' selected' : '');
     const icon = document.createElement('div');
     icon.className = 'wicon';
     icon.innerHTML = ICONS[type] || '';
@@ -2363,10 +2362,13 @@ function renderStartScreen() {
     info.appendChild(desc);
     div.appendChild(info);
     const btn = document.createElement('button');
-    if (unlocked) {
-      btn.textContent = starterType === type ? 'Selected' : 'Select';
-      btn.disabled = starterType === type;
-      btn.addEventListener('click', () => { starterType = type; renderStartScreen(); });
+    if (type === 'cannon') {
+      // The starter: always yours, not for sale, not selectable.
+      btn.textContent = 'Starter';
+      btn.disabled = true;
+    } else if (unlocked) {
+      btn.textContent = 'Owned';
+      btn.disabled = true;
     } else {
       btn.className = 'unlock';
       btn.innerHTML = `${cost}<span class="coin"></span>`;
@@ -2375,7 +2377,6 @@ function renderStartScreen() {
         if (meta.gold < cost || meta.unlocks[type]) return;
         meta.gold -= cost;
         meta.unlocks[type] = true;
-        starterType = type;
         saveMeta();
         renderStartScreen();
       });
@@ -2385,8 +2386,7 @@ function renderStartScreen() {
   }
 }
 document.getElementById('startbtn').addEventListener('click', () => {
-  // Locked weapons can't start a run (defensive; the UI never selects them).
-  if (!meta.unlocks[starterType]) starterType = 'cannon';
+  // Every run starts with Cannon; the shop only gates mid-run drafts.
   document.getElementById('startscreen').classList.add('hidden');
   newGame();
 });
@@ -2395,7 +2395,6 @@ document.getElementById('clearbtn').addEventListener('click', () => {
   try { localStorage.removeItem('tis_meta'); } catch (e) { /* ignore */ }
   meta.gold = 0;
   for (const k of Object.keys(meta.unlocks)) meta.unlocks[k] = (k === 'cannon');
-  starterType = 'cannon';
   renderStartScreen();
 });
 
