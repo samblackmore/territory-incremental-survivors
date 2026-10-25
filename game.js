@@ -152,6 +152,16 @@ function drawMinimap() {
   if (minimap.height !== rows * px) minimap.height = rows * px;
   mmctx.fillStyle = '#000';
   mmctx.fillRect(0, 0, minimap.width, minimap.height);
+  // Explored footprint: light grey where fog is fully cleared, dark grey
+  // for the half-fog edge ring, black where still fogged. No terrain vs
+  // cave distinction — just lit vs fog.
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      const f = S.fog[y * cols + x];
+      if (f === 0) { mmctx.fillStyle = '#9ca3af'; mmctx.fillRect(x * px, y * px, px, px); }
+      else if (f === 1) { mmctx.fillStyle = '#4b5563'; mmctx.fillRect(x * px, y * px, px, px); }
+    }
+  }
   let blue = 0, red = 0;
   for (let y = 0; y < rows; y++) {
     for (let x = 0; x < cols; x++) {
@@ -159,6 +169,14 @@ function drawMinimap() {
       if (c === BLUE) { mmctx.fillStyle = '#3b82f6'; mmctx.fillRect(x * px, y * px, px, px); blue++; }
       else if (c === RED) { mmctx.fillStyle = '#ef4444'; mmctx.fillRect(x * px, y * px, px, px); red++; }
     }
+  }
+  // Units: one pixel per living turret, team color, on top — so you can
+  // see your cannon sitting in a lit area and the enemy over there.
+  // (Units sit on EMPTY cells, never on territory, so they always show.)
+  for (const t of S.turrets) {
+    if (t.dead) continue;
+    mmctx.fillStyle = t.color === BLUE ? '#3b82f6' : '#ef4444';
+    mmctx.fillRect(t.x * px, t.y * px, px, px);
   }
   const total = cols * rows;
   if (mmBlue) mmBlue.textContent = Math.round(blue / total * 100) + '%';
