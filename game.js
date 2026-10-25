@@ -47,12 +47,12 @@ function unitCost(type) {
   }
   return UNIT_COST[type] + UNIT_COST_STEP * count;
 }
-// Can this turret type appear in the draft? Locked = no. A first placement
-// or a Mole bundle (always a placement) needs the gold; owned Cannon/Bloom/
-// Gather always have a free level-up fallback, and EVO'd Cannon only has
-// placements left so it needs the gold too.
+// Can this turret type appear in the draft? No shop gate anymore — all
+// four units are available from run one, gated only by run gold.
+// A first placement or a Mole bundle (always a placement) needs the gold;
+// owned Cannon/Bloom/Gather always have a free level-up fallback, and
+// EVO'd Cannon only has placements left so it needs the gold too.
 function canOfferTurret(type) {
-  if (!meta.unlocks[type]) return false;
   const w = S.weapons[type];
   if (!w) return S.gold >= unitCost(type);
   if (type === 'mole' || w.evo) return S.gold >= unitCost(type);
@@ -2372,8 +2372,9 @@ document.getElementById('d-copylink').addEventListener('click', () => {
     () => flashButton(btn, 'Copy failed'));
 });
 
-// ---- Pre-game start screen: a shop. Cannon is always the starter;
-// Mole, Bloom, Gather are gold unlocks that then appear in mid-run drafts ----
+// ---- Pre-game start screen: just the title + Start Run now. The shop is
+// dormant (see renderShop below) until starter weapons return — the in-run
+// gold economy carries progression for now. ----
 const WEAPON_DESC = {
   cannon: 'Sweeping shots',
   mole: 'Digs tunnels through rock',
@@ -2381,6 +2382,14 @@ const WEAPON_DESC = {
   gather: 'Pulls in nearby pickups',
 };
 function renderStartScreen() {
+  // Nothing to render: no shop grid, no gold display. The start screen is
+  // just the title and the Start Run button (visibility via classList).
+}
+// ---- Shop (DORMANT — not called). Restore when other starter weapons
+// arrive: it renders the unlock grid into #weaponlist, spending meta gold.
+// Kept intact so the meta unlock system (UNLOCK_COST, meta.unlocks, banking)
+// can come back without a rewrite. ----
+function renderShop() {
   document.getElementById('startgold').textContent = meta.gold;
   const banked = document.getElementById('bankedmsg');
   if (S.lastBanked > 0) {
@@ -2414,7 +2423,6 @@ function renderStartScreen() {
     div.appendChild(info);
     const btn = document.createElement('button');
     if (type === 'cannon') {
-      // The starter: always yours, not for sale, not selectable.
       btn.textContent = 'Starter';
       btn.disabled = true;
     } else if (unlocked) {
@@ -2429,7 +2437,7 @@ function renderStartScreen() {
         meta.gold -= cost;
         meta.unlocks[type] = true;
         saveMeta();
-        renderStartScreen();
+        renderShop();
       });
     }
     div.appendChild(btn);
@@ -2440,13 +2448,6 @@ document.getElementById('startbtn').addEventListener('click', () => {
   // Every run starts with Cannon; the shop only gates mid-run drafts.
   document.getElementById('startscreen').classList.add('hidden');
   newGame();
-});
-document.getElementById('clearbtn').addEventListener('click', () => {
-  // Wipe the meta save (gold + unlocks) back to a fresh player.
-  try { localStorage.removeItem('tis_meta'); } catch (e) { /* ignore */ }
-  meta.gold = 0;
-  for (const k of Object.keys(meta.unlocks)) meta.unlocks[k] = (k === 'cannon');
-  renderStartScreen();
 });
 
 applyUrlParams();
