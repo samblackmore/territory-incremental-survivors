@@ -58,6 +58,7 @@ const ICONS = {
   bounce: '<svg viewBox="0 0 24 24" width="36" height="36"><polyline points="5,17 9,7 13,17 17,7" stroke="#fb923c" stroke-width="2" fill="none"/></svg>',
   steer: '<svg viewBox="0 0 24 24" width="36" height="36"><polygon points="20,12 12,8 12,16" fill="#3b82f6"/><rect x="6" y="9.5" width="7" height="5" fill="#3b82f6"/></svg>',
   mole: '<svg viewBox="0 0 24 24" width="36" height="36"><ellipse cx="12" cy="14" rx="7" ry="5" fill="#8b5a2b"/><circle cx="9" cy="12" r="1.2" fill="#1a2138"/><circle cx="15" cy="12" r="1.2" fill="#1a2138"/><polygon points="12,16 10,19 14,19" fill="#d4a574"/></svg>',
+  gold: '<svg viewBox="0 0 24 24" width="36" height="36"><path d="M12 9 C8 9 5.5 12 5.5 15.5 C5.5 19 8.5 21.5 12 21.5 C15.5 21.5 18.5 19 18.5 15.5 C18.5 12 16 9 12 9 Z" fill="#f5b301" stroke="#b8860b" stroke-width="1.5"/><rect x="10.5" y="3.5" width="3" height="5.5" rx="1" fill="#b8860b"/></svg>',
 };
 const TURRET = {
   cannon: { name: 'Cannon', hp: 8, interval: 1.0, dmg: 1 },
@@ -1154,6 +1155,9 @@ const CARD_POOL = [
   { kind: 'turret', type: 'mole', title: 'Mole', icon: ICONS.mole, sub: 'Digs tunnels through rock.' },
   // (no global fire-rate / damage cards — weapon levels are the single
   // linear upgrade track: each level is +10% rate, +1 damage, or +5% crit)
+  // Bag of Gold: the XP-for-gold exchange. A free XP-row pick that grants
+  // run gold — the bridge to a shop unit you can see but can't afford yet.
+  { kind: 'gold', amount: 10, title: 'Bag of Gold', icon: ICONS.gold, sub: '+10<span class="coin"></span>' },
   { kind: 'passive', passive: 'bounce', title: 'Bounce', icon: ICONS.bounce, sub: 'Shots ricochet off rock.', needs: ['cannon'] },
   { kind: 'steer', mult: 1.3, title: '+30%', icon: ICONS.steer, sub: 'Missile steering', needs: ['rocket'] },
   { kind: 'bloom', mult: 0.8, title: '+25%', icon: ICONS.bloom, sub: 'Bloom grow frequency', needs: ['bloom'] },
@@ -1197,7 +1201,7 @@ function offerCards() {
     el.classList.remove('dealt');
     el.dataset.kind = ''; el.dataset.type = ''; el.dataset.mult = '';
     el.dataset.add = ''; el.dataset.passive = ''; el.dataset.stat = '';
-    el.dataset.cost = ''; el.dataset.trackIdx = '';
+    el.dataset.cost = ''; el.dataset.trackIdx = ''; el.dataset.amount = '';
     el.innerHTML = ''; el.style.display = 'none';
   });
   for (let k = 0; k < els.length && pool.length; k++) {
@@ -1209,6 +1213,7 @@ function offerCards() {
     el.dataset.mult = p.mult || '';
     el.dataset.add = p.add || '';
     el.dataset.passive = p.passive || '';
+    el.dataset.amount = p.amount || '';
     el.dataset.stat = '';
     el.dataset.cost = '';
     const lv = p.kind === 'passive' ? S.passives[p.passive] : 0;
@@ -1386,6 +1391,9 @@ document.querySelectorAll('#levelup .card').forEach(card => {
       S.steerMult *= parseFloat(card.dataset.mult);
     } else if (kind === 'bloom') {
       S.bloomMult = Math.max(0.2, S.bloomMult * parseFloat(card.dataset.mult));
+    } else if (kind === 'gold') {
+      // Bag of Gold: free XP pick that grants run gold.
+      S.gold += parseInt(card.dataset.amount || '10', 10);
     } else {
       S.freqMult *= parseFloat(card.dataset.mult);
     }
