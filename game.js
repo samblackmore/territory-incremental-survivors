@@ -1266,10 +1266,13 @@ function offerCards() {
 }
 // Shop row: 2 placement cards drawn at random from the 4 unit types.
 // Affordable = tappable (deducts gold, enters placement). Unaffordable =
-// greyed but visible, with a "Need N more" hint — the goal, not a mystery.
+// greyed but visible, price top-right — compare against your gold total
+// under the Shop title to see what to save for.
 function offerShopCards() {
   const pool = availableShopCards();
   const els = document.querySelectorAll('#levelup .shopcard');
+  document.getElementById('shoplabel').innerHTML =
+    'Shop<span class="shopgold">' + S.gold + '<span class="coin"></span></span>';
   els.forEach(el => {
     el.classList.remove('dealt', 'unaffordable');
     el.dataset.kind = ''; el.dataset.type = ''; el.dataset.stat = ''; el.dataset.cost = '';
@@ -1287,23 +1290,21 @@ function offerShopCards() {
     let title = p.title, sub, newTag = '';
     if (!w) {
       newTag = '<span class="newtag">New!</span>';
-      sub = `${p.sub} · ${p.cost}<span class="coin"></span>`;
+      sub = p.sub;
       el.dataset.stat = 'place';
     } else if (p.type === 'mole') {
       // Mole bundle: always a fresh placement AND the upgrade, so you
       // never upgrade a Mole that already died.
       title = `${p.title} <span class="lv">Lv${w.level + 1}</span>`;
-      sub = `New mole · +1 dig damage · ${p.cost}<span class="coin"></span>`;
+      sub = `New mole · +1 dig damage`;
       el.dataset.stat = 'mole-place';
     } else {
-      sub = `New turret · ${p.cost}<span class="coin"></span>`;
+      sub = `New turret`;
       el.dataset.stat = 'place';
     }
-    if (!affordable) {
-      sub += ` · Need ${p.cost - S.gold} more`;
-      el.classList.add('unaffordable');
-    }
-    el.innerHTML = `<div class="icon">${p.icon || ''}</div>` + newTag + '<b>' + title + '</b><span>' + sub + '</span>';
+    if (!affordable) el.classList.add('unaffordable');
+    el.innerHTML = `<div class="price">${p.cost}<span class="coin"></span></div>` +
+      `<div class="icon">${p.icon || ''}</div>` + newTag + '<b>' + title + '</b><span>' + sub + '</span>';
     // Deal after the XP row (cascade continues: slots 3, 4).
     setTimeout(() => el.classList.add('dealt'), 150 + (3 + j) * 120);
   }

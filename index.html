@@ -322,19 +322,25 @@
   .card b .lv { color: #fff; }
   .card span { color: var(--muted); font-size: 12px; letter-spacing: .05em; text-transform: uppercase; text-align: center; }
   .card .newtag { color: #ffd75e; font-size: 15px; font-weight: bold; letter-spacing: .03em; }
-  .card .coin {
+  .coin {
     display: inline-block; width: 11px; height: 11px; border-radius: 50%;
     background: #f5b301; border: 1.5px solid #b8860b; margin-left: 4px; vertical-align: -1px;
   }
-  /* Shop row: gold-bordered cards below the XP row. Unaffordable shop
-     cards stay visible (so you can see what to save for) but dimmed and
-     untappable — the "oh damn, I need a Miner" moment. */
+  /* Shop row: gold-bordered cards below the XP row. Price sits top-right
+     of each card; your gold total sits under the Shop title so you can
+     compare at a glance. Unaffordable cards stay visible (so you can see
+     what to save for) but dimmed and untappable. */
   .shoplabel {
     color: #ffd75e; font-size: 12px; letter-spacing: .15em; text-transform: uppercase;
     margin: 20px 0 10px; text-align: center;
   }
-  .card.shopcard { border-color: #f5b301; }
+  .shoplabel .shopgold { display: block; color: #ffd75e; font-size: 15px; font-weight: bold; letter-spacing: .03em; margin-top: 4px; }
+  .card.shopcard { border-color: #f5b301; position: relative; }
   .card.shopcard b { color: #ffd75e; }
+  .card.shopcard .price {
+    position: absolute; top: 8px; right: 10px;
+    color: #ffd75e; font-size: 15px; font-weight: bold;
+  }
   .card.shopcard.unaffordable.dealt { opacity: 0.45; pointer-events: none; filter: grayscale(0.6); }
   /* Banners: placement prompt + wave announcements */
   .banner {
@@ -484,7 +490,7 @@
       <button class="card xpcard"></button>
       <button class="card xpcard"></button>
     </div>
-    <div class="shoplabel">Shop · spend gold</div>
+    <div class="shoplabel" id="shoplabel">Shop</div>
     <div class="cardrow" id="shoprow">
       <button class="card shopcard"></button>
       <button class="card shopcard"></button>
@@ -501,6 +507,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=69"></script>
+<script src="game.js?v=70"></script>
 </body>
 </html>
