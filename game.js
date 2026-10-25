@@ -1247,7 +1247,8 @@ const CARD_POOL = [
     }))),
   // Bag of Gold: the XP-for-gold exchange. A free XP-row pick that grants
   // run gold — the bridge to a shop unit you can see but can't afford yet.
-  { kind: 'gold', amount: 10, title: 'Bag of Gold', icon: ICONS.gold, sub: '+10<span class="coin"></span>' },
+  // Amount rolls at deal time (3–5): you see what you get before picking.
+  { kind: 'gold', title: 'Bag of Gold', icon: ICONS.gold },
   { kind: 'passive', passive: 'bounce', title: 'Bounce', icon: ICONS.bounce, sub: 'Shots ricochet off rock.', needs: ['cannon'] },
   { kind: 'steer', mult: 1.3, title: '+30%', icon: ICONS.steer, sub: 'Missile steering', needs: ['rocket'] },
 ];
@@ -1335,6 +1336,13 @@ function offerCards() {
     else if (p.kind === 'evo') {
       title = `Sprayer <span class="lv">EVO</span>`;
       sub = p.sub;
+    }
+    else if (p.kind === 'gold') {
+      // Roll the amount at deal time (3–5 gold): the card shows its roll.
+      // A preset amount (tests/fixtures) wins over the roll.
+      const amt = p.amount || (3 + Math.floor(Math.random() * 3));
+      el.dataset.amount = amt;
+      sub = `+${amt}<span class="coin"></span>`;
     }
     el.innerHTML = icon + newTag + '<b>' + title + '</b><span>' + sub + '</span>';
     // Staggered deal: cards appear one by one (prevents accidental taps).
