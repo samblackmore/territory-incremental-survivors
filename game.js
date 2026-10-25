@@ -1404,10 +1404,9 @@ function offerCards() {
     setTimeout(() => el.classList.add('dealt'), 150 + k * 120);
   }
 }
-// Shop row: 2 placement cards drawn at random from the 4 unit types.
-// Affordable = tappable (deducts gold, enters placement). Unaffordable =
-// greyed but visible, price top-right — compare against your gold total
-// under the Shop title to see what to save for.
+// Shop row: 2 cards, affordable first — draw from what you can pay for,
+// then fill leftover slots with greyed goals you can't afford yet (so you
+// still see what to save for, but the row leads with a real choice).
 function offerShopCards() {
   const pool = availableShopCards();
   const els = document.querySelectorAll('#levelup .shopcard');
@@ -1418,8 +1417,17 @@ function offerShopCards() {
     el.dataset.kind = ''; el.dataset.type = ''; el.dataset.stat = ''; el.dataset.cost = ''; el.dataset.weapon = '';
     el.innerHTML = ''; el.style.display = 'none';
   });
-  for (let j = 0; j < els.length && pool.length; j++) {
-    const p = pool.splice((Math.random() * pool.length) | 0, 1)[0];
+  const afford = pool.filter(p => p.cost <= S.gold);
+  const pricey = pool.filter(p => p.cost > S.gold);
+  const picks = [];
+  while (picks.length < els.length && afford.length) {
+    picks.push(afford.splice((Math.random() * afford.length) | 0, 1)[0]);
+  }
+  while (picks.length < els.length && pricey.length) {
+    picks.push(pricey.splice((Math.random() * pricey.length) | 0, 1)[0]);
+  }
+  for (let j = 0; j < picks.length; j++) {
+    const p = picks[j];
     const el = els[j];
     el.style.display = '';
     const affordable = S.gold >= p.cost;
