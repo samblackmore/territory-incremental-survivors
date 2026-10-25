@@ -31,7 +31,9 @@ const GATHER_FLASH_DUR = 1.5;        // range ring flash duration on pull (s)
 const STAT_DEFS = {
   cannon: [
     { key: 'dmg', name: 'Damage', cap: 8, effect: '+1 damage' },
-    { key: 'proj', name: 'Projectiles', cap: 5, effect: '+1 projectile' },
+    // Projectiles is shop-only (gold-gated): it's the strongest stat, so
+    // it costs gold instead of a free XP pick. Still a track (chips + cap).
+    { key: 'proj', name: 'Projectiles', cap: 5, effect: '+1 projectile', shopOnly: true },
     { key: 'rate', name: 'Fire rate', cap: 8, effect: '+15% fire rate' },
     { key: 'crit', name: 'Crit', cap: 8, effect: '+5% crit' },
   ],
@@ -1239,9 +1241,10 @@ const CARD_POOL = [
   { kind: 'turret', type: 'gather', title: 'Gather', icon: ICONS.gather, sub: 'Pulls in nearby pickups.' },
   { kind: 'turret', type: 'mole', title: 'Mole', icon: ICONS.mole, sub: 'Digs tunnels through rock.' },
   // Stat cards, generated from STAT_DEFS (cannon/bloom/gather only — mole
-  // dig advances via the shop bundle, never as a free XP pick).
+  // dig advances via the shop bundle, never as a free XP pick; shopOnly
+  // stats like projectiles are bought with gold, not XP).
   ...['cannon', 'bloom', 'gather'].flatMap(weapon =>
-    STAT_DEFS[weapon].map(d => ({
+    STAT_DEFS[weapon].filter(d => !d.shopOnly).map(d => ({
       kind: 'stat', weapon, stat: d.key, cap: d.cap,
       title: d.name, icon: ICONS[weapon], effect: d.effect,
     }))),
@@ -1280,13 +1283,27 @@ function availableCards() {
   }
   return pool;
 }
-// Shop row: one placement card per active unit type, affordable or not.
+// Shop row: one placement card per active unit type, plus gold-gated stat
+// upgrades (currently just cannon projectiles), affordable or not.
 // Unaffordable ones still show (greyed) so you can see what to save for.
 function availableShopCards() {
-  return CARD_POOL.filter(c => c.kind === 'turret' &&
+  const pool = CARD_POOL.filter(c => c.kind === 'turret' &&
     ['cannon', 'mole', 'bloom', 'gather'].includes(c.type)).map(c => ({
     ...c, cost: unitCost(c.type), owned: !!S.weapons[c.type],
   }));
+  const cw = S.weapons.cannon;
+  if (cw && cw.stats && (cw.stats.proj || 0) < 5) {
+    pool.push({ kind: 'proj', weapon: 'cannon', stat: 'proj',
+      title: 'Projectiles', icon: ICONS.cannon, cost: projCost(), owned: true });
+  }
+  return pool;
+}
+// Projectile upgrade price: starts at 10 gold, +5 per level already owned
+// (the shop's unit step) — 10, 15, 20, 25, 30 for the 5 levels.
+function projCost() {
+  const w = S.weapons.cannon;
+  const lv = w && w.stats ? (w.stats.proj || 0) : 0;
+  return 10 + lv * UNIT_COST_STEP;
 }
 function offerCards() {
   // XP row: 3 free cards. Slots beyond the pool stay hidden.
@@ -1360,24 +1377,35 @@ function offerShopCards() {
     'Shop<span class="shopgold">' + S.gold + '<span class="coin"></span></span>';
   els.forEach(el => {
     el.classList.remove('dealt', 'unaffordable');
-    el.dataset.kind = ''; el.dataset.type = ''; el.dataset.stat = ''; el.dataset.cost = '';
+    el.dataset.kind = ''; el.dataset.type = ''; el.dataset.stat = ''; el.dataset.cost = ''; el.dataset.weapon = '';
     el.innerHTML = ''; el.style.display = 'none';
   });
   for (let j = 0; j < els.length && pool.length; j++) {
     const p = pool.splice((Math.random() * pool.length) | 0, 1)[0];
     const el = els[j];
     el.style.display = '';
-    const w = S.weapons[p.type];
     const affordable = S.gold >= p.cost;
-    el.dataset.kind = 'turret';
-    el.dataset.type = p.type;
     el.dataset.cost = p.cost;
     let title = p.title, sub, newTag = '';
-    if (!w) {
-      newTag = '<span class="newtag">New!</span>';
-      sub = p.sub;
-      el.dataset.stat = 'place';
-    } else if (p.type === 'mole') {
+    if (p.kind === 'proj') {
+      // Gold-gated stat upgrade (not a placement): pay, fill one chip.
+      // No New! tag — it's an upgrade to a weapon you already own.
+      const w = S.weapons.cannon;
+      const lv = w && w.stats ? (w.stats.proj || 0) : 0;
+      el.dataset.kind = 'proj';
+      el.dataset.weapon = 'cannon';
+      el.dataset.stat = 'proj';
+      title = `Projectiles <span class="lv">Lv${lv + 1}</span>`;
+      sub = `+1 projectile`;
+    } else {
+      const w = S.weapons[p.type];
+      el.dataset.kind = 'turret';
+      el.dataset.type = p.type;
+      if (!w) {
+        newTag = '<span class="newtag">New!</span>';
+        sub = p.sub;
+        el.dataset.stat = 'place';
+      } else if (p.type === 'mole') {
       // Mole bundle: always a fresh placement AND the upgrade, so you
       // never upgrade a Mole that already died. Dig track shown, capped
       // at 8 — after that the shop still sells plain placements.
@@ -1388,6 +1416,7 @@ function offerShopCards() {
     } else {
       sub = `New turret`;
       el.dataset.stat = 'place';
+    }
     }
     if (!affordable) el.classList.add('unaffordable');
     el.innerHTML = `<div class="price">${p.cost}<span class="coin"></span></div>` +
@@ -1442,6 +1471,16 @@ document.querySelectorAll('#levelup .card').forEach(card => {
     } else if (kind === 'evo') {
       // Cannon capstone: all stat tracks maxed → becomes the Sprayer.
       if (S.weapons.cannon) S.weapons.cannon.evo = true;
+    } else if (kind === 'proj') {
+      // Gold-gated stat upgrade: pay, then fill one chip on the track.
+      // (Affordability was already guarded above; no placement follows.)
+      const w = S.weapons.cannon;
+      const cost = parseInt(card.dataset.cost || '0', 10);
+      if (w && w.stats && (w.stats.proj || 0) < 5) {
+        S.gold -= cost;
+        w.stats.proj++;
+        applyStat(w, 'cannon', 'proj');
+      }
     } else if (kind === 'passive') {
       const p = card.dataset.passive;
       if (S.passives[p] < 8) {
