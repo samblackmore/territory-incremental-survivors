@@ -447,6 +447,11 @@ const GREY_FILL = 0.40;        // CA seed fill for grey chunks (caves use 0.38; 
 const GREY_MIN_DIST = 12;      // cells from the starter: no grey near the opening
 const GREY_HP_MIN = 30, GREY_HP_MAX = 100;
 const GREY_GOLD_CHANCE = 0.8;  // grey drops: mostly gold (XP is easy mid-game)
+// Enemy moles: while the red Bloom lives, it sends moles toward blue.
+// One every RED_MOLE_EVERY seconds, up to RED_MOLE_MAX alive. They tunnel
+// through rock claiming it as RED — the encroachment you see coming.
+const RED_MOLE_EVERY = 25;
+const RED_MOLE_MAX = 3;
 
 // Hit-pop envelope: full amp during the hold (instant big square), then lerp to 0
 function popFactor(i) {
@@ -634,6 +639,39 @@ function nearestBlueTurret(x, y) {
   }
   return best;
 }
+// Greedy direction from (cx, cy) toward the nearest blue turret: pick the
+// axis with the larger gap (dirs: 0 up, 1 right, 2 down, 3 left). This is
+// how red moles encroach instead of wandering.
+function moleDirToward(cx, cy) {
+  const b = nearestBlueTurret(cx + 0.5, cy + 0.5);
+  if (!b) return Math.floor(Math.random() * 4);
+  const dx = (b.x + 0.5) - (cx + 0.5), dy = (b.y + 0.5) - (cy + 0.5);
+  if (Math.abs(dx) >= Math.abs(dy)) return dx > 0 ? 1 : 3;
+  return dy > 0 ? 2 : 0;
+}
+// Spawn one red mole from the red Bloom's cave (nearest open cell within
+// 5). Only while the Bloom lives — kill it and the pressure stops (the
+// moles already out must still be mopped up).
+function spawnRedMole() {
+  const bloom = S.turrets.find(t => !t.dead && t.color === RED && t.type === 'bloom');
+  if (!bloom) return false;
+  let best = null, bd = Infinity;
+  for (let y = 0; y < cfg.rows; y++) {
+    for (let x = 0; x < cfg.cols; x++) {
+      const i = y * cfg.cols + x;
+      if (S.cells[i] !== EMPTY) continue;
+      if (turretAt(x, y)) continue;
+      const d = (x - bloom.x) ** 2 + (y - bloom.y) ** 2;
+      if (d > 25 || d >= bd) continue;
+      bd = d; best = { x, y };
+    }
+  }
+  if (!best) return false;
+  const m = mkTurret(best.x, best.y, RED, 'mole');
+  m.moleDir = moleDirToward(best.x, best.y);
+  S.turrets.push(m);
+  return true;
+}
 // Damage an enemy turret. Shows remaining HP above it, like block damage
 // numbers — turrets are just big blocks that shoot back.
 function damageTurret(t, dmg, byColor) {
@@ -650,12 +688,12 @@ function killTurret(t) {
   spawnBurst(t.x + 0.5, t.y + 0.5, '#ffffff');
   if (t.color === RED) {
     S.redKills++;
-    // Kill reward: 3 coins scattered around the wreck.
+    // Kill reward: 3 gold coins scattered around the wreck.
     for (let k = 0; k < 3; k++) {
       if (S.coins.length >= 800) break;
       S.coins.push({ x: t.x + 0.5 + (Math.random() - 0.5) * 2,
                      y: t.y + 0.5 + (Math.random() - 0.5) * 2,
-                     state: 'idle', phase: Math.random() * 6.283,
+                     state: 'idle', kind: 'gold', phase: Math.random() * 6.283,
                      sx: 0, sy: 0, t: 0, dead: false });
     }
     checkWaveClear();
@@ -728,7 +766,7 @@ function newGame() {
         passives: { bounce: 0 },
         // auto-battler state
         turrets: [], missiles: [], beams: [],
-        wave: 0, redQueue: [], redTimer: 0, waveBreak: 0, redKills: 0,
+        wave: 0, redQueue: [], redTimer: 0, waveBreak: 0, redKills: 0, redMoleTimer: 0,
         placing: null, runOver: false,
         dmgBonus: 0, steerMult: 1,
         // territory (Tiberium fields): per-cell growth progress
@@ -1595,6 +1633,16 @@ function update(dt) {
     overlay.classList.remove('hidden');
     updateHud();
   }
+  // Enemy moles: while the red Bloom lives, it sends moles toward blue —
+  // one every RED_MOLE_EVERY seconds, up to RED_MOLE_MAX alive.
+  if (!S.runOver) {
+    S.redMoleTimer = (S.redMoleTimer || 0) + dt;
+    if (S.redMoleTimer >= RED_MOLE_EVERY) {
+      S.redMoleTimer = 0;
+      const redMoles = S.turrets.filter(t => !t.dead && t.color === RED && t.type === 'mole').length;
+      if (redMoles < RED_MOLE_MAX) spawnRedMole();
+    }
+  }
   for (const t of S.turrets) {
     if (t.dead) continue;
     const rateMult = cfg.freq * (t.color === BLUE ? S.freqMult : 1) * weaponRateMult(t);
@@ -1642,8 +1690,13 @@ function update(dt) {
     } else if (t.type === 'lantern') {
       // Lanterns don't fire — they just hold back the fog.
     } else if (t.type === 'mole') {
-      // Digger: chews through rock in its direction, turns randomly,
-      // dies after its lifetime (cells dug).
+      // Digger: chews through rock in its direction, turns, dies after
+      // its lifetime (cells dug). Blue turns randomly; red turns toward
+      // the nearest blue turret and claims dug rock as RED (expansion,
+      // not open ground). Grey and territory block both (they turn).
+      const turn = () => {
+        t.moleDir = t.color === RED ? moleDirToward(t.x, t.y) : Math.floor(Math.random() * 4);
+      };
       t.digT += dt;
       if (t.digT >= TURRET.mole.interval) {
         t.digT = 0;
@@ -1651,23 +1704,29 @@ function update(dt) {
         const [dx, dy] = dirs[t.moleDir];
         const nx = t.x + dx, ny = t.y + dy;
         if (nx < 0 || ny < 0 || nx >= cfg.cols || ny >= cfg.rows) {
-          t.moleDir = Math.floor(Math.random() * 4); // edge: turn
+          turn(); // edge: turn
         } else {
           const ni = ny * cfg.cols + nx;
           if (S.cells[ni] === WHITE) {
             // Dig: damage the rock. If it breaks, move in.
+            // Red gets no blue weapon bonus.
             const w = S.weapons.mole;
-            const dmg = TURRET.mole.dmg + (w ? w.dmgBonus : 0);
+            const dmg = TURRET.mole.dmg + (t.color === BLUE && w ? w.dmgBonus : 0);
             const broken = damageBlock(ni, dmg, t.color, t.x + 0.5, t.y + 0.5, 0, 0, false);
             if (broken) {
+              if (t.color === RED) {
+                // Red claims the dug cell: visible expansion toward blue.
+                S.cells[ni] = RED;
+                S.growN[ni] = 0; S.growBy[ni] = 0;
+              }
               t.x = nx; t.y = ny;
               t.dug++;
               if (t.dug >= t.lifetime) { t.dead = true; continue; }
-              if (t.dug % MOLE_TURN_EVERY === 0) t.moleDir = Math.floor(Math.random() * 4);
+              if (t.dug % MOLE_TURN_EVERY === 0) turn();
             }
           } else {
             // Not rock: turn to find something to dig.
-            t.moleDir = Math.floor(Math.random() * 4);
+            turn();
           }
         }
       }
@@ -2087,10 +2146,10 @@ function render() {
       ctx.beginPath(); ctx.arc(-5.5, 4.5, 2, 0, Math.PI * 2); ctx.fill();
       ctx.beginPath(); ctx.arc(5.5, 4.5, 2, 0, Math.PI * 2); ctx.fill();
       ctx.beginPath(); ctx.arc(0, 0, 2.5, 0, Math.PI * 2); ctx.fill(); // core
-    } else if (t.type === 'mole') { // a mole: brown body, snout, eyes
-      ctx.fillStyle = '#8b5a2b';
+    } else if (t.type === 'mole') { // a mole: brown body (blue) or red body (red), snout, eyes
+      ctx.fillStyle = t.color === RED ? '#b91c1c' : '#8b5a2b';
       ctx.beginPath(); ctx.ellipse(0, 2, 7, 5, 0, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#d4a574';
+      ctx.fillStyle = t.color === RED ? '#ef4444' : '#d4a574';
       ctx.beginPath(); ctx.arc(0, -2, 3, 0, Math.PI * 2); ctx.fill(); // snout
       ctx.fillStyle = '#1a2138';
       ctx.beginPath(); ctx.arc(-3, 0, 1.2, 0, Math.PI * 2); ctx.fill();
