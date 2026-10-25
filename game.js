@@ -47,17 +47,6 @@ function unitCost(type) {
   }
   return UNIT_COST[type] + UNIT_COST_STEP * count;
 }
-// Can this turret type appear in the draft? No shop gate anymore — all
-// four units are available from run one, gated only by run gold.
-// A first placement or a Mole bundle (always a placement) needs the gold;
-// owned Cannon/Bloom/Gather always have a free level-up fallback, and
-// EVO'd Cannon only has placements left so it needs the gold too.
-function canOfferTurret(type) {
-  const w = S.weapons[type];
-  if (!w) return S.gold >= unitCost(type);
-  if (type === 'mole' || w.evo) return S.gold >= unitCost(type);
-  return true;
-}
 // Shared icons (inline SVG) for cards — matching the canvas badge shapes.
 const ICONS = {
   cannon: '<svg viewBox="0 0 24 24" width="36" height="36"><polygon points="20,6 8,18 20,18" fill="#3b82f6"/></svg>',
@@ -1159,24 +1148,44 @@ function hasTurretTypes(types) {
   return false;
 }
 function availableCards() {
-  // Locked weapons never appear in a run's drafts. Passives are proposed
-  // until maxed (level 8); the obtain (level 1) is how you get them.
-  // Temporarily removed: rocket, laser, lantern (focus is cannon/mole/bloom/gather).
-  // Gold gate lives in canOfferTurret (unit placements cost run gold).
+  // XP row: FREE cards only. Turret placements live in the shop row now,
+  // so unowned turrets, Mole (bundle-only, always a purchase), and EVO'd
+  // Cannon (placements only) never appear here. What remains: owned
+  // Cannon/Bloom/Gather level-ups (Cannon track/EVO included) + passives.
+  // Temporarily removed: rocket, laser, lantern.
   return CARD_POOL.filter(c =>
-    (c.kind !== 'turret' || !['rocket', 'laser', 'lantern'].includes(c.type)) &&
+    (c.kind !== 'turret' || (
+      S.weapons[c.type] && c.type !== 'mole' &&
+      !['rocket', 'laser', 'lantern'].includes(c.type) &&
+      !(c.type === 'cannon' && S.weapons.cannon.evo)
+    )) &&
     (!c.needs || hasTurretTypes(c.needs)) &&
-    (c.kind !== 'turret' || canOfferTurret(c.type)) &&
     (c.kind !== 'passive' || S.passives[c.passive] < 8));
 }
+// Shop row: one placement card per active unit type, affordable or not.
+// Unaffordable ones still show (greyed) so you can see what to save for.
+function availableShopCards() {
+  return CARD_POOL.filter(c => c.kind === 'turret' &&
+    ['cannon', 'mole', 'bloom', 'gather'].includes(c.type)).map(c => ({
+    ...c, cost: unitCost(c.type), owned: !!S.weapons[c.type],
+  }));
+}
 function offerCards() {
+  // XP row: 3 free cards. Slots beyond the pool stay hidden (pool can be
+  // smaller than 3 early on, when only Cannon + Bounce are available).
   const pool = availableCards().slice();
-  const els = document.querySelectorAll('.card');
-  // Clear previous deal animation.
-  els.forEach(el => el.classList.remove('dealt'));
+  const els = document.querySelectorAll('#levelup .xpcard');
+  els.forEach(el => {
+    el.classList.remove('dealt');
+    el.dataset.kind = ''; el.dataset.type = ''; el.dataset.mult = '';
+    el.dataset.add = ''; el.dataset.passive = ''; el.dataset.stat = '';
+    el.dataset.cost = ''; el.dataset.trackIdx = '';
+    el.innerHTML = ''; el.style.display = 'none';
+  });
   for (let k = 0; k < els.length && pool.length; k++) {
     const p = pool.splice((Math.random() * pool.length) | 0, 1)[0];
     const el = els[k];
+    el.style.display = '';
     el.dataset.kind = p.kind;
     el.dataset.type = p.type || '';
     el.dataset.mult = p.mult || '';
@@ -1195,40 +1204,14 @@ function offerCards() {
       // Show the stat change, not just the description.
       if (p.passive === 'bounce') sub = `+${Math.round(cfg.bouncePerLevel * 100)}% bounce chance`;
     }
-    else if (p.kind === 'turret' && !S.weapons[p.type]) {
-      // First placement: a gold card (pool already gated for affordability).
-      newTag = '<span class="newtag">New!</span>';
-      const cost = unitCost(p.type);
-      sub = `${p.sub} · ${cost}<span class="coin"></span>`;
-      el.dataset.stat = 'place';
-      el.dataset.cost = cost;
-    }
     else if (p.kind === 'turret' && S.weapons[p.type]) {
-      // Owned weapon: usually a level-up, sometimes a fresh placement
-      // (so you can field a second cannon, not just a stronger one).
-      // Placements are gold cards: they show the price and deduct on pick.
+      // Owned weapon: always a level-up here (placements are shop cards).
       const w = S.weapons[p.type];
-      const cost = unitCost(p.type);
-      const canAfford = S.gold >= cost;
       if (p.type === 'cannon' && w.level >= CANNON_MAX_LEVEL && !w.evo) {
         // Cannon maxed: offer the EVO (free).
         title = `Sprayer <span class="lv">EVO</span>`;
         sub = 'Blazing-fast sweep spray';
         el.dataset.stat = 'evo';
-      } else if (p.type === 'mole') {
-        // Mole bundle: always a fresh placement AND the upgrade, so you
-        // never upgrade a Mole that already died. Pool gates affordability.
-        title = `${p.title} <span class="lv">Lv${w.level + 1}</span>`;
-        sub = `New mole · +1 dig damage · ${cost}<span class="coin"></span>`;
-        el.dataset.stat = 'mole-place';
-        el.dataset.cost = cost;
-      } else if (w.evo || (Math.random() < 0.3 && canAfford)) {
-        // Fresh placement (gold). EVO'd cannon only offers placements;
-        // pool gates EVO'd to affordable, the roll checks for the rest.
-        title = p.title;
-        sub = `New turret · ${cost}<span class="coin"></span>`;
-        el.dataset.stat = 'place';
-        el.dataset.cost = cost;
       } else {
         // Level-up (free): for Cannon, follow the hand-designed track.
         // Other weapons roll their stat.
@@ -1263,9 +1246,56 @@ function offerCards() {
     setTimeout(() => el.classList.add('dealt'), 150 + k * 120);
   }
 }
+// Shop row: 2 placement cards drawn at random from the 4 unit types.
+// Affordable = tappable (deducts gold, enters placement). Unaffordable =
+// greyed but visible, with a "Need N more" hint — the goal, not a mystery.
+function offerShopCards() {
+  const pool = availableShopCards();
+  const els = document.querySelectorAll('#levelup .shopcard');
+  els.forEach(el => {
+    el.classList.remove('dealt', 'unaffordable');
+    el.dataset.kind = ''; el.dataset.type = ''; el.dataset.stat = ''; el.dataset.cost = '';
+    el.innerHTML = ''; el.style.display = 'none';
+  });
+  for (let j = 0; j < els.length && pool.length; j++) {
+    const p = pool.splice((Math.random() * pool.length) | 0, 1)[0];
+    const el = els[j];
+    el.style.display = '';
+    const w = S.weapons[p.type];
+    const affordable = S.gold >= p.cost;
+    el.dataset.kind = 'turret';
+    el.dataset.type = p.type;
+    el.dataset.cost = p.cost;
+    let title = p.title, sub, newTag = '';
+    if (!w) {
+      newTag = '<span class="newtag">New!</span>';
+      sub = `${p.sub} · ${p.cost}<span class="coin"></span>`;
+      el.dataset.stat = 'place';
+    } else if (p.type === 'mole') {
+      // Mole bundle: always a fresh placement AND the upgrade, so you
+      // never upgrade a Mole that already died.
+      title = `${p.title} <span class="lv">Lv${w.level + 1}</span>`;
+      sub = `New mole · +1 dig damage · ${p.cost}<span class="coin"></span>`;
+      el.dataset.stat = 'mole-place';
+    } else {
+      sub = `New turret · ${p.cost}<span class="coin"></span>`;
+      el.dataset.stat = 'place';
+    }
+    if (!affordable) {
+      sub += ` · Need ${p.cost - S.gold} more`;
+      el.classList.add('unaffordable');
+    }
+    el.innerHTML = `<div class="icon">${p.icon || ''}</div>` + newTag + '<b>' + title + '</b><span>' + sub + '</span>';
+    // Deal after the XP row (cascade continues: slots 3, 4).
+    setTimeout(() => el.classList.add('dealt'), 150 + (3 + j) * 120);
+  }
+}
 
-document.querySelectorAll('.card').forEach(card => {
+document.querySelectorAll('#levelup .card').forEach(card => {
   card.addEventListener('click', () => {
+    // Unaffordable shop cards are visible but not tappable (CSS blocks
+    // real taps too; this guard covers programmatic clicks).
+    if (parseInt(card.dataset.cost || '0', 10) > S.gold) return;
     const kind = card.dataset.kind || 'freq';
     // Choosing an upgrade resets the XP bar to zero (it stayed full
     // while the cards were showing).
@@ -1399,7 +1429,7 @@ function placeTurretAt(sx, sy) {
   placebanner.classList.add('hidden');
   if (!S.runOver) {
     if (S.pending > 0) {
-      offerCards(); // more picks to make: fresh cards, game stays paused
+      offerCards(); offerShopCards(); // more picks: fresh XP + shop rows, stays paused
       overlay.classList.remove('hidden');
     } else {
       S.paused = false;
@@ -1437,7 +1467,7 @@ function update(dt) {
     // level-up); it resets to zero only when you pick a card.
     S.pending++;
     S.paused = true;
-    offerCards();
+    offerCards(); offerShopCards();
     overlay.classList.remove('hidden');
     updateHud();
   }
