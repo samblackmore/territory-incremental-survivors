@@ -4,8 +4,8 @@
  */
 
 // ---- Cell states ----
-const WHITE = 0, EMPTY = 1, BLUE = 2, RED = 3;
-const CELL_COLORS = ['#eef1f6', '#3d4454', '#3b82f6', '#ef4444'];
+const WHITE = 0, EMPTY = 1, BLUE = 2, RED = 3, GREY = 4;
+const CELL_COLORS = ['#eef1f6', '#3d4454', '#3b82f6', '#ef4444', '#6b7280'];
 
 const CELL_PX = 16;                 // render size of one cell
 const BOUNCE_MAX = 8;               // bounces per projectile (backstop, not a target)
@@ -24,17 +24,54 @@ const GATHER_COOLDOWN = 6;           // seconds between pulls
 const GATHER_FLASH_DUR = 1.5;        // range ring flash duration on pull (s)
 // Cannon hand-designed 8-level track (VS-style: predictable, no random rolls).
 // Index 0 = L1 base (unused); index N = upgrade from LN to LN+1.
-const CANNON_TRACK = [
-  null,
-  { dmg: 1 },                 // L2: +1 damage
-  { proj: 1 },                // L3: +1 projectile
-  { proj: 1, rate: 0.25 },    // L4: +1 projectile, +25% rate
-  { dmg: 1 },                 // L5: +1 damage
-  { proj: 1 },                // L6: +1 projectile
-  { rate: 0.25, crit: 0.10 }, // L7: +25% rate, +10% crit
-  { proj: 1, dmg: 1 },        // L8: +1 projectile, +1 damage
-];
-const CANNON_MAX_LEVEL = 8;
+// Split stat tracks: each weapon stat levels independently (chips top-left),
+// one card per stat boost — no more bundled tracks. Caps vary: projectiles
+// stops at 5 (volume control), the rest run to 8. Steps are uniform by
+// design, so a card always tells you exactly what you get.
+const STAT_DEFS = {
+  cannon: [
+    { key: 'dmg', name: 'Damage', cap: 8, effect: '+1 damage' },
+    { key: 'proj', name: 'Projectiles', cap: 5, effect: '+1 projectile' },
+    { key: 'rate', name: 'Fire rate', cap: 8, effect: '+15% fire rate' },
+    { key: 'crit', name: 'Crit', cap: 8, effect: '+5% crit' },
+  ],
+  bloom: [
+    { key: 'growth', name: 'Growth', cap: 8, effect: '+20% growth speed' },
+  ],
+  gather: [
+    { key: 'range', name: 'Range', cap: 8, effect: '+2 pickup range' },
+    { key: 'count', name: 'Count', cap: 8, effect: '+1 pickup per pull' },
+  ],
+  mole: [
+    { key: 'dig', name: 'Dig', cap: 8, effect: '+1 dig damage' },
+  ],
+};
+// Fresh per-stat levels for a weapon type (0 = base value, cap = maxed).
+function initWeaponStats(type) {
+  const s = {};
+  for (const d of (STAT_DEFS[type] || [])) s[d.key] = 0;
+  return s;
+}
+// Apply one stat pick to the weapon's derived fields (the update loop and
+// firing code read these, not the raw stat levels).
+function applyStat(w, weapon, st) {
+  const n = w.stats[st];
+  if (weapon === 'cannon') {
+    if (st === 'dmg') w.dmgBonus = n;
+    else if (st === 'proj') w.proj = n;
+    else if (st === 'rate') w.rateMult = Math.pow(1.15, n);
+    else if (st === 'crit') w.critChance = 0.05 * n;
+  } else if (weapon === 'bloom') {
+    if (st === 'growth') w.rateMult = Math.pow(1.2, n);
+  }
+  // gather range/count derive from stats (gatherRange/gatherCount); mole
+  // dig uses dmgBonus, set by the bundle below.
+}
+// Cannon EVO (Sprayer) unlocks when every cannon stat track is maxed.
+function cannonMaxed() {
+  const w = S.weapons.cannon;
+  return !!w && !w.evo && STAT_DEFS.cannon.every(d => (w.stats[d.key] || 0) >= d.cap);
+}
 // Mid-run unit costs (run gold, not meta gold): base + 5 per living unit
 // of that type. The starter Cannon is free (pre-placed); every duplicate
 // costs extra, and the price climbs as your army grows. Tunable.
@@ -154,12 +191,15 @@ function drawMinimap() {
   mmctx.fillStyle = '#000';
   mmctx.fillRect(0, 0, minimap.width, minimap.height);
   // Explored footprint: light grey where fog is fully cleared, dark grey
-  // for the half-fog edge ring, black where still fogged. No terrain vs
-  // cave distinction — just lit vs fog.
+  // for the half-fog edge ring, black where still fogged. Grey rock in a
+  // cleared cell reads as medium grey, so deposits are spottable.
   for (let y = 0; y < rows; y++) {
     for (let x = 0; x < cols; x++) {
       const f = S.fog[y * cols + x];
-      if (f === 0) { mmctx.fillStyle = '#9ca3af'; mmctx.fillRect(x * px, y * px, px, px); }
+      if (f === 0) {
+        mmctx.fillStyle = S.cells[y * cols + x] === GREY ? '#6b7280' : '#9ca3af';
+        mmctx.fillRect(x * px, y * px, px, px);
+      }
       else if (f === 1) { mmctx.fillStyle = '#4b5563'; mmctx.fillRect(x * px, y * px, px, px); }
     }
   }
@@ -394,6 +434,17 @@ function rebuildColors() {
 }
 const BLUE_RGB = [59, 130, 246];
 const RED_RGB = [239, 68, 68];
+// Grey rock: the mid-map hard rock. Same Perlin gradient as brown, ~10x the
+// HP (30–100), in cellular-automata chunks. Fixed grey shades (light = soft,
+// charcoal = tough) — no debug picker, grey should always read as grey.
+const GREY_SHADES = [
+  [229, 231, 235], [209, 213, 219], [156, 163, 175], [107, 114, 128],
+  [75, 85, 99], [55, 65, 81], [31, 41, 55], [17, 24, 39],
+];
+const GREY_FILL = 0.40;        // CA seed fill for grey chunks (caves use 0.38; below ~0.33 the CA collapses to nothing)
+const GREY_MIN_DIST = 12;      // cells from the starter: no grey near the opening
+const GREY_HP_MIN = 30, GREY_HP_MAX = 100;
+const GREY_GOLD_CHANCE = 0.8;  // grey drops: mostly gold (XP is easy mid-game)
 
 // Hit-pop envelope: full amp during the hold (instant big square), then lerp to 0
 function popFactor(i) {
@@ -412,7 +463,7 @@ function cellRGB(x, y) {
   if (st === RED) return RED_RGB;
   if (st === EMPTY) return CAVE_SHADES[S.shade[i] || 0];
   const max = S.maxhp[i] || 3, hpv = S.hp[i];
-  const base = TERRAIN[max];
+  const base = st === GREY ? GREY_SHADES[S.shade[i] || 0] : TERRAIN[max];
   let r = base[0], g = base[1], b = base[2];
   const ac = S.hitBy[i] === RED ? RED_RGB : BLUE_RGB;
   if (hpv < max) { // progressive damage tint toward last hitter
@@ -554,16 +605,16 @@ function mkTurret(x, y, color, type) {
   }
   return t;
 }
-// Gather pull range in cells, from its weapon level.
+// Gather pull range in cells, from its Range stat track.
 function gatherRange() {
   const w = S.weapons.gather;
-  const lv = w ? w.level : 1;
-  return GATHER_BASE_RANGE + (lv - 1) * GATHER_RANGE_PER_LEVEL;
+  const r = w && w.stats ? (w.stats.range || 0) : 0;
+  return GATHER_BASE_RANGE + r * GATHER_RANGE_PER_LEVEL;
 }
-// Gather pickups per pull.
+// Gather pickups per pull, from its Count stat track.
 function gatherCount() {
   const w = S.weapons.gather;
-  return w && w.count ? w.count : 1;
+  return 1 + (w && w.stats ? (w.stats.count || 0) : 0);
 }
 // Turret occupying a cell, if any (skips the dead).
 function turretAt(cx, cy) {
@@ -664,8 +715,8 @@ function newGame() {
         // XP bar animation: xpShown eases toward xp; level-up cards wait
         // for the bar to finish filling.
         xpShown: 0, awaitingLevel: false,
-        // weapons (VS-style): per-type level + stat mults. Picking a card
-        // for an owned weapon levels it up instead of placing a new one.
+        // weapons (VS-style): per-type stat tracks + derived mults. Picking
+        // a stat card fills one chip on that track.
         weapons: {},
         particles: [], particlesSpawned: 0, rings: [], dmgNums: [],
         destroyed: 0, destroyedBlue: 0,
@@ -700,24 +751,6 @@ function newGame() {
     }
   }
 
-  // Gold nuggets: 1% of rock cells seed a cluster of 1-5 contiguous cells.
-  // The gold is locked until the rock is broken.
-  for (let y = 0; y < cfg.rows; y++) {
-    for (let x = 0; x < cfg.cols; x++) {
-      const i = y * cfg.cols + x;
-      if (cells[i] !== WHITE || goldNug[i] || rng() >= 0.01) continue;
-      const size = 1 + Math.floor(rng() * 5);
-      let cx = x, cy = y;
-      for (let s = 0; s < size; s++) {
-        const ci = cy * cfg.cols + cx;
-        if (cells[ci] === WHITE) goldNug[ci] = 1;
-        const d = Math.floor(rng() * 4);
-        cx = Math.max(0, Math.min(cfg.cols - 1, cx + [1, -1, 0, 0][d]));
-        cy = Math.max(0, Math.min(cfg.rows - 1, cy + [0, 0, 1, -1][d]));
-      }
-    }
-  }
-
   // The player's Cannon spawns inside a cave near the bottom-left anchor —
   // chipping away at cave walls feels better than painting open ground.
   // Red comes in waves after that (see startWave).
@@ -733,7 +766,46 @@ function newGame() {
   }
   // The starter is always Cannon; the shop only gates mid-run drafts.
   S.turrets.push(mkTurret(pc.x, pc.y, BLUE, 'cannon'));
-  S.weapons.cannon = { level: 1, rateMult: 1, dmgBonus: 0, critChance: 0 };
+  S.weapons.cannon = { stats: initWeaponStats('cannon'), rateMult: 1, dmgBonus: 0, critChance: 0, proj: 0, evo: false };
+  // Grey rock: hard mid-map chunks, same CA blobs as caves but only where
+  // the map is central AND far from the starter — never around the opening.
+  // Only brown terrain converts (caves stay open); HP + shade come from the
+  // same noise field as brown, scaled to 30–100.
+  {
+    const greyMask = genCaves(cfg.cols, cfg.rows, GREY_FILL, rng);
+    const x0 = cfg.cols * 0.25, x1 = cfg.cols * 0.75, y0 = cfg.rows * 0.25, y1 = cfg.rows * 0.75;
+    for (let y = 0; y < cfg.rows; y++) {
+      for (let x = 0; x < cfg.cols; x++) {
+        const i = y * cfg.cols + x;
+        if (!greyMask[i] || cells[i] !== WHITE) continue;
+        if (x < x0 || x >= x1 || y < y0 || y >= y1) continue;
+        const dx = x - pc.x, dy = y - pc.y;
+        if (dx * dx + dy * dy < GREY_MIN_DIST * GREY_MIN_DIST) continue;
+        const v = noise((x / cfg.cols) * 3.5, (y / cfg.rows) * 3.5);
+        cells[i] = GREY;
+        maxhp[i] = hp[i] = GREY_HP_MIN + Math.round(v * (GREY_HP_MAX - GREY_HP_MIN));
+        shade[i] = Math.round(v * 7);
+      }
+    }
+  }
+  // Gold nuggets: 1% of rock cells seed a cluster of 1-5 contiguous cells.
+  // The gold is locked until the rock is broken. (Runs after grey, so
+  // nuggets only ever land on brown — grey has its own drop.)
+  for (let y = 0; y < cfg.rows; y++) {
+    for (let x = 0; x < cfg.cols; x++) {
+      const i = y * cfg.cols + x;
+      if (cells[i] !== WHITE || goldNug[i] || rng() >= 0.01) continue;
+      const size = 1 + Math.floor(rng() * 5);
+      let cx = x, cy = y;
+      for (let s = 0; s < size; s++) {
+        const ci = cy * cfg.cols + cx;
+        if (cells[ci] === WHITE) goldNug[ci] = 1;
+        const d = Math.floor(rng() * 4);
+        cx = Math.max(0, Math.min(cfg.cols - 1, cx + [1, -1, 0, 0][d]));
+        cy = Math.max(0, Math.min(cfg.rows - 1, cy + [0, 0, 1, -1][d]));
+      }
+    }
+  }
   // Red Bloom: always spawns in a distant cave (not the starter's).
   // It grows red territory — a reason to push out and kill it. Wiping it
   // out (turret + all red cells) is the round's win condition.
@@ -949,7 +1021,7 @@ function weakestBlock(t) {
   for (let y = 0; y < cfg.rows; y++) {
     for (let x = 0; x < cfg.cols; x++) {
       const i = y * cfg.cols + x;
-      if (S.cells[i] !== WHITE || S.fog[i] !== 0) continue; // can't snipe what you can't see
+      if ((S.cells[i] !== WHITE && S.cells[i] !== GREY) || S.fog[i] !== 0) continue; // can't snipe what you can't see
       const hp = S.hp[i];
       const d = (x - t.x) * (x - t.x) + (y - t.y) * (y - t.y);
       if (hp < bestHp || (hp === bestHp && d < bd)) { bestHp = hp; bd = d; bx = x; by = y; bi = i; }
@@ -1047,7 +1119,7 @@ function stepProjectile(p, dt) {
     }
     const idx = cy * cfg.cols + cx;
     const cell = S.cells[idx];
-    if (cell === WHITE) {
+    if (cell === WHITE || cell === GREY) {
       const destroyed = damageBlock(idx, p.dmg || 1, p.color, p.x, p.y, p.vx, p.vy, p.crit);
       if (destroyed) { p.dead = true; return; }
       // Pinball: a surviving block may bounce the shot back out (re-rolled per hit)
@@ -1094,7 +1166,7 @@ function damageBlock(idx, dmg, color, sx, sy, vx, vy, crit) {
       const nx = cx + dx, ny = cy + dy;
       if (nx < 0 || ny < 0 || nx >= cfg.cols || ny >= cfg.rows) continue;
       const ni = ny * cfg.cols + nx;
-      if (S.cells[ni] !== WHITE) continue;
+      if (S.cells[ni] !== WHITE && S.cells[ni] !== GREY) continue;
       if (S.popT[ni] >= 0 && S.popAmp[ni] >= cfg.rippleAmp) continue; // never downgrade a real hit
       S.popT[ni] = 0;
       S.popAmp[ni] = cfg.rippleAmp;
@@ -1109,6 +1181,7 @@ function damageBlock(idx, dmg, color, sx, sy, vx, vy, crit) {
     spawnDmgNum(cx + 0.5, cy + 0.2, dmg, crit); // the damage dealt floats up
     return false;
   }
+  const wasGrey = S.cells[idx] === GREY;
   S.cells[idx] = EMPTY; // excavated: the block is gone, not painted over
   S.destroyed++;
   if (color === BLUE) S.destroyedBlue++;
@@ -1132,6 +1205,17 @@ function damageBlock(idx, dmg, color, sx, sy, vx, vy, crit) {
       if (i >= 0) S.coins.splice(i, 1);
     }
   }
+  if (wasGrey && color === BLUE) {
+    // Grey rock pays mostly gold (XP is easy mid-game): a guaranteed
+    // pickup, 80% gold / 20% XP — the reward for chewing hard rock.
+    const kind = Math.random() < GREY_GOLD_CHANCE ? 'gold' : 'xp';
+    S.coins.push({ x: cx + 0.5, y: cy + 0.5, state: 'idle', kind,
+                   phase: Math.random() * 6.283, sx: 0, sy: 0, t: 0, dead: false });
+    if (S.coins.length > 800) { // safety valve: drop oldest idle coin
+      const i = S.coins.findIndex(c => c.state === 'idle');
+      if (i >= 0) S.coins.splice(i, 1);
+    }
+  }
   return true;
 }
 
@@ -1142,7 +1226,8 @@ function checkLevel() {
   updateHud();
 }
 
-// Card pool: 4 turret cards (placement = the skill expression) + 5 upgrades.
+// Card pool: turret entries feed the SHOP row (placements); the XP row
+// draws from stat cards (one per weapon stat), Bag of Gold, and passives.
 // `needs` gates an upgrade on owning a turret it actually affects — no
 // steering card before you've got a rocket.
 const CARD_POOL = [
@@ -1153,14 +1238,18 @@ const CARD_POOL = [
   { kind: 'turret', type: 'lantern', title: 'Lantern', icon: ICONS.lantern, sub: 'Pushes back the fog of war.' },
   { kind: 'turret', type: 'gather', title: 'Gather', icon: ICONS.gather, sub: 'Pulls in nearby pickups.' },
   { kind: 'turret', type: 'mole', title: 'Mole', icon: ICONS.mole, sub: 'Digs tunnels through rock.' },
-  // (no global fire-rate / damage cards — weapon levels are the single
-  // linear upgrade track: each level is +10% rate, +1 damage, or +5% crit)
+  // Stat cards, generated from STAT_DEFS (cannon/bloom/gather only — mole
+  // dig advances via the shop bundle, never as a free XP pick).
+  ...['cannon', 'bloom', 'gather'].flatMap(weapon =>
+    STAT_DEFS[weapon].map(d => ({
+      kind: 'stat', weapon, stat: d.key, cap: d.cap,
+      title: d.name, icon: ICONS[weapon], effect: d.effect,
+    }))),
   // Bag of Gold: the XP-for-gold exchange. A free XP-row pick that grants
   // run gold — the bridge to a shop unit you can see but can't afford yet.
   { kind: 'gold', amount: 10, title: 'Bag of Gold', icon: ICONS.gold, sub: '+10<span class="coin"></span>' },
   { kind: 'passive', passive: 'bounce', title: 'Bounce', icon: ICONS.bounce, sub: 'Shots ricochet off rock.', needs: ['cannon'] },
   { kind: 'steer', mult: 1.3, title: '+30%', icon: ICONS.steer, sub: 'Missile steering', needs: ['rocket'] },
-  { kind: 'bloom', mult: 0.8, title: '+25%', icon: ICONS.bloom, sub: 'Bloom grow frequency', needs: ['bloom'] },
 ];
 function hasTurretTypes(types) {
   for (const t of S.turrets) {
@@ -1170,19 +1259,25 @@ function hasTurretTypes(types) {
   return false;
 }
 function availableCards() {
-  // XP row: FREE cards only. Turret placements live in the shop row now,
-  // so unowned turrets, Mole (bundle-only, always a purchase), and EVO'd
-  // Cannon (placements only) never appear here. What remains: owned
-  // Cannon/Bloom/Gather level-ups (Cannon track/EVO included) + passives.
-  // Temporarily removed: rocket, laser, lantern.
-  return CARD_POOL.filter(c =>
-    (c.kind !== 'turret' || (
-      S.weapons[c.type] && c.type !== 'mole' &&
-      !['rocket', 'laser', 'lantern'].includes(c.type) &&
-      !(c.type === 'cannon' && S.weapons.cannon.evo)
-    )) &&
-    (!c.needs || hasTurretTypes(c.needs)) &&
-    (c.kind !== 'passive' || S.passives[c.passive] < 8));
+  // XP row: FREE cards only. Turret placements live in the shop row, so
+  // no turret kind appears here at all. What remains: stat cards for
+  // owned weapons (below cap; EVO'd cannon offers no more stats),
+  // Bag of Gold, passives, and the EVO capstone when earned.
+  const pool = CARD_POOL.filter(c => {
+    if (c.kind === 'turret') return false;
+    if (c.kind === 'stat') {
+      const w = S.weapons[c.weapon];
+      if (!w || !w.stats) return false;
+      if (c.weapon === 'cannon' && w.evo) return false;
+      return (w.stats[c.stat] || 0) < c.cap;
+    }
+    if (c.kind === 'passive') return S.passives[c.passive] < 8;
+    return (!c.needs || hasTurretTypes(c.needs));
+  });
+  if (cannonMaxed()) {
+    pool.push({ kind: 'evo', title: 'Sprayer', icon: ICONS.cannon, sub: 'Blazing-fast sweep spray' });
+  }
+  return pool;
 }
 // Shop row: one placement card per active unit type, affordable or not.
 // Unaffordable ones still show (greyed) so you can see what to save for.
@@ -1193,15 +1288,14 @@ function availableShopCards() {
   }));
 }
 function offerCards() {
-  // XP row: 3 free cards. Slots beyond the pool stay hidden (pool can be
-  // smaller than 3 early on, when only Cannon + Bounce are available).
+  // XP row: 3 free cards. Slots beyond the pool stay hidden.
   const pool = availableCards().slice();
   const els = document.querySelectorAll('#levelup .xpcard');
   els.forEach(el => {
     el.classList.remove('dealt');
     el.dataset.kind = ''; el.dataset.type = ''; el.dataset.mult = '';
     el.dataset.add = ''; el.dataset.passive = ''; el.dataset.stat = '';
-    el.dataset.cost = ''; el.dataset.trackIdx = ''; el.dataset.amount = '';
+    el.dataset.cost = ''; el.dataset.amount = ''; el.dataset.weapon = '';
     el.innerHTML = ''; el.style.display = 'none';
   });
   for (let k = 0; k < els.length && pool.length; k++) {
@@ -1216,6 +1310,7 @@ function offerCards() {
     el.dataset.amount = p.amount || '';
     el.dataset.stat = '';
     el.dataset.cost = '';
+    el.dataset.weapon = '';
     const lv = p.kind === 'passive' ? S.passives[p.passive] : 0;
     let title = p.title, sub = p.sub, newTag = '';
     const icon = `<div class="icon">${p.icon || ''}</div>`;
@@ -1227,42 +1322,19 @@ function offerCards() {
       // Show the stat change, not just the description.
       if (p.passive === 'bounce') sub = `+${Math.round(cfg.bouncePerLevel * 100)}% bounce chance`;
     }
-    else if (p.kind === 'turret' && S.weapons[p.type]) {
-      // Owned weapon: always a level-up here (placements are shop cards).
-      const w = S.weapons[p.type];
-      if (p.type === 'cannon' && w.level >= CANNON_MAX_LEVEL && !w.evo) {
-        // Cannon maxed: offer the EVO (free).
-        title = `Sprayer <span class="lv">EVO</span>`;
-        sub = 'Blazing-fast sweep spray';
-        el.dataset.stat = 'evo';
-      } else {
-        // Level-up (free): for Cannon, follow the hand-designed track.
-        // Other weapons roll their stat.
-        title = `${p.title} <span class="lv">Lv${w.level + 1}</span>`;
-        let stat;
-        if (p.type === 'cannon') {
-          const up = CANNON_TRACK[w.level]; // w.level is current, up is next
-          const parts = [];
-          if (up.dmg) { stat = 'dmg'; parts.push(`+${up.dmg} damage`); }
-          if (up.proj) { stat = stat ? stat + '+proj' : 'proj'; parts.push(`+${up.proj} projectile`); }
-          if (up.rate) { stat = stat ? stat + '+rate' : 'rate'; parts.push(`+${Math.round(up.rate * 100)}% fire rate`); }
-          if (up.crit) { stat = stat ? stat + '+crit' : 'crit'; parts.push(`+${Math.round(up.crit * 100)}% crit`); }
-          sub = parts.join(', ');
-          el.dataset.stat = 'track';
-          el.dataset.trackIdx = w.level; // index into CANNON_TRACK
-        } else if (p.type === 'bloom') {
-          stat = 'rate'; sub = '+20% growth speed';
-        } else if (p.type === 'lantern') {
-          stat = 'hp'; sub = '+2 max HP';
-        } else if (p.type === 'gather') {
-          if (Math.random() < 0.5) { stat = 'range'; sub = `+${GATHER_RANGE_PER_LEVEL} pickup range`; }
-          else { stat = 'count'; sub = '+1 pickup per pull'; }
-        } else {
-          if (Math.random() < 0.5) { stat = 'rate'; sub = '+20% fire rate'; }
-          else { stat = 'dmg'; sub = '+1 damage'; }
-        }
-        if (p.type !== 'cannon') el.dataset.stat = stat;
-      }
+    else if (p.kind === 'stat') {
+      // One stat, one chip: title is the stat + its NEW level, sub the effect.
+      // The weapon icon says which weapon it belongs to.
+      const w = S.weapons[p.weapon];
+      const cur = w && w.stats ? (w.stats[p.stat] || 0) : 0;
+      title = `${p.title} <span class="lv">Lv${cur + 1}</span>`;
+      sub = p.effect;
+      el.dataset.weapon = p.weapon;
+      el.dataset.stat = p.stat;
+    }
+    else if (p.kind === 'evo') {
+      title = `Sprayer <span class="lv">EVO</span>`;
+      sub = p.sub;
     }
     el.innerHTML = icon + newTag + '<b>' + title + '</b><span>' + sub + '</span>';
     // Staggered deal: cards appear one by one (prevents accidental taps).
@@ -1299,9 +1371,11 @@ function offerShopCards() {
       el.dataset.stat = 'place';
     } else if (p.type === 'mole') {
       // Mole bundle: always a fresh placement AND the upgrade, so you
-      // never upgrade a Mole that already died.
-      title = `${p.title} <span class="lv">Lv${w.level + 1}</span>`;
-      sub = `New mole · +1 dig damage`;
+      // never upgrade a Mole that already died. Dig track shown, capped
+      // at 8 — after that the shop still sells plain placements.
+      const dig = w.stats ? (w.stats.dig || 0) : 0;
+      title = `${p.title} <span class="lv">Lv${Math.min(dig + 1, 8)}</span>`;
+      sub = dig >= 8 ? `New mole` : `New mole · +1 dig damage`;
       el.dataset.stat = 'mole-place';
     } else {
       sub = `New turret`;
@@ -1325,51 +1399,18 @@ document.querySelectorAll('#levelup .card').forEach(card => {
     // while the cards were showing).
     S.xp = 0; S.xpShown = 0; S.levelUpNeed = 0;
     if (kind === 'turret') {
+      // Shop row only now (XP row has no turret cards): a placement, or
+      // the Mole bundle (upgrade rides along with a fresh placement).
       const type = card.dataset.type;
       const w = S.weapons[type];
       const cost = parseInt(card.dataset.cost || '0', 10);
       if (w && card.dataset.stat === 'mole-place') {
-        // Mole bundle: the upgrade rides along with a fresh placement.
-        w.level++;
-        w.dmgBonus += 1;
+        if (w.stats && (w.stats.dig || 0) < 8) {
+          w.stats.dig++;
+          w.dmgBonus = w.stats.dig;
+        }
         S.gold -= cost;
         // fall through to placement below
-      } else if (w && card.dataset.stat !== 'place') {
-        // Owned: apply the level-up the card promised (rolled at offer time).
-        const stat = card.dataset.stat || 'dmg';
-        if (stat === 'evo') {
-          // Cannon EVO: becomes the Sprayer.
-          w.evo = true;
-        } else if (stat === 'track') {
-          // Cannon hand-designed track.
-          const up = CANNON_TRACK[parseInt(card.dataset.trackIdx, 10)];
-          w.level++;
-          if (up.dmg) w.dmgBonus += up.dmg;
-          if (up.proj) w.proj = (w.proj || 0) + up.proj;
-          if (up.rate) w.rateMult *= (1 + up.rate);
-          if (up.crit) w.critChance = Math.min(1, (w.critChance || 0) + up.crit);
-        } else {
-          w.level++;
-          if (stat === 'rate') w.rateMult *= 1.2;
-          else if (stat === 'crit') w.critChance = Math.min(1, (w.critChance || 0) + 0.05);
-          else if (stat === 'hp') {
-            w.hpBonus = (w.hpBonus || 0) + 2;
-            for (const t of S.turrets) {
-              if (!t.dead && t.color === BLUE && t.type === type) { t.maxhp += 2; t.hp += 2; }
-            }
-          }
-          else if (stat === 'range') { /* range derives from w.level via gatherRange() */ }
-          else if (stat === 'count') { w.count = (w.count || 1) + 1; }
-          else w.dmgBonus += 1;
-        }
-        S.pending--;
-        if (S.pending <= 0) {
-          S.pending = 0;
-          S.paused = false;
-          overlay.classList.add('hidden');
-        }
-        updateHud();
-        return;
       }
       // Placement mode: a bought unit (unowned first, owned duplicate)
       // deducts its gold card price, then tap the map to deploy.
@@ -1381,7 +1422,19 @@ document.querySelectorAll('#levelup .card').forEach(card => {
       enterPlacement(type);
       return;
     }
-    if (kind === 'passive') {
+    if (kind === 'stat') {
+      // One stat, one chip: fill the next chip on that track (capped).
+      const w = S.weapons[card.dataset.weapon];
+      const st = card.dataset.stat;
+      const def = (STAT_DEFS[card.dataset.weapon] || []).find(d => d.key === st);
+      if (w && w.stats && def && (w.stats[st] || 0) < def.cap) {
+        w.stats[st]++;
+        applyStat(w, card.dataset.weapon, st);
+      }
+    } else if (kind === 'evo') {
+      // Cannon capstone: all stat tracks maxed → becomes the Sprayer.
+      if (S.weapons.cannon) S.weapons.cannon.evo = true;
+    } else if (kind === 'passive') {
       const p = card.dataset.passive;
       if (S.passives[p] < 8) {
         S.passives[p]++;
@@ -1389,8 +1442,6 @@ document.querySelectorAll('#levelup .card').forEach(card => {
       }
     } else if (kind === 'steer') {
       S.steerMult *= parseFloat(card.dataset.mult);
-    } else if (kind === 'bloom') {
-      S.bloomMult = Math.max(0.2, S.bloomMult * parseFloat(card.dataset.mult));
     } else if (kind === 'gold') {
       // Bag of Gold: free XP pick that grants run gold.
       S.gold += parseInt(card.dataset.amount || '10', 10);
@@ -1447,8 +1498,7 @@ function placeTurretAt(sx, sy) {
   }
   S.turrets.push(mkTurret(cx, cy, BLUE, type));
   if (!S.weapons[type]) {
-    S.weapons[type] = { level: 1, rateMult: 1, dmgBonus: 0, critChance: 0 };
-    if (type === 'gather') S.weapons[type].count = 1;
+    S.weapons[type] = { stats: initWeaponStats(type), rateMult: 1, dmgBonus: 0, critChance: 0, proj: 0, evo: false };
   }
   spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[BLUE]);
   if (type === 'lantern') computeFog(); // the lantern pushes back the dark
@@ -1626,7 +1676,7 @@ function update(dt) {
           const nx = cx + dx, ny = cy + dy;
           if (nx < 0 || ny < 0 || nx >= cfg.cols || ny >= cfg.rows) continue;
           const ni = ny * cfg.cols + nx;
-          if (S.cells[ni] === WHITE) damageBlock(ni, 2, m.color, m.x, m.y, m.vx, m.vy);
+          if (S.cells[ni] === WHITE || S.cells[ni] === GREY) damageBlock(ni, 2, m.color, m.x, m.y, m.vx, m.vy);
         }
       }
       spawnBurst(m.x, m.y, '#fb923c');
@@ -1802,7 +1852,7 @@ function update(dt) {
 
 // Draw one WHITE (terrain) cell with its hit-pop scale; popped cells are drawn
 // in a second pass so the enlarged square sits in front of its neighbors.
-function drawWhiteCell(x, y) {
+function drawRockCell(x, y) {
   const i = y * cfg.cols + x;
   const c = cellRGB(x, y);
   ctx.fillStyle = 'rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')';
@@ -1858,7 +1908,7 @@ function render() {
         ctx.fillStyle = `rgb(${sh[0]},${sh[1]},${sh[2]})`;
         ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX);
       }
-      else if (S.popT[i] < 0) drawWhiteCell(x, y); // popped cells draw in the pass below
+      else if (S.popT[i] < 0) drawRockCell(x, y); // popped cells draw in the pass below
     }
   }
   // Popped (enlarged) cells render last, in front of surrounding squares.
@@ -1868,9 +1918,9 @@ function render() {
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         const i = y * w + x;
-        if (S.cells[i] !== WHITE || S.popT[i] < 0) continue;
+        if ((S.cells[i] !== WHITE && S.cells[i] !== GREY) || S.popT[i] < 0) continue;
         if (pass === 0 ? S.popAmp[i] >= 1 : S.popAmp[i] < 1) continue;
-        drawWhiteCell(x, y);
+        drawRockCell(x, y);
       }
     }
   }
@@ -2147,60 +2197,51 @@ function render() {
     }
     ppy += bh + 6;
   }
-  // Weapon badges: icon + level number (levels go to 50+, so no pips).
-  for (const type of ['cannon', 'rocket', 'laser', 'bloom', 'lantern', 'gather', 'mole']) {
+  // Stat chips, top-left: one row per owned weapon stat. Each row: weapon
+  // icon + 3-letter stat label + chips (gold filled / dark empty). This
+  // is the progress bar you watch climb — one chip per stat pick.
+  const STAT_LABEL = { dmg: 'DMG', proj: 'PRJ', rate: 'RAT', crit: 'CRT', growth: 'GRW', range: 'RNG', count: 'CNT', dig: 'DIG' };
+  for (const type of ['cannon', 'bloom', 'gather', 'mole']) {
     const w = S.weapons[type];
-    if (!w) continue;
-    const bw = 96, bh = 20;
-    ctx.fillStyle = 'rgba(10, 13, 22, 0.85)';
-    rr(8, ppy, bw, bh, 6); ctx.fill();
-    ctx.lineWidth = 1; ctx.strokeStyle = '#2a3145';
-    rr(8, ppy, bw, bh, 6); ctx.stroke();
-    const iy = ppy + bh / 2;
-    const col = CELL_COLORS[BLUE];
-    ctx.fillStyle = col;
-    ctx.strokeStyle = col;
-    if (type === 'cannon') {
-      ctx.beginPath(); ctx.moveTo(26, iy - 6); ctx.lineTo(14, iy + 5); ctx.lineTo(26, iy + 5); ctx.closePath(); ctx.fill();
-    } else if (type === 'rocket') {
-      ctx.beginPath(); ctx.moveTo(26, iy); ctx.lineTo(18, iy - 4); ctx.lineTo(18, iy + 4); ctx.closePath(); ctx.fill();
-      ctx.fillRect(12, iy - 2.5, 7, 5);
-    } else if (type === 'laser') {
-      ctx.beginPath(); ctx.moveTo(20, iy - 7); ctx.lineTo(25, iy); ctx.lineTo(20, iy + 7); ctx.lineTo(15, iy); ctx.closePath(); ctx.fill();
-    } else if (type === 'bloom') {
-      ctx.beginPath(); ctx.arc(20, iy, 5.5, 0, Math.PI * 2); ctx.fill();
-    } else if (type === 'gather') {
-      ctx.lineWidth = 2.5;
-      ctx.beginPath(); ctx.arc(20, iy, 5, Math.PI * 0.15, Math.PI * 0.85, true); ctx.stroke();
-      ctx.beginPath(); ctx.arc(15.5, iy + 3.5, 1.8, 0, Math.PI * 2); ctx.fill();
-      ctx.beginPath(); ctx.arc(24.5, iy + 3.5, 1.8, 0, Math.PI * 2); ctx.fill();
-    } else if (type === 'mole') {
-      ctx.fillStyle = '#8b5a2b';
-      ctx.beginPath(); ctx.ellipse(20, iy + 1, 5, 3.5, 0, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#d4a574';
-      ctx.beginPath(); ctx.arc(20, iy - 1.5, 2, 0, Math.PI * 2); ctx.fill();
-    } else { // lantern
-      ctx.lineWidth = 1.5;
-      ctx.strokeRect(15, iy - 6, 10, 12);
-      ctx.fillStyle = '#fef3c7';
-      ctx.beginPath(); ctx.arc(20, iy, 2.5, 0, Math.PI * 2); ctx.fill();
-    }
-    ctx.fillStyle = '#dfe5f2';
-    ctx.font = 'bold 12px system-ui, sans-serif';
-    ctx.textBaseline = 'middle';
-    if (type === 'cannon') {
-      // Cannon is capped at 8: show level dots like the passive pips.
-      // EVO fills them all gold (level 8 = maxed).
-      for (let i = 0; i < CANNON_MAX_LEVEL; i++) {
+    if (!w || !w.stats) continue;
+    for (const d of (STAT_DEFS[type] || [])) {
+      const lvl = w.stats[d.key] || 0;
+      const bw = 122, bh = 18;
+      ctx.fillStyle = 'rgba(10, 13, 22, 0.85)';
+      rr(8, ppy, bw, bh, 6); ctx.fill();
+      ctx.lineWidth = 1; ctx.strokeStyle = '#2a3145';
+      rr(8, ppy, bw, bh, 6); ctx.stroke();
+      const iy = ppy + bh / 2;
+      const col = CELL_COLORS[BLUE];
+      ctx.fillStyle = col;
+      ctx.strokeStyle = col;
+      if (type === 'cannon') {
+        ctx.beginPath(); ctx.moveTo(26, iy - 6); ctx.lineTo(14, iy + 5); ctx.lineTo(26, iy + 5); ctx.closePath(); ctx.fill();
+      } else if (type === 'bloom') {
+        ctx.beginPath(); ctx.arc(20, iy, 5.5, 0, Math.PI * 2); ctx.fill();
+      } else if (type === 'gather') {
+        ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.arc(20, iy, 5, Math.PI * 0.15, Math.PI * 0.85, true); ctx.stroke();
+        ctx.beginPath(); ctx.arc(15.5, iy + 3.5, 1.8, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(24.5, iy + 3.5, 1.8, 0, Math.PI * 2); ctx.fill();
+      } else if (type === 'mole') {
+        ctx.fillStyle = '#8b5a2b';
+        ctx.beginPath(); ctx.ellipse(20, iy + 1, 5, 3.5, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#d4a574';
+        ctx.beginPath(); ctx.arc(20, iy - 1.5, 2, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.fillStyle = '#dfe5f2';
+      ctx.font = 'bold 10px system-ui, sans-serif';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(STAT_LABEL[d.key] || d.key.toUpperCase(), 30, iy + 1);
+      for (let i = 0; i < d.cap; i++) {
         ctx.beginPath();
-        ctx.arc(34 + i * 7.5, iy, 2.5, 0, Math.PI * 2);
-        ctx.fillStyle = i < w.level ? '#ffd75e' : '#2a3145';
+        ctx.arc(52 + i * 7.5, iy, 2.5, 0, Math.PI * 2);
+        ctx.fillStyle = i < lvl ? '#ffd75e' : '#2a3145';
         ctx.fill();
       }
-    } else {
-      ctx.fillText('Lv ' + w.level, 34, iy + 1);
+      ppy += bh + 4;
     }
-    ppy += bh + 6;
   }
   // "+1" floaters
   for (const f of S.floaters) {
@@ -2245,8 +2286,8 @@ function updateHud() {
     `<div>Blocks excavated: <b>${S.destroyed}</b> · Red turrets destroyed: <b>${S.redKills}</b></div>` +
     `<div>Map seed: <b>${S.seed}</b></div>` +
     `<div>Fire rate: <b>${effFreq}/s</b> (×${S.freqMult.toFixed(2)}) · Damage: <b>+${S.dmgBonus}</b> · Steering: <b>×${S.steerMult.toFixed(2)}</b> · Bloom: <b>×${S.bloomMult.toFixed(2)}</b></div>` +
-    `<div>Bounce: <b>Lv${S.passives.bounce}</b> (${Math.round(S.bounceChance * 100)}%) · Gather: <b>Lv${S.weapons.gather ? S.weapons.gather.level : 0}</b> (${gatherRange()} cells / ${GATHER_COOLDOWN}s)</div>` +
-    `<div>Weapons: <b>${Object.entries(S.weapons).map(([k, w]) => `${k} Lv${w.level} (×${w.rateMult.toFixed(2)} rate, +${w.dmgBonus} dmg${w.critChance ? `, ${Math.round(w.critChance * 100)}% crit` : ''})`).join(' · ')}</b></div>` +
+    `<div>Bounce: <b>Lv${S.passives.bounce}</b> (${Math.round(S.bounceChance * 100)}%) · Gather: <b>${gatherRange()} cells / ${gatherCount()} per pull</b> (${GATHER_COOLDOWN}s)</div>` +
+    `<div>Weapons: <b>${Object.entries(S.weapons).map(([k, w]) => `${k} ${w.stats ? Object.entries(w.stats).map(([s, n]) => `${s} ${n}`).join('/') : ''} (×${w.rateMult.toFixed(2)} rate, +${w.dmgBonus} dmg${w.critChance ? `, ${Math.round(w.critChance * 100)}% crit` : ''}${w.proj ? `, +${w.proj} proj` : ''})`).join(' · ')}</b></div>` +
     `<div>Projectiles alive: <b>${S.projs.length}</b> · Missiles: <b>${S.missiles.length}</b></div>` +
     `<div>Pickups: <b>${S.coins.length}</b> on field · Gold this run: <b>${S.gold}</b> · Total: <b>${meta.gold}</b></div>`;
 }
