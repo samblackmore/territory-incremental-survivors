@@ -35,6 +35,29 @@ const CANNON_TRACK = [
   { proj: 1, dmg: 1 },        // L8: +1 projectile, +1 damage
 ];
 const CANNON_MAX_LEVEL = 8;
+// Mid-run unit costs (run gold, not meta gold): base + 5 per living unit
+// of that type. The starter Cannon is free (pre-placed); every duplicate
+// costs extra, and the price climbs as your army grows. Tunable.
+const UNIT_COST = { cannon: 10, mole: 8, bloom: 12, gather: 6 };
+const UNIT_COST_STEP = 5;
+function unitCost(type) {
+  let count = 0;
+  for (const t of S.turrets) {
+    if (!t.dead && t.color === BLUE && t.type === type) count++;
+  }
+  return UNIT_COST[type] + UNIT_COST_STEP * count;
+}
+// Can this turret type appear in the draft? Locked = no. A first placement
+// or a Mole bundle (always a placement) needs the gold; owned Cannon/Bloom/
+// Gather always have a free level-up fallback, and EVO'd Cannon only has
+// placements left so it needs the gold too.
+function canOfferTurret(type) {
+  if (!meta.unlocks[type]) return false;
+  const w = S.weapons[type];
+  if (!w) return S.gold >= unitCost(type);
+  if (type === 'mole' || w.evo) return S.gold >= unitCost(type);
+  return true;
+}
 // Shared icons (inline SVG) for cards — matching the canvas badge shapes.
 const ICONS = {
   cannon: '<svg viewBox="0 0 24 24" width="36" height="36"><polygon points="20,6 8,18 20,18" fill="#3b82f6"/></svg>',
@@ -1139,10 +1162,11 @@ function availableCards() {
   // Locked weapons never appear in a run's drafts. Passives are proposed
   // until maxed (level 8); the obtain (level 1) is how you get them.
   // Temporarily removed: rocket, laser, lantern (focus is cannon/mole/bloom/gather).
+  // Gold gate lives in canOfferTurret (unit placements cost run gold).
   return CARD_POOL.filter(c =>
     (c.kind !== 'turret' || !['rocket', 'laser', 'lantern'].includes(c.type)) &&
     (!c.needs || hasTurretTypes(c.needs)) &&
-    (c.kind !== 'turret' || meta.unlocks[c.type]) &&
+    (c.kind !== 'turret' || canOfferTurret(c.type)) &&
     (c.kind !== 'passive' || S.passives[c.passive] < 8));
 }
 function offerCards() {
@@ -1159,6 +1183,7 @@ function offerCards() {
     el.dataset.add = p.add || '';
     el.dataset.passive = p.passive || '';
     el.dataset.stat = '';
+    el.dataset.cost = '';
     const lv = p.kind === 'passive' ? S.passives[p.passive] : 0;
     let title = p.title, sub = p.sub, newTag = '';
     const icon = `<div class="icon">${p.icon || ''}</div>`;
@@ -1170,23 +1195,42 @@ function offerCards() {
       // Show the stat change, not just the description.
       if (p.passive === 'bounce') sub = `+${Math.round(cfg.bouncePerLevel * 100)}% bounce chance`;
     }
-    else if (p.kind === 'turret' && !S.weapons[p.type]) newTag = '<span class="newtag">New!</span>';
+    else if (p.kind === 'turret' && !S.weapons[p.type]) {
+      // First placement: a gold card (pool already gated for affordability).
+      newTag = '<span class="newtag">New!</span>';
+      const cost = unitCost(p.type);
+      sub = `${p.sub} · ${cost}<span class="coin"></span>`;
+      el.dataset.stat = 'place';
+      el.dataset.cost = cost;
+    }
     else if (p.kind === 'turret' && S.weapons[p.type]) {
       // Owned weapon: usually a level-up, sometimes a fresh placement
       // (so you can field a second cannon, not just a stronger one).
+      // Placements are gold cards: they show the price and deduct on pick.
       const w = S.weapons[p.type];
+      const cost = unitCost(p.type);
+      const canAfford = S.gold >= cost;
       if (p.type === 'cannon' && w.level >= CANNON_MAX_LEVEL && !w.evo) {
-        // Cannon maxed: offer the EVO.
+        // Cannon maxed: offer the EVO (free).
         title = `Sprayer <span class="lv">EVO</span>`;
         sub = 'Blazing-fast sweep spray';
         el.dataset.stat = 'evo';
-      } else if (w.evo || Math.random() < 0.3 && !(p.type === 'cannon' && w.level >= CANNON_MAX_LEVEL)) {
-        // EVO'd cannon only offers fresh placements (no more levels).
+      } else if (p.type === 'mole') {
+        // Mole bundle: always a fresh placement AND the upgrade, so you
+        // never upgrade a Mole that already died. Pool gates affordability.
+        title = `${p.title} <span class="lv">Lv${w.level + 1}</span>`;
+        sub = `New mole · +1 dig damage · ${cost}<span class="coin"></span>`;
+        el.dataset.stat = 'mole-place';
+        el.dataset.cost = cost;
+      } else if (w.evo || (Math.random() < 0.3 && canAfford)) {
+        // Fresh placement (gold). EVO'd cannon only offers placements;
+        // pool gates EVO'd to affordable, the roll checks for the rest.
         title = p.title;
-        sub = w.evo ? 'New sprayer' : 'New turret';
+        sub = `New turret · ${cost}<span class="coin"></span>`;
         el.dataset.stat = 'place';
+        el.dataset.cost = cost;
       } else {
-        // Level-up: for Cannon, follow the hand-designed track.
+        // Level-up (free): for Cannon, follow the hand-designed track.
         // Other weapons roll their stat.
         title = `${p.title} <span class="lv">Lv${w.level + 1}</span>`;
         let stat;
@@ -1207,8 +1251,6 @@ function offerCards() {
         } else if (p.type === 'gather') {
           if (Math.random() < 0.5) { stat = 'range'; sub = `+${GATHER_RANGE_PER_LEVEL} pickup range`; }
           else { stat = 'count'; sub = '+1 pickup per pull'; }
-        } else if (p.type === 'mole') {
-          stat = 'dmg'; sub = '+1 dig damage';
         } else {
           if (Math.random() < 0.5) { stat = 'rate'; sub = '+20% fire rate'; }
           else { stat = 'dmg'; sub = '+1 damage'; }
@@ -1231,7 +1273,14 @@ document.querySelectorAll('.card').forEach(card => {
     if (kind === 'turret') {
       const type = card.dataset.type;
       const w = S.weapons[type];
-      if (w && card.dataset.stat !== 'place') {
+      const cost = parseInt(card.dataset.cost || '0', 10);
+      if (w && card.dataset.stat === 'mole-place') {
+        // Mole bundle: the upgrade rides along with a fresh placement.
+        w.level++;
+        w.dmgBonus += 1;
+        S.gold -= cost;
+        // fall through to placement below
+      } else if (w && card.dataset.stat !== 'place') {
         // Owned: apply the level-up the card promised (rolled at offer time).
         const stat = card.dataset.stat || 'dmg';
         if (stat === 'evo') {
@@ -1268,8 +1317,10 @@ document.querySelectorAll('.card').forEach(card => {
         updateHud();
         return;
       }
-      // Placement mode: tap the map to deploy. The game stays paused until
-      // the turret is down — no cancel, there's always room somewhere.
+      // Placement mode: a bought unit (unowned first, owned duplicate)
+      // deducts its gold card price, then tap the map to deploy.
+      // (Mole bundle already deducted above.)
+      if (cost > 0 && card.dataset.stat !== 'mole-place') S.gold -= cost;
       S.pending--;
       overlay.classList.add('hidden');
       updateHud();
