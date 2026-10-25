@@ -779,6 +779,25 @@ function newGame() {
   // white ~3 hits ... dark grey ~10 hits
   const cave = genCaves(cfg.cols, cfg.rows, cfg.caveChance, rng);
   const noise = makeNoise2D(rng);
+  // Raw fbm clusters in the middle (0.16–0.89 on a typical map), so the
+  // lightest and darkest rock never appeared. Normalize per map: stretch
+  // the observed range to 0–1, so all 8 HP levels show up every seed.
+  // Same field, just wider values — blob edges get steeper HP ramps while
+  // blob centers stay smooth. Grey reuses this field (see below).
+  const raw = new Float32Array(cfg.cols * cfg.rows);
+  let vmin = 1, vmax = 0;
+  for (let y = 0; y < cfg.rows; y++) {
+    for (let x = 0; x < cfg.cols; x++) {
+      const i = y * cfg.cols + x;
+      raw[i] = noise((x / cfg.cols) * 3.5, (y / cfg.rows) * 3.5);
+      if (!cave[i]) {
+        if (raw[i] < vmin) vmin = raw[i];
+        if (raw[i] > vmax) vmax = raw[i];
+      }
+    }
+  }
+  const vspan = (vmax - vmin) || 1; // degenerate map guard
+  const norm = v => (v - vmin) / vspan;
   for (let y = 0; y < cfg.rows; y++) {
     for (let x = 0; x < cfg.cols; x++) {
       const i = y * cfg.cols + x;
@@ -786,7 +805,7 @@ function newGame() {
       shade[i] = Math.round(noise((x / cfg.cols) * 4.5 + 10, (y / cfg.rows) * 4.5 + 10) * 7);
       if (cave[i]) { cells[i] = EMPTY; continue; }
       cells[i] = WHITE;
-      const m = 3 + Math.round(noise((x / cfg.cols) * 3.5, (y / cfg.rows) * 3.5) * 7);
+      const m = 3 + Math.round(norm(raw[i]) * 7);
       maxhp[i] = m; hp[i] = m;
     }
   }
@@ -821,7 +840,9 @@ function newGame() {
         if (x < x0 || x >= x1 || y < y0 || y >= y1) continue;
         const dx = x - pc.x, dy = y - pc.y;
         if (dx * dx + dy * dy < GREY_MIN_DIST * GREY_MIN_DIST) continue;
-        const v = noise((x / cfg.cols) * 3.5, (y / cfg.rows) * 3.5);
+        // Same normalized field as brown: grey now spans its full 30–100
+        // and all 8 grey shades (it had the same middle-clustering bug).
+        const v = norm(raw[i]);
         cells[i] = GREY;
         maxhp[i] = hp[i] = GREY_HP_MIN + Math.round(v * (GREY_HP_MAX - GREY_HP_MIN));
         shade[i] = Math.round(v * 7);
