@@ -2198,9 +2198,9 @@ function render() {
     ppy += bh + 6;
   }
   // Stat chips, top-left: one row per owned weapon stat. Each row: weapon
-  // icon + 3-letter stat label + chips (gold filled / dark empty). This
+  // icon + 4-letter stat label + chips (gold filled / dark empty). This
   // is the progress bar you watch climb — one chip per stat pick.
-  const STAT_LABEL = { dmg: 'DMG', proj: 'PRJ', rate: 'RAT', crit: 'CRT', growth: 'GRW', range: 'RNG', count: 'CNT', dig: 'DIG' };
+  const STAT_LABEL = { dmg: 'DAMG', proj: 'PROJ', rate: 'RATE', crit: 'CRIT', growth: 'GROW', range: 'RANG', count: 'CNTS', dig: 'DIGS' };
   for (const type of ['cannon', 'bloom', 'gather', 'mole']) {
     const w = S.weapons[type];
     if (!w || !w.stats) continue;
@@ -2236,7 +2236,7 @@ function render() {
       ctx.fillText(STAT_LABEL[d.key] || d.key.toUpperCase(), 30, iy + 1);
       for (let i = 0; i < d.cap; i++) {
         ctx.beginPath();
-        ctx.arc(52 + i * 7.5, iy, 2.5, 0, Math.PI * 2);
+        ctx.arc(60 + i * 7.5, iy, 2.5, 0, Math.PI * 2);
         ctx.fillStyle = i < lvl ? '#ffd75e' : '#2a3145';
         ctx.fill();
       }
