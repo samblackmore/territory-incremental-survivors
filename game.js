@@ -12,7 +12,10 @@ const BOUNCE_MAX = 8;               // bounces per projectile (backstop, not a t
 const STEER_RATE = 3;               // missile turn rate, rad/s (x S.steerMult)
 const RED_DEPLOY_EVERY = 12;        // seconds between red turret deployments
 const GROW_INTERVAL = 5;            // Bloom: seconds per growth increment (x S.bloomMult)
-const GROW_STEPS = 5;              // increments to turn a cell into territory
+const GROW_STEPS = 4;              // quarters to turn a cell into territory
+// Quarter fill order for bloom growth: top-left, top-right,
+// bottom-left, bottom-right (each is a 0.5 x 0.5 mini-square).
+const GROW_QUARTERS = [[0, 0], [0.5, 0], [0, 0.5], [0.5, 0.5]];
 const BLOOM_RADIUS = 8;            // Bloom: how far (cells) it reaches for empty ground
 const HARVEST_EVERY = 8;           // territory: seconds between pickups per cell
 
@@ -1235,15 +1238,6 @@ function bloomGrowth(t) {
     }
   }
 }
-// Deterministic dot position for growth increment k of a cell: the k-th
-// circle always plops in the same spot, so the field visibly accumulates.
-function growthDotPos(idx, k) {
-  let h = (idx * 31 + k * 17 + 7) | 0;
-  h = Math.imul(h ^ (h >>> 13), 1274126177);
-  h = h ^ (h >>> 16);
-  const u = (h >>> 0) % 1000 / 1000, v = ((h >>> 10) % 1000) / 1000;
-  return [0.22 + u * 0.56, 0.22 + v * 0.56];
-}
 function easeOutBack(t) {
   const c1 = 1.70158, c3 = c1 + 1;
   return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
@@ -1866,8 +1860,16 @@ function update(dt) {
               if (t.dug >= t.lifetime) { t.dead = true; continue; }
               if (t.dug % MOLE_TURN_EVERY === 0) turn();
             }
+          } else if (S.cells[ni] === EMPTY || S.cells[ni] === t.color) {
+            // Open ground (a cave, or own team's territory): walk straight
+            // through instead of spinning. This un-sticks red moles, which
+            // spawn inside their bloom's red territory and would otherwise
+            // turn forever against a cell they can never dig. Walking costs
+            // no dig and no lifetime (only dug cells count).
+            t.rx = t.x; t.ry = t.y; t.moveT = 0;
+            t.x = nx; t.y = ny;
           } else {
-            // Not rock: turn to find something to dig.
+            // Not rock, not walkable (grey, enemy ground): turn.
             turn();
           }
         }
@@ -2165,8 +2167,9 @@ function render() {
       }
     }
   }
-  // Territory growth: each increment plops a little circle at a deterministic
-  // spot inside the cell; the newest one pops in with an overshoot. At
+  // Territory growth: each increment fills one quarter of the cell with
+  // a mini-square (top-left, top-right, bottom-left, bottom-right, in
+  // that order); the newest quarter pops in with an overshoot. At
   // GROW_STEPS the cell blooms into solid territory (handled in bloomGrowth).
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
@@ -2175,12 +2178,13 @@ function render() {
       if (n <= 0 || S.cells[i] !== EMPTY) continue;
       ctx.fillStyle = CELL_COLORS[S.growBy[i]];
       for (let k = 0; k < n; k++) {
-        const [fx, fy] = growthDotPos(i, k);
+        const [qx, qy] = GROW_QUARTERS[k];
         let s = 1;
         if (k === n - 1) s = Math.max(0.01, easeOutBack(Math.min(1, (S.time - S.growT[i]) / 0.2)));
-        ctx.beginPath();
-        ctx.arc((x + fx) * CELL_PX, (y + fy) * CELL_PX, 3.2 * s, 0, Math.PI * 2);
-        ctx.fill();
+        // Scale the newest quarter around its own center so it pops in.
+        const cx = (x + qx + 0.25) * CELL_PX, cy = (y + qy + 0.25) * CELL_PX;
+        const half = 0.25 * s * CELL_PX;
+        ctx.fillRect(cx - half, cy - half, half * 2, half * 2);
       }
     }
   }
