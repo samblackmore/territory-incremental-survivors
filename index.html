@@ -250,6 +250,7 @@
   }
   .startgold { color: var(--text); margin-bottom: 16px; font-size: 18px; }
   .startgold b { color: #ffd75e; }
+  #buildver { color: #5b6478; font-size: 12px; margin-top: 14px; letter-spacing: 0.08em; }
   #weaponlist { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 18px; }
   .weapon {
     display: flex; align-items: center; gap: 10px;
@@ -479,6 +480,7 @@
     <!-- Shop grid lives here when dormant renderShop() is restored. -->
     <div id="weaponlist"></div>
     <button id="startbtn">Start Run</button>
+    <div id="buildver"></div>
   </div>
 </div>
 <div id="levelup" class="hidden">
@@ -507,6 +509,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=81"></script>
+<script src="game.js?v=82"></script>
 </body>
 </html>

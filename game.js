@@ -2726,9 +2726,26 @@ const WEAPON_DESC = {
   bloom: 'Grows coin-generating territory',
   gather: 'Pulls in nearby pickups',
 };
+// Build number for the title-screen diagnostic: read from this script's
+// own ?v= param (the cache-buster in index.html), so it can never drift
+// from the build actually loaded. Falls back to 'dev' when there is no
+// script tag (harness eval, local file without a query).
+const BUILD = (() => {
+  try {
+    const s = document.currentScript;
+    if (s && s.src) {
+      const m = /[?&]v=([^&]+)/.exec(s.src);
+      if (m) return m[1];
+    }
+  } catch (e) { /* ignore: no script URL available */ }
+  return 'dev';
+})();
+
 function renderStartScreen() {
-  // Nothing to render: no shop grid, no gold display. The start screen is
-  // just the title and the Start Run button (visibility via classList).
+  // Title screen is just the title + Start Run, plus the build stamp
+  // (diagnostic: confirms which build is actually loaded).
+  const bv = document.getElementById('buildver');
+  if (bv) bv.textContent = 'build v' + BUILD;
 }
 // ---- Shop (DORMANT — not called). Restore when other starter weapons
 // arrive: it renders the unlock grid into #weaponlist, spending meta gold.
