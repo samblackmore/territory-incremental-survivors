@@ -195,6 +195,22 @@ if (continuebtn) {
     renderStartScreen();
   });
 }
+// Debug x-ray: double-tap the minimap to hide/show the fog overlay.
+// Render-only — the real fog data, and everything gated on it (placement,
+// bloom visibility, laser targeting), stays untouched, so this is a view
+// for watching the enemy, not a cheat.
+let fogHidden = false;
+let lastMmTap = 0;
+if (minimap) minimap.addEventListener('pointerup', e => {
+  e.preventDefault(); e.stopPropagation();
+  const now = performance.now();
+  if (now - lastMmTap < 400) {
+    fogHidden = !fogHidden;
+    lastMmTap = 0;
+  } else {
+    lastMmTap = now;
+  }
+});
 function drawMinimap() {
   if (!mmctx || !S) return;
   const cols = cfg.cols, rows = cfg.rows;
@@ -206,9 +222,10 @@ function drawMinimap() {
   // Explored footprint: light grey where fog is fully cleared, dark grey
   // for the half-fog edge ring, black where still fogged. Grey rock in a
   // cleared cell reads as medium grey, so deposits are spottable.
+  // (When fog is hidden for debugging, every cell reads as cleared.)
   for (let y = 0; y < rows; y++) {
     for (let x = 0; x < cols; x++) {
-      const f = S.fog[y * cols + x];
+      const f = fogHidden ? 0 : S.fog[y * cols + x];
       if (f === 0) {
         mmctx.fillStyle = S.cells[y * cols + x] === GREY ? '#6b7280' : '#9ca3af';
         mmctx.fillRect(x * px, y * px, px, px);
@@ -2410,8 +2427,10 @@ function render() {
     ctx.beginPath(); ctx.moveTo(b.x1, b.y1); ctx.lineTo(b.x2, b.y2); ctx.stroke();
   }
   ctx.globalAlpha = 1;
-  // Fog of war over everything: full = black, half = 50% black (smooth edge)
-  for (let y = 0; y < cfg.rows; y++) {
+  // Fog of war over everything: full = black, half = 50% black (smooth edge).
+  // Skipped entirely when fog is hidden (double-tap the minimap) — the
+  // debug x-ray view.
+  if (!fogHidden) for (let y = 0; y < cfg.rows; y++) {
     for (let x = 0; x < cfg.cols; x++) {
       const f = S.fog[y * cfg.cols + x];
       if (f === 2) { ctx.fillStyle = '#000'; ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX); }
