@@ -1848,11 +1848,9 @@ function update(dt) {
             const dmg = TURRET.mole.dmg + (t.color === BLUE && w ? w.dmgBonus : 0);
             const broken = damageBlock(ni, dmg, t.color, t.x + 0.5, t.y + 0.5, 0, 0, false);
             if (broken) {
-              if (t.color === RED) {
-                // Red claims the dug cell: visible expansion toward blue.
-                S.cells[ni] = RED;
-                S.growN[ni] = 0; S.growBy[ni] = 0;
-              }
+              // Dug rock becomes open cave (EMPTY) for both colors.
+              // Only the Bloom makes territory — red moles open ground
+              // toward blue, they don't paint it red.
               // Glide: render starts from the old cell (no jump).
               t.rx = t.x; t.ry = t.y; t.moveT = 0;
               t.x = nx; t.y = ny;
