@@ -89,6 +89,14 @@ function unitCost(type) {
   }
   return UNIT_COST[type] + UNIT_COST_STEP * count;
 }
+// Red mole price: same formula as blue's, counted on living red moles.
+function redMoleCost() {
+  let count = 0;
+  for (const t of S.turrets) {
+    if (!t.dead && t.color === RED && t.type === 'mole') count++;
+  }
+  return UNIT_COST.mole + UNIT_COST_STEP * count;
+}
 // Shared icons (inline SVG) for cards — matching the canvas badge shapes.
 const ICONS = {
   cannon: '<svg viewBox="0 0 24 24" width="36" height="36"><polygon points="20,6 8,18 20,18" fill="#3b82f6"/></svg>',
@@ -109,7 +117,7 @@ const TURRET = {
   bloom:  { name: 'Bloom',  hp: 4, interval: GROW_INTERVAL, dmg: 0 },
   lantern:{ name: 'Lantern',hp: 4, interval: 0, dmg: 0 }, // pure vision, no firing
   gather: { name: 'Gather', hp: 5, interval: GATHER_COOLDOWN, dmg: 0 }, // pulls pickups in range
-  mole:   { name: 'Mole',   hp: 6, interval: 1.0, dmg: 2 }, // digs through rock, then dies
+  mole:   { name: 'Mole',   hp: 6, interval: 1.0, dmg: 1 }, // digs through rock, then dies
 };
 const MOLE_LIFETIME_MIN = 10;      // cells dug before dying (min)
 const MOLE_LIFETIME_MAX = 20;      // ... (max)
@@ -452,11 +460,17 @@ const GREY_HP_MIN = 30, GREY_HP_MAX = 100;
 const GREY_GOLD_CHANCE = 0.8;  // grey drops: mostly gold (XP is easy mid-game)
 const MOVE_DUR = 0.25; // seconds to glide from one cell to the next (mole + harvester)
 const MOLE_NUGGET_BIAS = 0.7; // blue mole: 70% toward nearest nugget, 30% random wander
-// Enemy moles: while the red Bloom lives, it sends moles toward blue.
-// One every RED_MOLE_EVERY seconds, up to RED_MOLE_MAX alive. They tunnel
-// through rock claiming it as RED — the encroachment you see coming.
-const RED_MOLE_EVERY = 25;
+// Enemy moles: while the red Bloom lives, it buys moles toward blue
+// from its bank (same mole pricing as blue: base + step per living
+// mole). Up to RED_MOLE_MAX alive — the cost, not a timer, is the
+// limiter, so the enemy has to earn its army from its own fields.
 const RED_MOLE_MAX = 3;
+// Enemy bloom head start: Growth 3 (1.2^3 = 1.73x) vs the player's
+// fresh bloom at Growth 0 — the early overwhelmed feeling, same rules.
+const RED_BLOOM_GROWTH = 3;
+// Territory harvest: a cell glows over HARVEST_EVERY seconds, then has
+// this chance to produce (same as the rock XP surprise, not a salary).
+const BLOOM_HARVEST_CHANCE = 0.3;
 
 // Hit-pop envelope: full amp during the hold (instant big square), then lerp to 0
 function popFactor(i) {
@@ -855,6 +869,14 @@ function newGame() {
         // weapons (VS-style): per-type stat tracks + derived mults. Picking
         // a stat card fills one chip on that track.
         weapons: {},
+        // Red mirrors blue's weapon system (same STAT_DEFS, same
+        // applyStat), just a separate object — so red can start ahead
+        // (bloom Growth 3) without touching blue's tracks.
+        redWeapons: {},
+        // Enemy bank: red gold, earned from red territory harvest, spent
+        // on red moles (same pricing as blue). Starts at 0 — red has to
+        // earn its first mole.
+        redGold: 0,
         particles: [], particlesSpawned: 0, rings: [], dmgNums: [],
         destroyed: 0, destroyedBlue: 0,
         bounceChance: 0,
@@ -863,7 +885,7 @@ function newGame() {
         passives: { bounce: 0 },
         // auto-battler state
         turrets: [], missiles: [], beams: [],
-        wave: 0, redQueue: [], redTimer: 0, waveBreak: 0, redKills: 0, redMoleTimer: 0,
+        wave: 0, redQueue: [], redTimer: 0, waveBreak: 0, redKills: 0,
         placing: null, runOver: false,
         dmgBonus: 0, steerMult: 1,
         // territory (Tiberium fields): per-cell growth progress
@@ -923,6 +945,11 @@ function newGame() {
   // The starter is always Cannon; the shop only gates mid-run drafts.
   S.turrets.push(mkTurret(pc.x, pc.y, BLUE, 'cannon'));
   S.weapons.cannon = { stats: initWeaponStats('cannon'), rateMult: 1, dmgBonus: 0, critChance: 0, proj: 0, evo: false };
+  // Enemy head start: red bloom at Growth 3 (same stat, same formula as
+  // blue's Growth picks — just pre-applied, so red spreads faster early).
+  S.redWeapons.bloom = { stats: initWeaponStats('bloom'), rateMult: 1, dmgBonus: 0, critChance: 0, proj: 0, evo: false };
+  S.redWeapons.bloom.stats.growth = RED_BLOOM_GROWTH;
+  applyStat(S.redWeapons.bloom, 'bloom', 'growth');
   // Grey rock: hard mid-map chunks, same CA blobs as caves but only where
   // the map is central AND far from the starter — never around the opening.
   // Only brown terrain converts (caves stay open); HP + shade come from the
@@ -1198,7 +1225,8 @@ function fireLaser(t) {
 // Bloom: Tiberium-style territory. Every interval it makes one growth
 // increment on the nearest empty cell in radius (preferring cells it has
 // already started). GROW_STEPS increments turn the cell into solid territory
-// of the Bloom's color, which then generates coins on harvest ticks.
+// of the Bloom's color, which then feeds its owner's harvest (blue map
+// pickups, red banked gold).
 // Progress persists if the Bloom dies — another Bloom can finish the job.
 function bloomGrowth(t) {
   let bx = -1, by = -1, bd = Infinity;
@@ -1725,9 +1753,11 @@ function placeTurretAt(sx, sy) {
 }
 
 // ---- Update ----
-// Per-type weapon stats (blue only; reds use base stats).
+// Per-type weapon stats, per side: blue reads S.weapons, red reads
+// S.redWeapons (same system, separate tracks — red starts ahead on bloom).
 function weaponRateMult(t) {
-  return (t.color === BLUE && S.weapons[t.type]) ? S.weapons[t.type].rateMult : 1;
+  if (t.color === BLUE) return S.weapons[t.type] ? S.weapons[t.type].rateMult : 1;
+  return S.redWeapons[t.type] ? S.redWeapons[t.type].rateMult : 1;
 }
 function weaponDmgBonus(t) {
   return (t.color === BLUE && S.weapons[t.type]) ? S.weapons[t.type].dmgBonus : 0;
@@ -1758,14 +1788,14 @@ function update(dt) {
     overlay.classList.remove('hidden');
     updateHud();
   }
-  // Enemy moles: while the red Bloom lives, it sends moles toward blue —
-  // one every RED_MOLE_EVERY seconds, up to RED_MOLE_MAX alive.
+  // Enemy moles: the red Bloom buys them from its bank (same pricing as
+  // blue) when it can afford one, up to RED_MOLE_MAX alive. No timer —
+  // the economy is the limiter, so starving red's fields starves its army.
   if (!S.runOver) {
-    S.redMoleTimer = (S.redMoleTimer || 0) + dt;
-    if (S.redMoleTimer >= RED_MOLE_EVERY) {
-      S.redMoleTimer = 0;
-      const redMoles = S.turrets.filter(t => !t.dead && t.color === RED && t.type === 'mole').length;
-      if (redMoles < RED_MOLE_MAX) spawnRedMole();
+    const redMoles = S.turrets.filter(t => !t.dead && t.color === RED && t.type === 'mole').length;
+    if (redMoles < RED_MOLE_MAX) {
+      const cost = redMoleCost();
+      if ((S.redGold || 0) >= cost && spawnRedMole()) S.redGold -= cost;
     }
   }
   for (const t of S.turrets) {
@@ -1819,7 +1849,7 @@ function update(dt) {
     } else if (t.type === 'mole') {
       // Digger: chews through rock in its direction, turns, dies after
       // its lifetime (cells dug). Red turns toward the nearest blue turret
-      // (encroachment) and claims dug rock as RED. Blue prefers the nearest
+      // (encroachment) and opens ground toward blue. Blue prefers the nearest
       // gold nugget (70%) with random wander mixed in (30%) — purposeful
       // but not a beeline, and it stops looping in circles. Grey and
       // territory block both (they turn).
@@ -1948,18 +1978,26 @@ function update(dt) {
     if (S.waveBreak <= 0) startWave(S.wave + 1);
   }
 
-  // Harvest: each blue territory cell glows over HARVEST_EVERY seconds,
-  // then pops a pickup (80% XP, 20% gold) and resets to base color.
+  // Harvest: each territory cell (blue or red) lightens over
+  // HARVEST_EVERY seconds, then has a BLOOM_HARVEST_CHANCE to produce —
+  // a map pickup for blue (80% XP, 20% gold), banked gold for red (it
+  // has no collector, so the product goes straight to its bank).
+  // Otherwise the glow just resets: a surprise, not a salary.
   for (let i = 0; i < S.cells.length; i++) {
-    if (S.cells[i] !== BLUE) continue;
+    if (S.cells[i] !== BLUE && S.cells[i] !== RED) continue;
     S.harvT[i] += dt;
     if (S.harvT[i] >= HARVEST_EVERY) {
       S.harvT[i] = 0;
       const cx = i % cfg.cols, cy = (i / cfg.cols) | 0;
-      if (coinAt(cx, cy) || S.coins.length >= 800) continue;
-      const kind = Math.random() < 0.2 ? 'gold' : 'xp';
-      S.coins.push({ x: cx + 0.5, y: cy + 0.5, state: 'idle', kind,
-                     phase: Math.random() * 6.283, sx: 0, sy: 0, t: 0, dead: false });
+      if (S.cells[i] === BLUE && (coinAt(cx, cy) || S.coins.length >= 800)) continue;
+      if (Math.random() >= BLOOM_HARVEST_CHANCE) continue; // no product this cycle
+      if (S.cells[i] === BLUE) {
+        const kind = Math.random() < 0.2 ? 'gold' : 'xp';
+        S.coins.push({ x: cx + 0.5, y: cy + 0.5, state: 'idle', kind,
+                       phase: Math.random() * 6.283, sx: 0, sy: 0, t: 0, dead: false });
+      } else {
+        S.redGold = (S.redGold || 0) + 1;
+      }
     }
   }
 
@@ -2143,7 +2181,15 @@ function render() {
         ctx.fillStyle = `rgb(${r},${g},${b})`;
         ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX);
       }
-      else if (st === RED) { ctx.fillStyle = CELL_COLORS[RED]; ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX); }
+      else if (st === RED) {
+        // Same glow for red (its fields feed the enemy bank, same rules).
+        const k = Math.min(1, S.harvT[i] / HARVEST_EVERY) * 0.45;
+        const r = Math.round(RED_RGB[0] + (255 - RED_RGB[0]) * k);
+        const g = Math.round(RED_RGB[1] + (255 - RED_RGB[1]) * k);
+        const b = Math.round(RED_RGB[2] + (255 - RED_RGB[2]) * k);
+        ctx.fillStyle = `rgb(${r},${g},${b})`;
+        ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX);
+      }
       else if (st === EMPTY) {
         const sh = CAVE_SHADES[S.shade[i] || 0];
         ctx.fillStyle = `rgb(${sh[0]},${sh[1]},${sh[2]})`;
@@ -2534,7 +2580,7 @@ function updateHud() {
     `<div>Bounce: <b>Lv${S.passives.bounce}</b> (${Math.round(S.bounceChance * 100)}%) · Gather: <b>${gatherRange()} seek / ${gatherCount()} per stop</b></div>` +
     `<div>Weapons: <b>${Object.entries(S.weapons).map(([k, w]) => `${k} ${w.stats ? Object.entries(w.stats).map(([s, n]) => `${s} ${n}`).join('/') : ''} (×${w.rateMult.toFixed(2)} rate, +${w.dmgBonus} dmg${w.critChance ? `, ${Math.round(w.critChance * 100)}% crit` : ''}${w.proj ? `, +${w.proj} proj` : ''})`).join(' · ')}</b></div>` +
     `<div>Projectiles alive: <b>${S.projs.length}</b> · Missiles: <b>${S.missiles.length}</b></div>` +
-    `<div>Pickups: <b>${S.coins.length}</b> on field · Gold this run: <b>${S.gold}</b> · Total: <b>${meta.gold}</b></div>`;
+    `<div>Pickups: <b>${S.coins.length}</b> on field · Gold this run: <b>${S.gold}</b> · Total: <b>${meta.gold}</b> · Red bank: <b>${S.redGold || 0}</b> (next mole <b>${redMoleCost()}</b>)</div>`;
 }
 
 // ---- Main loop ----
