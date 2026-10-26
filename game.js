@@ -447,6 +447,8 @@ const GREY_FILL = 0.40;        // CA seed fill for grey chunks (caves use 0.38; 
 const GREY_MIN_DIST = 12;      // cells from the starter: no grey near the opening
 const GREY_HP_MIN = 30, GREY_HP_MAX = 100;
 const GREY_GOLD_CHANCE = 0.8;  // grey drops: mostly gold (XP is easy mid-game)
+const MOVE_DUR = 0.25; // seconds to glide from one cell to the next (mole + harvester)
+const MOLE_NUGGET_BIAS = 0.7; // blue mole: 70% toward nearest nugget, 30% random wander
 // Enemy moles: while the red Bloom lives, it sends moles toward blue.
 // One every RED_MOLE_EVERY seconds, up to RED_MOLE_MAX alive. They tunnel
 // through rock claiming it as RED — the encroachment you see coming.
@@ -609,6 +611,12 @@ function mkTurret(x, y, color, type) {
     t.dug = 0;
     t.lifetime = MOLE_LIFETIME_MIN + Math.floor(Math.random() * (MOLE_LIFETIME_MAX - MOLE_LIFETIME_MIN + 1));
     t.digT = 0;
+    // Smooth-movement render state (glides cell to cell, no jumps).
+    t.rx = x; t.ry = y; t.moveT = 1;
+  }
+  if (type === 'gather') {
+    // Harvester: roams the grid toward pickups (see harvesterStep).
+    t.rx = x; t.ry = y; t.moveT = 1; t.stepT = 0;
   }
   return t;
 }
@@ -622,6 +630,76 @@ function gatherRange() {
 function gatherCount() {
   const w = S.weapons.gather;
   return 1 + (w && w.stats ? (w.stats.count || 0) : 0);
+}
+// Harvester pathing: BFS (not A* — we just need the nearest reachable
+// pickup, and BFS guarantees it avoids walls). From the Gather's cell,
+// over open ground (EMPTY or own BLUE territory, never rock/grey/red,
+// never another turret), find the closest idle pickup within Range steps.
+// Returns the next cell to step into, or null when nothing is reachable
+// in range (so it never treks to another cave — too slow gameplay-wise).
+function harvesterStep(t) {
+  const R = gatherRange();
+  const W = cfg.cols, H = cfg.rows;
+  const start = t.y * W + t.x;
+  const dist = new Int32Array(W * H).fill(-1);
+  const prev = new Int32Array(W * H).fill(-1);
+  const q = [start];
+  dist[start] = 0;
+  // Idle pickups by cell (first one per cell wins).
+  const pickAt = new Map();
+  for (const c of S.coins) {
+    if (c.state !== 'idle') continue;
+    const pi = Math.floor(c.y) * W + Math.floor(c.x);
+    if (!pickAt.has(pi)) pickAt.set(pi, c);
+  }
+  let qi = 0, found = -1;
+  while (qi < q.length && found < 0) {
+    const cur = q[qi++];
+    const cx = cur % W, cy = Math.floor(cur / W);
+    if (dist[cur] >= R) continue;
+    for (const [dx, dy] of [[0, -1], [1, 0], [0, 1], [-1, 0]]) {
+      const nx = cx + dx, ny = cy + dy;
+      if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+      const ni = ny * W + nx;
+      if (dist[ni] >= 0) continue;
+      const cell = S.cells[ni];
+      if (cell !== EMPTY && cell !== BLUE) continue; // walls: rock, grey, red
+      if (turretAt(nx, ny)) continue; // occupied
+      dist[ni] = dist[cur] + 1;
+      prev[ni] = cur;
+      if (pickAt.has(ni)) { found = ni; break; }
+      q.push(ni);
+    }
+  }
+  if (found < 0) return null;
+  // Backtrack to the first step from the start.
+  let cur = found;
+  while (prev[cur] !== start && prev[cur] >= 0) cur = prev[cur];
+  return { nx: cur % W, ny: Math.floor(cur / W) };
+}
+// Harvester collection: when a Gather steps onto (or is already on) a
+// cell, it collects up to Count idle pickups — those on its cell first,
+// then the nearest within 1 cell (a small cluster). Collected pickups fly
+// to the HUD like tapped ones (same 'fly' state, same grant on arrival).
+function collectAtGather(t) {
+  const here = [], near = [];
+  for (const c of S.coins) {
+    if (c.state !== 'idle') continue;
+    const cx = Math.floor(c.x), cy = Math.floor(c.y);
+    const d = Math.max(Math.abs(cx - t.x), Math.abs(cy - t.y));
+    if (d === 0) here.push(c);
+    else if (d === 1) near.push(c);
+  }
+  near.sort((a, b) => {
+    const da = (a.x - (t.x + 0.5)) ** 2 + (a.y - (t.y + 0.5)) ** 2;
+    const db = (b.x - (t.x + 0.5)) ** 2 + (b.y - (t.y + 0.5)) ** 2;
+    return da - db;
+  });
+  const take = [...here, ...near].slice(0, gatherCount());
+  for (const c of take) {
+    c.state = 'fly'; c.sx = c.x; c.sy = c.y; c.t = 0;
+  }
+  return take.length;
 }
 // Turret occupying a cell, if any (skips the dead).
 function turretAt(cx, cy) {
@@ -638,6 +716,22 @@ function nearestBlueTurret(x, y) {
     if (d < bd) { bd = d; best = t; }
   }
   return best;
+}
+// Greedy direction from (cx, cy) toward the nearest unbroken gold nugget
+// (WHITE cell with goldNug set). Null when no nuggets remain.
+function moleDirToNugget(cx, cy) {
+  let best = -1, bd = Infinity;
+  for (let i = 0; i < S.cells.length; i++) {
+    if (S.cells[i] !== WHITE || !S.goldNug[i]) continue;
+    const x = i % cfg.cols, y = Math.floor(i / cfg.cols);
+    const d = (x - cx) ** 2 + (y - cy) ** 2;
+    if (d < bd) { bd = d; best = i; }
+  }
+  if (best < 0) return null;
+  const bx = best % cfg.cols, by = Math.floor(best / cfg.cols);
+  const dx = bx - cx, dy = by - cy;
+  if (Math.abs(dx) >= Math.abs(dy)) return dx > 0 ? 1 : (dx < 0 ? 3 : 0);
+  return dy > 0 ? 2 : 0;
 }
 // Greedy direction from (cx, cy) toward the nearest blue turret: pick the
 // axis with the larger gap (dirs: 0 up, 1 right, 2 down, 3 left). This is
@@ -1682,6 +1776,8 @@ function update(dt) {
   }
   for (const t of S.turrets) {
     if (t.dead) continue;
+    // Smooth-movement clock (mole + harvester): render glides from rx/ry.
+    if (t.rx !== undefined) t.moveT += dt;
     const rateMult = cfg.freq * (t.color === BLUE ? S.freqMult : 1) * weaponRateMult(t);
     if (t.type === 'cannon') {
       // Sweep the aim within the turn arc (full 360 = continuous spin)
@@ -1728,11 +1824,18 @@ function update(dt) {
       // Lanterns don't fire — they just hold back the fog.
     } else if (t.type === 'mole') {
       // Digger: chews through rock in its direction, turns, dies after
-      // its lifetime (cells dug). Blue turns randomly; red turns toward
-      // the nearest blue turret and claims dug rock as RED (expansion,
-      // not open ground). Grey and territory block both (they turn).
+      // its lifetime (cells dug). Red turns toward the nearest blue turret
+      // (encroachment) and claims dug rock as RED. Blue prefers the nearest
+      // gold nugget (70%) with random wander mixed in (30%) — purposeful
+      // but not a beeline, and it stops looping in circles. Grey and
+      // territory block both (they turn).
       const turn = () => {
-        t.moleDir = t.color === RED ? moleDirToward(t.x, t.y) : Math.floor(Math.random() * 4);
+        if (t.color === RED) {
+          t.moleDir = moleDirToward(t.x, t.y);
+        } else {
+          const nd = moleDirToNugget(t.x, t.y);
+          t.moleDir = (nd !== null && Math.random() < MOLE_NUGGET_BIAS) ? nd : Math.floor(Math.random() * 4);
+        }
       };
       t.digT += dt;
       if (t.digT >= TURRET.mole.interval) {
@@ -1756,6 +1859,8 @@ function update(dt) {
                 S.cells[ni] = RED;
                 S.growN[ni] = 0; S.growBy[ni] = 0;
               }
+              // Glide: render starts from the old cell (no jump).
+              t.rx = t.x; t.ry = t.y; t.moveT = 0;
               t.x = nx; t.y = ny;
               t.dug++;
               if (t.dug >= t.lifetime) { t.dead = true; continue; }
@@ -1934,30 +2039,23 @@ function update(dt) {
   S.floaters = S.floaters.filter(f => f.t < 0.7);
   S.chipPulse = Math.max(0, S.chipPulse - dt * 3);
 
-  // Gather units: every cooldown, each living Gather pulls up to N idle
-  // pickups within its range toward itself (nearest first).
+  // Harvester units: each living blue Gather roams the grid toward the
+  // closest idle pickup it can reach within its Range (BFS, avoids walls,
+  // never treks to another cave). It steps one cell per MOVE_DUR, gliding
+  // smoothly, and collects on arrival (plus a small Count cluster).
   for (const t of S.turrets) {
     if (t.dead || t.color !== BLUE || t.type !== 'gather') continue;
     if (t.showRange > 0) t.showRange -= dt;
-    t.coolT += dt;
-    if (t.coolT >= GATHER_COOLDOWN) {
-      t.coolT = 0;
-      t.showRange = GATHER_FLASH_DUR; // flash the range on every pull
-      const r2 = gatherRange() * gatherRange();
-      const inRange = [];
-      for (const c of S.coins) {
-        if (c.state !== 'idle') continue;
-        const dx = c.x - (t.x + 0.5), dy = c.y - (t.y + 0.5);
-        const d2 = dx * dx + dy * dy;
-        if (d2 <= r2) inRange.push({ c, d2 });
-      }
-      inRange.sort((a, b) => a.d2 - b.d2);
-      const n = Math.min(gatherCount(), inRange.length);
-      for (let k = 0; k < n; k++) {
-        const c = inRange[k].c;
-        c.state = 'gather'; c.sx = c.x; c.sy = c.y; c.gx = t.x + 0.5; c.gy = t.y + 0.5; c.t = 0;
-      }
-    }
+    t.stepT = (t.stepT || 0) + dt;
+    if (t.stepT < MOVE_DUR) continue;
+    t.stepT = 0;
+    // Collect anything already on our cell, then step toward the next pickup.
+    collectAtGather(t);
+    const step = harvesterStep(t);
+    if (!step) continue; // no reachable pickup in range: wait here
+    t.rx = t.x; t.ry = t.y; t.moveT = 0;
+    t.x = step.nx; t.y = step.ny;
+    collectAtGather(t);
   }
 
   // Hit-pop clock: holds full size briefly (impact reads as instant), then lerps down
@@ -2143,7 +2241,15 @@ function render() {
   ctx.textAlign = 'start';
   // Turrets: distinct shapes per type, color = owner. HP bar when damaged.
   for (const t of S.turrets) {
-    const px = (t.x + 0.5) * CELL_PX, py = (t.y + 0.5) * CELL_PX;
+    // Smooth movement: moles + harvesters glide from the previous cell
+    // instead of jumping (logical position steps, render interpolates).
+    let dx = t.x, dy = t.y;
+    if (t.rx !== undefined && t.moveT < MOVE_DUR) {
+      const k = t.moveT / MOVE_DUR;
+      dx = t.rx + (t.x - t.rx) * k;
+      dy = t.ry + (t.y - t.ry) * k;
+    }
+    const px = (dx + 0.5) * CELL_PX, py = (dy + 0.5) * CELL_PX;
     const col = CELL_COLORS[t.color];
     ctx.save();
     ctx.translate(px, py);
@@ -2201,17 +2307,8 @@ function render() {
       ctx.beginPath(); ctx.arc(0, 1, 3, 0, Math.PI * 2); ctx.fill();
     }
     ctx.restore();
-    // Gather cooldown clock: thin arc filling as the next pull approaches.
+    // Gather seek radius: dashed circle while placing / on tap.
     if (t.type === 'gather' && !t.dead) {
-      const k = Math.min(1, t.coolT / GATHER_COOLDOWN);
-      ctx.save();
-      ctx.strokeStyle = 'rgba(250, 204, 21, 0.9)';
-      ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      ctx.arc(px, py, 12, -Math.PI / 2, -Math.PI / 2 + k * Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
-      // Tapped or just pulled: flash the pull range, fading out.
       if (t.showRange > 0) {
         const fade = Math.min(1, t.showRange / GATHER_FLASH_DUR);
         ctx.save();
@@ -2405,7 +2502,10 @@ function updateHud() {
   // was just met (so it reads full), not the new level's higher need.
   const need = S.levelUpNeed || xpNeed();
   const pct = Math.min(1, Math.max(0, S.xpShown / need));
-  const label = `LV ${lvl} &nbsp;·&nbsp; ${Math.floor(S.xpShown)}/${need} XP`;
+  // Run timer (play time, pauses excluded) after the level + XP counts.
+  const tsec = Math.floor(S.time || 0);
+  const timer = `${Math.floor(tsec / 60)}:${String(tsec % 60).padStart(2, '0')}`;
+  const label = `LV ${lvl} &nbsp;·&nbsp; ${Math.floor(S.xpShown)}/${need} XP &nbsp;·&nbsp; ${timer}`;
   xpfill.style.width = (pct * 100).toFixed(1) + '%';
   xplabel.innerHTML = label;
 
@@ -2429,7 +2529,7 @@ function updateHud() {
     `<div>Blocks excavated: <b>${S.destroyed}</b> · Red turrets destroyed: <b>${S.redKills}</b></div>` +
     `<div>Map seed: <b>${S.seed}</b></div>` +
     `<div>Fire rate: <b>${effFreq}/s</b> (×${S.freqMult.toFixed(2)}) · Damage: <b>+${S.dmgBonus}</b> · Steering: <b>×${S.steerMult.toFixed(2)}</b> · Bloom: <b>×${S.bloomMult.toFixed(2)}</b></div>` +
-    `<div>Bounce: <b>Lv${S.passives.bounce}</b> (${Math.round(S.bounceChance * 100)}%) · Gather: <b>${gatherRange()} cells / ${gatherCount()} per pull</b> (${GATHER_COOLDOWN}s)</div>` +
+    `<div>Bounce: <b>Lv${S.passives.bounce}</b> (${Math.round(S.bounceChance * 100)}%) · Gather: <b>${gatherRange()} seek / ${gatherCount()} per stop</b></div>` +
     `<div>Weapons: <b>${Object.entries(S.weapons).map(([k, w]) => `${k} ${w.stats ? Object.entries(w.stats).map(([s, n]) => `${s} ${n}`).join('/') : ''} (×${w.rateMult.toFixed(2)} rate, +${w.dmgBonus} dmg${w.critChance ? `, ${Math.round(w.critChance * 100)}% crit` : ''}${w.proj ? `, +${w.proj} proj` : ''})`).join(' · ')}</b></div>` +
     `<div>Projectiles alive: <b>${S.projs.length}</b> · Missiles: <b>${S.missiles.length}</b></div>` +
     `<div>Pickups: <b>${S.coins.length}</b> on field · Gold this run: <b>${S.gold}</b> · Total: <b>${meta.gold}</b></div>`;
