@@ -77,7 +77,7 @@ function cannonMaxed() {
 // Mid-run unit costs (run gold, not meta gold): base + 5 per living unit
 // of that type. The starter Cannon is free (pre-placed); every duplicate
 // costs extra, and the price climbs as your army grows. Tunable.
-const UNIT_COST = { cannon: 10, mole: 8, bloom: 12, gather: 6 };
+const UNIT_COST = { cannon: 10, mole: 8, bloom: 6, gather: 6 };
 const UNIT_COST_STEP = 5;
 function unitCost(type) {
   let count = 0;
@@ -1365,8 +1365,12 @@ function projCost() {
   return 10 + lv * UNIT_COST_STEP;
 }
 function offerCards() {
-  // XP row: 3 free cards. Slots beyond the pool stay hidden.
+  // XP row: 3 free cards, weighted draw without replacement. Bag of Gold
+  // counts half (weight 0.5 vs 1 for everything else) — it's uncapped, so
+  // without this it would crowd out real upgrades as stats max out.
+  // Slots beyond the pool stay hidden.
   const pool = availableCards().slice();
+  const weight = p => p.kind === 'gold' ? 0.5 : 1;
   const els = document.querySelectorAll('#levelup .xpcard');
   els.forEach(el => {
     el.classList.remove('dealt');
@@ -1376,7 +1380,11 @@ function offerCards() {
     el.innerHTML = ''; el.style.display = 'none';
   });
   for (let k = 0; k < els.length && pool.length; k++) {
-    const p = pool.splice((Math.random() * pool.length) | 0, 1)[0];
+    let total = 0;
+    for (const p of pool) total += weight(p);
+    let r = Math.random() * total, pi = 0;
+    while (pi < pool.length - 1 && (r -= weight(pool[pi])) > 0) pi++;
+    const p = pool.splice(pi, 1)[0];
     const el = els[k];
     el.style.display = '';
     el.dataset.kind = p.kind;
