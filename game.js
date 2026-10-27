@@ -1195,8 +1195,8 @@ function checkRunOver() {
 // flood is a controller object on S plus these functions.
 const SURVIVAL = true; // survival branch: player renders red, flood is blue, enemy base off
 const FLOOD_FIRST_WAVE = 30; // seconds until the first wave (grace to dig in)
-const FLOOD_WAVE_EVERY = 45; // seconds between waves
-const FLOOD_WARN = 10;       // seconds of warning before a wave lands
+const FLOOD_WAVE_EVERY = 10; // seconds between waves (was 45 — Sam: more frequent)
+const FLOOD_WARN = 10;       // seconds of warning before a wave lands (= the interval, so the countdown covers it)
 const FLOOD_DMG = 2;         // damage per flood projectile (light rock: 2 hits)
 const FLOOD_SPEED = 8;       // cells/s — slower than player shots (12.5), a lumbering front
 const FLOOD_DIRS = ['north', 'south', 'west', 'east']; // edge the flood comes FROM
@@ -1206,14 +1206,28 @@ const FLOOD_DIRS = ['north', 'south', 'west', 'east']; // edge the flood comes F
 // map-gen stream — same seed still builds the same map as main.
 function floodInit(seed) {
   const r = mulberry32(seed + 99991);
-  return { dir: Math.floor(r() * 4), wave: 0, nextWave: FLOOD_FIRST_WAVE, warned: false };
+  return { dir: Math.floor(r() * 4), wave: 0, nextWave: FLOOD_FIRST_WAVE, warned: false, announceT: 0 };
 }
 function floodTick(dt) {
   const f = S.flood;
   if (!f || S.runOver) return;
   f.nextWave -= dt;
+  // Announcement window: after a wave fires, the banner shows
+  // "FLOOD WAVE N!" for 2s before the countdown resumes, so the live
+  // countdown never clobbers the announcement (and no setTimeout has
+  // to hide the banner mid-countdown).
+  if (f.announceT > 0) {
+    f.announceT -= dt;
+    if (f.announceT > 0) return; // keep showing "FLOOD WAVE N!", don't touch the banner
+    f.warned = false; // announcement over: re-arm so the countdown shows
+  }
   if (!f.warned && f.nextWave <= FLOOD_WARN) {
     f.warned = true;
+    wavebanner.classList.remove('hidden');
+  }
+  if (f.warned && f.nextWave > 0) {
+    // Live countdown: refresh every tick, not just at trigger (the old
+    // code set the text once, so it read a fixed "10s" the whole time).
     wavebanner.textContent = 'FLOOD WAVE FROM THE ' + FLOOD_DIRS[f.dir].toUpperCase() + ' IN ' + Math.max(1, Math.ceil(f.nextWave)) + 's';
     wavebanner.classList.remove('hidden');
   }
@@ -1222,9 +1236,9 @@ function floodTick(dt) {
     floodFireWave();
     f.nextWave = FLOOD_WAVE_EVERY;
     f.warned = false;
+    f.announceT = 2;
     wavebanner.textContent = 'FLOOD WAVE ' + f.wave + '!';
-    clearTimeout(S._wbt);
-    S._wbt = setTimeout(() => wavebanner.classList.add('hidden'), 2000);
+    wavebanner.classList.remove('hidden');
   }
 }
 function floodFireWave() {
