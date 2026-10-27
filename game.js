@@ -5,7 +5,11 @@
 
 // ---- Cell states ----
 const WHITE = 0, EMPTY = 1, BLUE = 2, RED = 3, GREY = 4;
-const CELL_COLORS = ['#eef1f6', '#3d4454', '#3b82f6', '#ef4444', '#6b7280'];
+// SURVIVAL BRANCH palette flip (render-only): BLUE is the player
+// internally, but renders red; RED is the flood internally, but renders
+// blue. Logic (fog, bloom, harvest, win checks) still reads BLUE/RED
+// as player/enemy — only the colors on screen are swapped.
+const CELL_COLORS = ['#eef1f6', '#3d4454', '#ef4444', '#3b82f6', '#6b7280'];
 
 const CELL_PX = 16;                 // render size of one cell
 const BOUNCE_MAX = 8;               // bounces per projectile (backstop, not a target)
@@ -99,14 +103,14 @@ function redMoleCost() {
 }
 // Shared icons (inline SVG) for cards — matching the canvas badge shapes.
 const ICONS = {
-  cannon: '<svg viewBox="0 0 24 24" width="36" height="36"><polygon points="20,6 8,18 20,18" fill="#3b82f6"/></svg>',
-  rocket: '<svg viewBox="0 0 24 24" width="36" height="36"><polygon points="20,12 12,8 12,16" fill="#3b82f6"/><rect x="6" y="9.5" width="7" height="5" fill="#3b82f6"/></svg>',
-  laser: '<svg viewBox="0 0 24 24" width="36" height="36"><polygon points="12,5 17,12 12,19 7,12" fill="#3b82f6"/></svg>',
-  bloom: '<svg viewBox="0 0 24 24" width="36" height="36"><circle cx="12" cy="12" r="5.5" fill="#3b82f6"/></svg>',
-  lantern: '<svg viewBox="0 0 24 24" width="36" height="36"><rect x="7" y="6" width="10" height="12" fill="none" stroke="#3b82f6" stroke-width="1.5"/><circle cx="12" cy="12" r="2.5" fill="#fef3c7"/></svg>',
-  gather: '<svg viewBox="0 0 24 24" width="36" height="36"><path d="M7,6 A5,5 0 0,0 17,6" stroke="#3b82f6" stroke-width="2.5" fill="none"/><circle cx="7" cy="15.5" r="1.8" fill="#3b82f6"/><circle cx="17" cy="15.5" r="1.8" fill="#3b82f6"/><circle cx="12" cy="12" r="2" fill="#3b82f6"/></svg>',
+  cannon: '<svg viewBox="0 0 24 24" width="36" height="36"><polygon points="20,6 8,18 20,18" fill="#ef4444"/></svg>',
+  rocket: '<svg viewBox="0 0 24 24" width="36" height="36"><polygon points="20,12 12,8 12,16" fill="#ef4444"/><rect x="6" y="9.5" width="7" height="5" fill="#ef4444"/></svg>',
+  laser: '<svg viewBox="0 0 24 24" width="36" height="36"><polygon points="12,5 17,12 12,19 7,12" fill="#ef4444"/></svg>',
+  bloom: '<svg viewBox="0 0 24 24" width="36" height="36"><circle cx="12" cy="12" r="5.5" fill="#ef4444"/></svg>',
+  lantern: '<svg viewBox="0 0 24 24" width="36" height="36"><rect x="7" y="6" width="10" height="12" fill="none" stroke="#ef4444" stroke-width="1.5"/><circle cx="12" cy="12" r="2.5" fill="#fef3c7"/></svg>',
+  gather: '<svg viewBox="0 0 24 24" width="36" height="36"><path d="M7,6 A5,5 0 0,0 17,6" stroke="#ef4444" stroke-width="2.5" fill="none"/><circle cx="7" cy="15.5" r="1.8" fill="#ef4444"/><circle cx="17" cy="15.5" r="1.8" fill="#ef4444"/><circle cx="12" cy="12" r="2" fill="#ef4444"/></svg>',
   bounce: '<svg viewBox="0 0 24 24" width="36" height="36"><polyline points="5,17 9,7 13,17 17,7" stroke="#fb923c" stroke-width="2" fill="none"/></svg>',
-  steer: '<svg viewBox="0 0 24 24" width="36" height="36"><polygon points="20,12 12,8 12,16" fill="#3b82f6"/><rect x="6" y="9.5" width="7" height="5" fill="#3b82f6"/></svg>',
+  steer: '<svg viewBox="0 0 24 24" width="36" height="36"><polygon points="20,12 12,8 12,16" fill="#ef4444"/><rect x="6" y="9.5" width="7" height="5" fill="#ef4444"/></svg>',
   mole: '<svg viewBox="0 0 24 24" width="36" height="36"><ellipse cx="12" cy="14" rx="7" ry="5" fill="#8b5a2b"/><circle cx="9" cy="12" r="1.2" fill="#1a2138"/><circle cx="15" cy="12" r="1.2" fill="#1a2138"/><polygon points="12,16 10,19 14,19" fill="#d4a574"/></svg>',
   gold: '<svg viewBox="0 0 24 24" width="36" height="36"><path d="M12 9 C8 9 5.5 12 5.5 15.5 C5.5 19 8.5 21.5 12 21.5 C15.5 21.5 18.5 19 18.5 15.5 C18.5 12 16 9 12 9 Z" fill="#f5b301" stroke="#b8860b" stroke-width="1.5"/><rect x="10.5" y="3.5" width="3" height="5.5" rx="1" fill="#b8860b"/></svg>',
 };
@@ -237,8 +241,8 @@ function drawMinimap() {
   for (let y = 0; y < rows; y++) {
     for (let x = 0; x < cols; x++) {
       const c = S.cells[y * cols + x];
-      if (c === BLUE) { mmctx.fillStyle = '#3b82f6'; mmctx.fillRect(x * px, y * px, px, px); blue++; }
-      else if (c === RED) { mmctx.fillStyle = '#ef4444'; mmctx.fillRect(x * px, y * px, px, px); red++; }
+      if (c === BLUE) { mmctx.fillStyle = '#ef4444'; mmctx.fillRect(x * px, y * px, px, px); blue++; }
+      else if (c === RED) { mmctx.fillStyle = '#3b82f6'; mmctx.fillRect(x * px, y * px, px, px); red++; }
     }
   }
   // Units: one pixel per living turret, team color, on top — so you can
@@ -246,7 +250,7 @@ function drawMinimap() {
   // (Units sit on EMPTY cells, never on territory, so they always show.)
   for (const t of S.turrets) {
     if (t.dead) continue;
-    mmctx.fillStyle = t.color === BLUE ? '#3b82f6' : '#ef4444';
+    mmctx.fillStyle = t.color === BLUE ? '#ef4444' : '#3b82f6';
     mmctx.fillRect(t.x * px, t.y * px, px, px);
   }
   const total = cols * rows;
@@ -462,8 +466,8 @@ function rebuildColors() {
     CAVE_SHADES[s] = [0, 1, 2].map(j => Math.round(CAVE_RGB[j] + (caveDark[j] - CAVE_RGB[j]) * t));
   }
 }
-const BLUE_RGB = [59, 130, 246];
-const RED_RGB = [239, 68, 68];
+const BLUE_RGB = [239, 68, 68]; // survival flip: player renders red
+const RED_RGB = [59, 130, 246]; // survival flip: flood renders blue
 // Grey rock: the mid-map hard rock. Same Perlin gradient as brown, ~10x the
 // HP (30–100), in cellular-automata chunks. Fixed grey shades (light = soft,
 // charcoal = tough) — no debug picker, grey should always read as grey.
@@ -910,6 +914,9 @@ function newGame() {
         bloomMult: 1, harvT: new Float32Array(n),
         // fog of war: 0 = clear, 1 = half, 2 = full (black)
         fog: new Uint8Array(n).fill(2) };
+  // Survival: the flood controller (random edge, wave timer). Its own
+  // RNG stream, so the map below is identical to main for the same seed.
+  S.flood = floodInit(seed);
 
   // Caves first (cellular-automata blobs), then HP from a smooth noise gradient:
   // white ~3 hits ... dark grey ~10 hits
@@ -1011,8 +1018,10 @@ function newGame() {
   // Red Bloom: always spawns in a distant cave (not the starter's).
   // It grows red territory — a reason to push out and kill it. Wiping it
   // out (turret + all red cells) is the round's win condition.
+  // SURVIVAL: no enemy base — the flood replaces it, so skip the bloom
+  // (checkWin then never fires; survival is endless until overrun).
   S.redBloomSpawned = false;
-  {
+  if (!SURVIVAL) {
     const far = [];
     for (let y = 0; y < cfg.rows; y++) {
       for (let x = 0; x < cfg.cols; x++) {
@@ -1160,13 +1169,78 @@ function checkRunOver() {
     S.paused = true;
     S.placing = null;
     placebanner.classList.add('hidden');
-    runstats.innerHTML =
-      'Wave <b>' + S.wave + '</b> · Level <b>' + S.level + '</b><br>' +
-      'Survived <b>' + Math.round(S.time) + 's</b> · ' +
-      'Excavated <b>' + S.destroyed + '</b> · ' +
-      'Red turrets destroyed <b>' + S.redKills + '</b> · ' +
-      'Gold <b>' + meta.gold + '</b>';
+    runstats.innerHTML = SURVIVAL
+      ? 'Flood wave <b>' + (S.flood ? S.flood.wave : 0) + '</b> · Level <b>' + S.level + '</b><br>' +
+        'Survived <b>' + Math.round(S.time) + 's</b> · ' +
+        'Excavated <b>' + S.destroyed + '</b> · ' +
+        'Gold <b>' + meta.gold + '</b>'
+      : 'Wave <b>' + S.wave + '</b> · Level <b>' + S.level + '</b><br>' +
+        'Survived <b>' + Math.round(S.time) + 's</b> · ' +
+        'Excavated <b>' + S.destroyed + '</b> · ' +
+        'Red turrets destroyed <b>' + S.redKills + '</b> · ' +
+        'Gold <b>' + meta.gold + '</b>';
     runover.classList.remove('hidden');
+  }
+}
+
+// ---- Flood (SURVIVAL BRANCH) ----
+// The asymmetric enemy: not a base, but damage from a direction.
+// A flood controller picks a random edge per run, then fires waves of
+// projectiles in patterns (a sweeping line, or scattered rain/hail)
+// from that edge. Flood shots damage rock and player territory, and
+// claim what they destroy as flood territory (RED internally, blue
+// on screen after the palette flip) — so the flood visibly advances
+// as a front the player must push back, not a transient event.
+// No classes in this codebase (plain functions + S state), so the
+// flood is a controller object on S plus these functions.
+const SURVIVAL = true; // survival branch: player renders red, flood is blue, enemy base off
+const FLOOD_FIRST_WAVE = 30; // seconds until the first wave (grace to dig in)
+const FLOOD_WAVE_EVERY = 45; // seconds between waves
+const FLOOD_WARN = 10;       // seconds of warning before a wave lands
+const FLOOD_DMG = 2;         // damage per flood projectile (light rock: 2 hits)
+const FLOOD_SPEED = 8;       // cells/s — slower than player shots (12.5), a lumbering front
+const FLOOD_DIRS = ['north', 'south', 'west', 'east']; // edge the flood comes FROM
+// dir: 0 = from top (moves down), 1 = from bottom (moves up),
+//      2 = from left (moves right), 3 = from right (moves left)
+// Own RNG stream (seed + 99991) so flood direction never shifts the
+// map-gen stream — same seed still builds the same map as main.
+function floodInit(seed) {
+  const r = mulberry32(seed + 99991);
+  return { dir: Math.floor(r() * 4), wave: 0, nextWave: FLOOD_FIRST_WAVE, warned: false };
+}
+function floodTick(dt) {
+  const f = S.flood;
+  if (!f || S.runOver) return;
+  f.nextWave -= dt;
+  if (!f.warned && f.nextWave <= FLOOD_WARN) {
+    f.warned = true;
+    wavebanner.textContent = 'FLOOD WAVE FROM THE ' + FLOOD_DIRS[f.dir].toUpperCase() + ' IN ' + Math.max(1, Math.ceil(f.nextWave)) + 's';
+    wavebanner.classList.remove('hidden');
+  }
+  if (f.nextWave <= 0) {
+    f.wave++;
+    floodFireWave();
+    f.nextWave = FLOOD_WAVE_EVERY;
+    f.warned = false;
+    wavebanner.textContent = 'FLOOD WAVE ' + f.wave + '!';
+    clearTimeout(S._wbt);
+    S._wbt = setTimeout(() => wavebanner.classList.add('hidden'), 2000);
+  }
+}
+function floodFireWave() {
+  const f = S.flood, W = cfg.cols, H = cfg.rows;
+  const count = 12 + 4 * f.wave; // wave 1 = 16, scaling pressure
+  const rain = f.wave % 2 === 0; // alternate: odd waves = line, even = rain/hail scatter
+  for (let k = 0; k < count; k++) {
+    let x, y, vx, vy;
+    const t = rain ? Math.random() : (k + 0.5) / count; // rain: random slot, line: even slots
+    const spread = rain ? (Math.random() - 0.5) * 2 : 0; // rain drifts sideways a little
+    if (f.dir === 0) { x = t * W; y = 0; vx = spread; vy = FLOOD_SPEED; } // from top, moving down
+    else if (f.dir === 1) { x = t * W; y = H - 1; vx = spread; vy = -FLOOD_SPEED; } // from bottom, moving up
+    else if (f.dir === 2) { x = 0; y = t * H; vx = FLOOD_SPEED; vy = spread; } // from left, moving right
+    else { x = W - 1; y = t * H; vx = -FLOOD_SPEED; vy = spread; } // from right, moving left
+    // bounces = max: flood shots never pinball (that's the player's passive).
+    S.projs.push({ x, y, vx, vy, color: RED, dmg: FLOOD_DMG, flood: true, bounces: BOUNCE_MAX, crit: false, dead: false });
   }
 }
 
@@ -1315,7 +1389,12 @@ function stepProjectile(p, dt) {
     const cell = S.cells[idx];
     if (cell === WHITE || cell === GREY) {
       const destroyed = damageBlock(idx, p.dmg || 1, p.color, p.x, p.y, p.vx, p.vy, p.crit);
-      if (destroyed) { p.dead = true; return; }
+      if (destroyed) {
+        // Flood claim: a flood shot that breaks rock takes the cell
+        // (the flood advances as it destroys), instead of leaving it empty.
+        if (p.flood) { S.cells[idx] = p.color; S.growN[idx] = 0; S.growBy[idx] = 0; }
+        p.dead = true; return;
+      }
       // Pinball: a surviving block may bounce the shot back out (re-rolled per hit)
       if (p.bounces < BOUNCE_MAX && Math.random() < S.bounceChance) {
         p.bounces++;
@@ -1329,8 +1408,9 @@ function stepProjectile(p, dt) {
       return;
     }
     if (cell === EMPTY || cell === p.color) continue; // pass through open + own color
-    // Enemy territory: bomb it back to empty. This is why fields need guards.
-    S.cells[idx] = EMPTY;
+    // Enemy territory: normally bombed back to empty. A flood shot
+    // claims it instead (the flood takes over what it washes over).
+    S.cells[idx] = p.flood ? p.color : EMPTY;
     S.growN[idx] = 0; S.growBy[idx] = 0;
     spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[cell]);
     spawnChip(cx + 0.5, cy + 0.5, CELL_COLORS[cell], p.vx, p.vy);
@@ -1805,10 +1885,13 @@ function update(dt) {
     overlay.classList.remove('hidden');
     updateHud();
   }
-  // Enemy moles: the red Bloom buys them from its bank (same pricing as
-  // blue) when it can afford one, up to RED_MOLE_MAX alive. No timer —
-  // the economy is the limiter, so starving red's fields starves its army.
-  if (!S.runOver) {
+  // Enemy pressure: survival runs the flood clock; main runs the red
+  // bank (red Bloom buys moles from its harvest gold, up to RED_MOLE_MAX
+  // alive. No timer — the economy is the limiter, so starving red's
+  // fields starves its army).
+  if (SURVIVAL) {
+    floodTick(dt);
+  } else if (!S.runOver) {
     const redMoles = S.turrets.filter(t => !t.dead && t.color === RED && t.type === 'mole').length;
     if (redMoles < RED_MOLE_MAX) {
       const cost = redMoleCost();
@@ -2012,7 +2095,7 @@ function update(dt) {
         const kind = Math.random() < 0.2 ? 'gold' : 'xp';
         S.coins.push({ x: cx + 0.5, y: cy + 0.5, state: 'idle', kind,
                        phase: Math.random() * 6.283, sx: 0, sy: 0, t: 0, dead: false });
-      } else {
+      } else if (!SURVIVAL) {
         S.redGold = (S.redGold || 0) + 1;
       }
     }
@@ -2808,7 +2891,7 @@ function renderStartScreen() {
   // Title screen is just the title + Start Run, plus the build stamp
   // (diagnostic: confirms which build is actually loaded).
   const bv = document.getElementById('buildver');
-  if (bv) bv.textContent = 'build v' + BUILD;
+  if (bv) bv.textContent = 'build v' + BUILD + (SURVIVAL ? ' · Survival prototype' : '');
 }
 // ---- Shop (DORMANT — not called). Restore when other starter weapons
 // arrive: it renders the unlock grid into #weaponlist, spending meta gold.
