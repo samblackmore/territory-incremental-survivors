@@ -1170,7 +1170,7 @@ function checkRunOver() {
     S.placing = null;
     placebanner.classList.add('hidden');
     runstats.innerHTML = SURVIVAL
-      ? 'Flood wave <b>' + (S.flood ? S.flood.wave : 0) + '</b> · Level <b>' + S.level + '</b><br>' +
+      ? 'Flood storms <b>' + (S.flood ? S.flood.storms : 0) + '</b> · Level <b>' + S.level + '</b><br>' +
         'Survived <b>' + Math.round(S.time) + 's</b> · ' +
         'Excavated <b>' + S.destroyed + '</b> · ' +
         'Gold <b>' + meta.gold + '</b>'
@@ -1194,67 +1194,111 @@ function checkRunOver() {
 // No classes in this codebase (plain functions + S state), so the
 // flood is a controller object on S plus these functions.
 const SURVIVAL = true; // survival branch: player renders red, flood is blue, enemy base off
-const FLOOD_FIRST_WAVE = 30; // seconds until the first wave (grace to dig in)
-const FLOOD_WAVE_EVERY = 10; // seconds between waves (was 45 — Sam: more frequent)
-const FLOOD_WARN = 10;       // seconds of warning before a wave lands (= the interval, so the countdown covers it)
-const FLOOD_DMG = 2;         // damage per flood projectile (light rock: 2 hits)
-const FLOOD_SPEED = 8;       // cells/s — slower than player shots (12.5), a lumbering front
+const FLOOD_FIRST_STORM = 30; // seconds of grace before the first storm
+const FLOOD_STORM_DUR = 20;   // seconds a storm barrages, then it passes
+const FLOOD_LULL = 20;        // seconds between storms (rebuild / reclaim)
+const FLOOD_DMG = 1;          // per flood projectile — constant barrage, so toned down (was 2)
+const FLOOD_SPEED = 8;        // cells/s — slower than player shots (12.5), a lumbering front
+const FLOOD_OFF = 3;          // cells outside the map the emitter sits (never seen)
+const FLOOD_SWEEP_EVERY = 0.12; // seconds between sweeping-cannon shots
+const FLOOD_SWEEP_RATE = Math.PI / 2; // rad/s the sweep rotates (90 deg/s)
+const FLOOD_RING_EVERY = 1.2; // seconds between radial ring bursts
+const FLOOD_RING_DIRS = 24;   // directions per ring (before culling)
 const FLOOD_DIRS = ['north', 'south', 'west', 'east']; // edge the flood comes FROM
-// dir: 0 = from top (moves down), 1 = from bottom (moves up),
-//      2 = from left (moves right), 3 = from right (moves left)
-// Own RNG stream (seed + 99991) so flood direction never shifts the
-// map-gen stream — same seed still builds the same map as main.
+// dir: 0 = from top, 1 = from bottom, 2 = from left, 3 = from right.
+// The emitter is a single point just outside the map on that edge —
+// never seen, only its effects creeping in. Each storm picks a new
+// dir + position along the edge, so storms surprise from anywhere.
+// Own RNG stream (seed + 99991) for the FIRST storm, so flood setup
+// never shifts the map-gen stream — same seed still builds the same
+// map as main. Later storms use Math.random (runtime events).
+function floodPickDir(f, rng) {
+  const W = cfg.cols, H = cfg.rows;
+  f.dir = Math.floor(rng() * 4);
+  if (f.dir === 0) { f.ex = rng() * W; f.ey = -FLOOD_OFF; }
+  else if (f.dir === 1) { f.ex = rng() * W; f.ey = H + FLOOD_OFF; }
+  else if (f.dir === 2) { f.ex = -FLOOD_OFF; f.ey = rng() * H; }
+  else { f.ex = W + FLOOD_OFF; f.ey = rng() * H; }
+}
 function floodInit(seed) {
-  const r = mulberry32(seed + 99991);
-  return { dir: Math.floor(r() * 4), wave: 0, nextWave: FLOOD_FIRST_WAVE, warned: false, announceT: 0 };
+  const f = { dir: 0, ex: 0, ey: 0, phase: 'lull', timer: FLOOD_FIRST_STORM,
+              sweep: 0, ringT: 0, sweepT: 0, storms: 0 };
+  floodPickDir(f, mulberry32(seed + 99991));
+  return f;
+}
+// Ray from the (off-map) emitter along unit (dx, dy): where does it
+// ENTER the map? Returns that point nudged just inside, or null if the
+// ray never hits the map — those shots are never spawned (Sam: don't
+// spawn projectiles we'll never see). Projectiles can't spawn outside
+// the map (stepProjectile kills out-of-bounds shots on the first step),
+// so the emitter stays virtual and shots start at the edge entry.
+function floodEntry(ex, ey, dx, dy) {
+  const W = cfg.cols, H = cfg.rows;
+  let tmin = 0, tmax = Infinity;
+  if (Math.abs(dx) < 1e-9) {
+    if (ex < 0 || ex > W) return null;
+  } else {
+    let t1 = (0 - ex) / dx, t2 = (W - ex) / dx;
+    if (t1 > t2) { const t = t1; t1 = t2; t2 = t; }
+    tmin = Math.max(tmin, t1); tmax = Math.min(tmax, t2);
+  }
+  if (Math.abs(dy) < 1e-9) {
+    if (ey < 0 || ey > H) return null;
+  } else {
+    let t1 = (0 - ey) / dy, t2 = (H - ey) / dy;
+    if (t1 > t2) { const t = t1; t1 = t2; t2 = t; }
+    tmin = Math.max(tmin, t1); tmax = Math.min(tmax, t2);
+  }
+  if (tmax < tmin || tmax < 0) return null;
+  const t = Math.max(tmin, 0) + 0.05; // just inside the first cell
+  return { x: ex + dx * t, y: ey + dy * t };
+}
+// One flood shot at angle (radians) from the emitter — culled if its
+// ray never reaches the map. Returns true when a shot was spawned.
+function floodFireAt(angle) {
+  const f = S.flood;
+  const dx = Math.cos(angle), dy = Math.sin(angle);
+  const e = floodEntry(f.ex, f.ey, dx, dy);
+  if (!e) return false;
+  // bounces = max: flood shots never pinball (that's the player's passive).
+  S.projs.push({ x: e.x, y: e.y, vx: dx * FLOOD_SPEED, vy: dy * FLOOD_SPEED,
+                 color: RED, dmg: FLOOD_DMG, flood: true, bounces: BOUNCE_MAX, crit: false, dead: false });
+  return true;
+}
+function floodFireRing() {
+  for (let k = 0; k < FLOOD_RING_DIRS; k++) floodFireAt(k * 2 * Math.PI / FLOOD_RING_DIRS);
 }
 function floodTick(dt) {
   const f = S.flood;
   if (!f || S.runOver) return;
-  f.nextWave -= dt;
-  // Announcement window: after a wave fires, the banner shows
-  // "FLOOD WAVE N!" for 2s before the countdown resumes, so the live
-  // countdown never clobbers the announcement (and no setTimeout has
-  // to hide the banner mid-countdown).
-  if (f.announceT > 0) {
-    f.announceT -= dt;
-    if (f.announceT > 0) return; // keep showing "FLOOD WAVE N!", don't touch the banner
-    f.warned = false; // announcement over: re-arm so the countdown shows
-  }
-  if (!f.warned && f.nextWave <= FLOOD_WARN) {
-    f.warned = true;
+  f.timer -= dt;
+  if (f.phase === 'lull') {
+    // Live countdown to the next storm — direction already picked, so
+    // the banner names it and you can prepare on that side.
+    wavebanner.textContent = 'FLOOD STORM FROM THE ' + FLOOD_DIRS[f.dir].toUpperCase() + ' IN ' + Math.max(1, Math.ceil(f.timer)) + 's';
     wavebanner.classList.remove('hidden');
+    if (f.timer <= 0) {
+      f.phase = 'storm';
+      f.timer = FLOOD_STORM_DUR;
+      f.sweep = 0; f.ringT = 0; f.sweepT = 0; // fire immediately
+      f.storms++;
+    }
+    return;
   }
-  if (f.warned && f.nextWave > 0) {
-    // Live countdown: refresh every tick, not just at trigger (the old
-    // code set the text once, so it read a fixed "10s" the whole time).
-    wavebanner.textContent = 'FLOOD WAVE FROM THE ' + FLOOD_DIRS[f.dir].toUpperCase() + ' IN ' + Math.max(1, Math.ceil(f.nextWave)) + 's';
-    wavebanner.classList.remove('hidden');
-  }
-  if (f.nextWave <= 0) {
-    f.wave++;
-    floodFireWave();
-    f.nextWave = FLOOD_WAVE_EVERY;
-    f.warned = false;
-    f.announceT = 2;
-    wavebanner.textContent = 'FLOOD WAVE ' + f.wave + '!';
-    wavebanner.classList.remove('hidden');
-  }
-}
-function floodFireWave() {
-  const f = S.flood, W = cfg.cols, H = cfg.rows;
-  const count = 12 + 4 * f.wave; // wave 1 = 16, scaling pressure
-  const rain = f.wave % 2 === 0; // alternate: odd waves = line, even = rain/hail scatter
-  for (let k = 0; k < count; k++) {
-    let x, y, vx, vy;
-    const t = rain ? Math.random() : (k + 0.5) / count; // rain: random slot, line: even slots
-    const spread = rain ? (Math.random() - 0.5) * 2 : 0; // rain drifts sideways a little
-    if (f.dir === 0) { x = t * W; y = 0; vx = spread; vy = FLOOD_SPEED; } // from top, moving down
-    else if (f.dir === 1) { x = t * W; y = H - 1; vx = spread; vy = -FLOOD_SPEED; } // from bottom, moving up
-    else if (f.dir === 2) { x = 0; y = t * H; vx = FLOOD_SPEED; vy = spread; } // from left, moving right
-    else { x = W - 1; y = t * H; vx = -FLOOD_SPEED; vy = spread; } // from right, moving left
-    // bounces = max: flood shots never pinball (that's the player's passive).
-    S.projs.push({ x, y, vx, vy, color: RED, dmg: FLOOD_DMG, flood: true, bounces: BOUNCE_MAX, crit: false, dead: false });
+  // Storm: constant barrage — a sweeping cannon plus radial rings.
+  wavebanner.textContent = 'FLOOD STORM! ' + Math.max(1, Math.ceil(f.timer)) + 's left';
+  wavebanner.classList.remove('hidden');
+  f.sweepT -= dt;
+  if (f.sweepT <= 0) { f.sweepT += FLOOD_SWEEP_EVERY; floodFireAt(f.sweep); }
+  f.sweep += FLOOD_SWEEP_RATE * dt;
+  f.ringT -= dt;
+  if (f.ringT <= 0) { f.ringT += FLOOD_RING_EVERY; floodFireRing(); }
+  if (f.timer <= 0) {
+    // Storm passes: lull, and pick the NEXT storm's direction now so
+    // the countdown can name it.
+    f.phase = 'lull';
+    f.timer = FLOOD_LULL;
+    floodPickDir(f, Math.random);
   }
 }
 
