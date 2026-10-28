@@ -84,14 +84,16 @@ function cannonMaxed() {
 // Mid-run unit costs (run gold, not meta gold): base + 5 per living unit
 // of that type. The starter Cannon is free (pre-placed); every duplicate
 // costs extra, and the price climbs as your army grows. Tunable.
-const UNIT_COST = { cannon: 10, mole: 8, bloom: 6, gather: 6 };
+const UNIT_COST = { cannon: 10, mole: 8, bloom: 6, gather: 6, lantern: 4 };
 const UNIT_COST_STEP = 5;
+const LANTERN_COST_STEP = 1; // lanterns stay cheap so chaining them to extend the base is affordable
 function unitCost(type) {
   let count = 0;
   for (const t of S.turrets) {
     if (!t.dead && t.color === BLUE && t.type === type) count++;
   }
-  return UNIT_COST[type] + UNIT_COST_STEP * count;
+  const step = type === 'lantern' ? LANTERN_COST_STEP : UNIT_COST_STEP;
+  return UNIT_COST[type] + step * count;
 }
 // Red mole price: same formula as blue's, counted on living red moles.
 function redMoleCost() {
@@ -242,7 +244,11 @@ function drawMinimap() {
     for (let x = 0; x < cols; x++) {
       const c = S.cells[y * cols + x];
       if (c === BLUE) { mmctx.fillStyle = '#ef4444'; mmctx.fillRect(x * px, y * px, px, px); blue++; }
-      else if (c === RED) { mmctx.fillStyle = '#3b82f6'; mmctx.fillRect(x * px, y * px, px, px); red++; }
+      else if (c === RED) {
+        // Survival: flood minimap pixel follows the HP gradient too.
+        mmctx.fillStyle = SURVIVAL ? floodColor(S.hp[y * cols + x], S.maxhp[y * cols + x]) : '#3b82f6';
+        mmctx.fillRect(x * px, y * px, px, px); red++;
+      }
     }
   }
   // Units: one pixel per living turret, team color, on top — so you can
@@ -1204,6 +1210,11 @@ const FLOOD_SWEEP_EVERY = 0.12; // seconds between sweeping-cannon shots
 const FLOOD_SWEEP_RATE = Math.PI / 2; // rad/s the sweep rotates (90 deg/s)
 const FLOOD_RING_EVERY = 1.2; // seconds between radial ring bursts
 const FLOOD_RING_DIRS = 24;   // directions per ring (before culling)
+const FLOOD_START_HP = 1;     // fresh flood: light, weak, 1 hit to reclaim
+const FLOOD_MAX_HP = 10;      // mature flood: dark, strong (like the toughest brown rock)
+const FLOOD_HP_EVERY = 5;     // seconds per +1 HP (harvT is the growth clock for flood)
+const FLOOD_SPREAD_EVERY = 2; // seconds between gradual-spread ticks
+const FLOOD_SPREAD_CHANCE = 0.1; // per flood cell per spread tick: grow one adjacent EMPTY cell
 const FLOOD_DIRS = ['north', 'south', 'west', 'east']; // edge the flood comes FROM
 // dir: 0 = from top, 1 = from bottom, 2 = from left, 3 = from right.
 // The emitter is a single point just outside the map on that edge —
@@ -1222,9 +1233,54 @@ function floodPickDir(f, rng) {
 }
 function floodInit(seed) {
   const f = { dir: 0, ex: 0, ey: 0, phase: 'lull', timer: FLOOD_FIRST_STORM,
-              sweep: 0, ringT: 0, sweepT: 0, storms: 0 };
+              sweep: 0, ringT: 0, sweepT: 0, storms: 0, spreadT: FLOOD_SPREAD_EVERY };
   floodPickDir(f, mulberry32(seed + 99991));
   return f;
+}
+// Flood HP gradient: pale (weak, HP 1) -> dark navy (strong, HP max).
+// This REPLACES the harvest glow for flood (no lightening like bloom).
+const FLOOD_LIGHT = [191, 219, 254]; // #bfdbfe
+const FLOOD_DARK = [30, 64, 175];    // #1e40af
+function floodColor(hp, maxhp) {
+  if (!maxhp) return 'rgb(59,130,246)'; // unset cell: base flood blue
+  const t = maxhp > 1 ? Math.max(0, Math.min(1, (hp - 1) / (maxhp - 1))) : 1;
+  const r = Math.round(FLOOD_LIGHT[0] + (FLOOD_DARK[0] - FLOOD_LIGHT[0]) * t);
+  const g = Math.round(FLOOD_LIGHT[1] + (FLOOD_DARK[1] - FLOOD_LIGHT[1]) * t);
+  const b = Math.round(FLOOD_LIGHT[2] + (FLOOD_DARK[2] - FLOOD_LIGHT[2]) * t);
+  return `rgb(${r},${g},${b})`;
+}
+// Gradual, bloom-like spread: each flood cell has a chance to grow one
+// increment on a random adjacent EMPTY cell (8-dir); 4 increments
+// (quarters, same GROW_STEPS as bloom) → flood, fresh and weak (HP 1).
+// No pickup — flood never pays. Runs always (storm or lull): the flood
+// creeps even between storms, so waiting it out doesn't work.
+function floodSpread() {
+  const W = cfg.cols, H = cfg.rows;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = y * W + x;
+      if (S.cells[i] !== RED) continue;
+      if (Math.random() >= FLOOD_SPREAD_CHANCE) continue;
+      const dx = Math.floor(Math.random() * 3) - 1, dy = Math.floor(Math.random() * 3) - 1;
+      if (!dx && !dy) continue;
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+      const ni = ny * W + nx;
+      if (S.cells[ni] !== EMPTY || S.growN[ni] >= GROW_STEPS) continue;
+      if (S.growBy[ni] !== 0 && S.growBy[ni] !== RED) continue;
+      if (turretAt(nx, ny)) continue;
+      S.growN[ni]++;
+      S.growBy[ni] = RED;
+      S.growT[ni] = S.time;
+      if (S.growN[ni] >= GROW_STEPS) {
+        S.cells[ni] = RED;
+        S.hp[ni] = FLOOD_START_HP; S.maxhp[ni] = FLOOD_MAX_HP; S.harvT[ni] = 0;
+        S.growN[ni] = 0; S.growBy[ni] = 0;
+        spawnBurst(nx + 0.5, ny + 0.5, CELL_COLORS[RED]);
+        S.rings.push({ x: nx + 0.5, y: ny + 0.5, t: 0, css: CELL_COLORS[RED], dead: false });
+      }
+    }
+  }
 }
 // Ray from the (off-map) emitter along unit (dx, dy): where does it
 // ENTER the map? Returns that point nudged just inside, or null if the
@@ -1271,6 +1327,10 @@ function floodFireRing() {
 function floodTick(dt) {
   const f = S.flood;
   if (!f || S.runOver) return;
+  // Gradual spread ticks always (storm or lull), on its own clock.
+  if (f.spreadT === undefined) f.spreadT = FLOOD_SPREAD_EVERY;
+  f.spreadT -= dt;
+  if (f.spreadT <= 0) { f.spreadT += FLOOD_SPREAD_EVERY; floodSpread(); }
   f.timer -= dt;
   if (f.phase === 'lull') {
     // Live countdown to the next storm — direction already picked, so
@@ -1449,8 +1509,14 @@ function stepProjectile(p, dt) {
       const destroyed = damageBlock(idx, p.dmg || 1, p.color, p.x, p.y, p.vx, p.vy, p.crit);
       if (destroyed) {
         // Flood claim: a flood shot that breaks rock takes the cell
-        // (the flood advances as it destroys), instead of leaving it empty.
-        if (p.flood) { S.cells[idx] = p.color; S.growN[idx] = 0; S.growBy[idx] = 0; }
+        // (the flood advances as it destroys), fresh and weak (HP 1) —
+        // it hardens over time (see harvest: HP growth), so the source
+        // ends up darker/stronger than the edges.
+        if (p.flood) {
+          S.cells[idx] = p.color;
+          S.hp[idx] = FLOOD_START_HP; S.maxhp[idx] = FLOOD_MAX_HP; S.harvT[idx] = 0;
+          S.growN[idx] = 0; S.growBy[idx] = 0;
+        }
         p.dead = true; return;
       }
       // Pinball: a surviving block may bounce the shot back out (re-rolled per hit)
@@ -1466,9 +1532,25 @@ function stepProjectile(p, dt) {
       return;
     }
     if (cell === EMPTY || cell === p.color) continue; // pass through open + own color
+    if (SURVIVAL && cell === RED && !p.flood) {
+      // Player shot vs flood: flood territory has HP (darker = stronger).
+      // Chip it; reclaim (to EMPTY) only when HP hits 0. The cell
+      // lightens as HP drops, so your shots visibly wear it down.
+      S.hp[idx] = Math.max(0, S.hp[idx] - (p.dmg || 1));
+      spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[cell]);
+      spawnChip(cx + 0.5, cy + 0.5, CELL_COLORS[cell], p.vx, p.vy);
+      if (S.hp[idx] <= 0) { S.cells[idx] = EMPTY; S.growN[idx] = 0; S.growBy[idx] = 0; }
+      p.dead = true; return;
+    }
     // Enemy territory: normally bombed back to empty. A flood shot
-    // claims it instead (the flood takes over what it washes over).
-    S.cells[idx] = p.flood ? p.color : EMPTY;
+    // claims it instead (the flood takes over what it washes over),
+    // fresh and weak (HP 1).
+    if (p.flood) {
+      S.cells[idx] = p.color;
+      S.hp[idx] = FLOOD_START_HP; S.maxhp[idx] = FLOOD_MAX_HP; S.harvT[idx] = 0;
+    } else {
+      S.cells[idx] = EMPTY;
+    }
     S.growN[idx] = 0; S.growBy[idx] = 0;
     spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[cell]);
     spawnChip(cx + 0.5, cy + 0.5, CELL_COLORS[cell], p.vx, p.vy);
@@ -1519,8 +1601,10 @@ function damageBlock(idx, dmg, color, sx, sy, vx, vy, crit) {
   if (color === BLUE) S.destroyedBlue++;
   computeFog(); // the cave grew: push the fog boundary out
   spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[color]); // the block cracks: debris + ring
-  if (S.goldNug[idx]) {
+  if (S.goldNug[idx] && (color === BLUE || !SURVIVAL)) {
     // Gold nugget released: locked until the rock was broken.
+    // (Survival: flood never pays — a flood shot breaking a nugget
+    // drops nothing. Main: any breaker drops it, as before.)
     S.goldNug[idx] = 0;
     S.coins.push({ x: cx + 0.5, y: cy + 0.5, state: 'idle', kind: 'gold',
                    phase: Math.random() * 6.283, sx: 0, sy: 0, t: 0, dead: false });
@@ -1617,8 +1701,10 @@ function availableCards() {
 // upgrades (currently just cannon projectiles), affordable or not.
 // Unaffordable ones still show (greyed) so you can see what to save for.
 function availableShopCards() {
-  const pool = CARD_POOL.filter(c => c.kind === 'turret' &&
-    ['cannon', 'mole', 'bloom', 'gather'].includes(c.type)).map(c => ({
+  // Survival adds the lantern: a cheap extender (fog push + a unit to
+  // place near), so the proximity placement can reach further.
+  const types = SURVIVAL ? ['cannon', 'mole', 'bloom', 'gather', 'lantern'] : ['cannon', 'mole', 'bloom', 'gather'];
+  const pool = CARD_POOL.filter(c => c.kind === 'turret' && types.includes(c.type)).map(c => ({
     ...c, cost: unitCost(c.type), owned: !!S.weapons[c.type],
   }));
   const cw = S.weapons.cannon;
@@ -1858,8 +1944,21 @@ document.getElementById('diveagain').addEventListener('click', () => {
 });
 
 // Placement: the chosen turret clears its own 1-cell pad and goes live.
+// Survival placement: units go near your base, not anywhere lit.
+// (Matches fogDist, so a lantern extends the placeable range by 6.)
+const PLACE_RADIUS = 6;
+function nearBase(cx, cy) {
+  for (const t of S.turrets) {
+    if (t.dead || t.color !== BLUE) continue;
+    const dx = t.x - cx, dy = t.y - cy;
+    if (dx * dx + dy * dy <= PLACE_RADIUS * PLACE_RADIUS) return true;
+  }
+  return false;
+}
 function enterPlacement(type) {  S.placing = { type }; S.placePreview = null;
-  placebanner.innerHTML = 'Tap the map to deploy <b>' + TURRET[type].name + '</b>';
+  placebanner.innerHTML = SURVIVAL
+    ? 'Tap near your base to deploy <b>' + TURRET[type].name + '</b>'
+    : 'Tap the map to deploy <b>' + TURRET[type].name + '</b>';
   placebanner.classList.remove('hidden');
 }
 function placeTurretAt(sx, sy) {
@@ -1874,7 +1973,15 @@ function placeTurretAt(sx, sy) {
     return;
   }
   const pi = cy * cfg.cols + cx;
-  if (S.fog[pi] !== 0) {
+  if (SURVIVAL) {
+    // Survival: place near your base (within PLACE_RADIUS of a living
+    // player unit) — not just anywhere lit. Lanterns extend the base,
+    // so chaining a cheap lantern is how you reach further.
+    if (!nearBase(cx, cy)) {
+      S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
+      return;
+    }
+  } else if (S.fog[pi] !== 0) {
     // Units can only be placed in fully-revealed cells.
     S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
     return;
@@ -2144,6 +2251,17 @@ function update(dt) {
   for (let i = 0; i < S.cells.length; i++) {
     if (S.cells[i] !== BLUE && S.cells[i] !== RED) continue;
     S.harvT[i] += dt;
+    if (S.cells[i] === RED && SURVIVAL) {
+      // Flood HP growth (NOT harvest): harvT is the growth clock.
+      // Flood never produces XP/gold and never glows like bloom —
+      // instead it hardens over time, so old flood (near the source)
+      // is darker/stronger than fresh flood (at the edges).
+      if (S.harvT[i] >= FLOOD_HP_EVERY) {
+        S.harvT[i] = 0;
+        if (S.hp[i] < S.maxhp[i]) S.hp[i]++;
+      }
+      continue;
+    }
     if (S.harvT[i] >= HARVEST_EVERY) {
       S.harvT[i] = 0;
       const cx = i % cfg.cols, cy = (i / cfg.cols) | 0;
@@ -2340,12 +2458,17 @@ function render() {
         ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX);
       }
       else if (st === RED) {
-        // Same glow for red (its fields feed the enemy bank, same rules).
-        const k = Math.min(1, S.harvT[i] / HARVEST_EVERY) * 0.45;
-        const r = Math.round(RED_RGB[0] + (255 - RED_RGB[0]) * k);
-        const g = Math.round(RED_RGB[1] + (255 - RED_RGB[1]) * k);
-        const b = Math.round(RED_RGB[2] + (255 - RED_RGB[2]) * k);
-        ctx.fillStyle = `rgb(${r},${g},${b})`;
+        if (SURVIVAL) {
+          // Flood HP gradient (no harvest glow): darker = stronger.
+          ctx.fillStyle = floodColor(S.hp[i], S.maxhp[i]);
+        } else {
+          // Same glow for red (its fields feed the enemy bank, same rules).
+          const k = Math.min(1, S.harvT[i] / HARVEST_EVERY) * 0.45;
+          const r = Math.round(RED_RGB[0] + (255 - RED_RGB[0]) * k);
+          const g = Math.round(RED_RGB[1] + (255 - RED_RGB[1]) * k);
+          const b = Math.round(RED_RGB[2] + (255 - RED_RGB[2]) * k);
+          ctx.fillStyle = `rgb(${r},${g},${b})`;
+        }
         ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX);
       }
       else if (st === EMPTY) {
