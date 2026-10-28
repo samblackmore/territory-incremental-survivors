@@ -261,6 +261,20 @@ function drawMinimap() {
     mmctx.fillStyle = t.color === BLUE ? '#ef4444' : '#3b82f6';
     mmctx.fillRect(t.x * px, t.y * px, px, px);
   }
+  // Incoming-storm warning (survival, lull only): a gently pulsing
+  // yellow line on the minimap edge the next storm comes FROM. This
+  // replaces the old top-of-screen countdown banner — quieter, and it
+  // points at the side to watch. During the storm itself there's no
+  // pulse: the flood is visible on the minimap as blue territory.
+  if (SURVIVAL && S.flood && S.flood.phase === 'lull') {
+    const W = minimap.width, H = minimap.height, T = 3; // line thickness px
+    const a = 0.42 + 0.18 * Math.sin(S.time * Math.PI * 2 / 2.2); // gentle 2.2s pulse, alpha 0.24–0.60
+    mmctx.fillStyle = `rgba(255, 215, 94, ${a})`; // gold #ffd75e
+    if (S.flood.dir === 0) mmctx.fillRect(0, 0, W, T); // from top
+    else if (S.flood.dir === 1) mmctx.fillRect(0, H - T, W, T); // from bottom
+    else if (S.flood.dir === 2) mmctx.fillRect(0, 0, T, H); // from left
+    else mmctx.fillRect(W - T, 0, T, H); // from right
+  }
   const total = cols * rows;
   if (mmBlue) mmBlue.textContent = Math.round(blue / total * 100) + '%';
   if (mmRed) mmRed.textContent = Math.round(red / total * 100) + '%';
@@ -1335,10 +1349,9 @@ function floodTick(dt) {
   if (f.spreadT <= 0) { f.spreadT += FLOOD_SPREAD_EVERY; floodSpread(); }
   f.timer -= dt;
   if (f.phase === 'lull') {
-    // Live countdown to the next storm — direction already picked, so
-    // the banner names it and you can prepare on that side.
-    wavebanner.textContent = 'FLOOD STORM FROM THE ' + FLOOD_DIRS[f.dir].toUpperCase() + ' IN ' + Math.max(1, Math.ceil(f.timer)) + 's';
-    wavebanner.classList.remove('hidden');
+    // Countdown to the next storm — direction already picked (see
+    // floodInit + the storm-end pick below). No banner anymore: the
+    // minimap edge pulse in drawMinimap names the side, quietly.
     if (f.timer <= 0) {
       f.phase = 'storm';
       f.timer = FLOOD_STORM_DUR;
@@ -1348,8 +1361,8 @@ function floodTick(dt) {
     return;
   }
   // Storm: constant barrage — a sweeping cannon plus radial rings.
-  wavebanner.textContent = 'FLOOD STORM! ' + Math.max(1, Math.ceil(f.timer)) + 's left';
-  wavebanner.classList.remove('hidden');
+  // No banner and no pulse while it runs: the flood is visible on
+  // the minimap as blue territory creeping in from the side.
   f.sweepT -= dt;
   if (f.sweepT <= 0) { f.sweepT += FLOOD_SWEEP_EVERY; floodFireAt(f.sweep); }
   f.sweep += FLOOD_SWEEP_RATE * dt;
@@ -1357,7 +1370,7 @@ function floodTick(dt) {
   if (f.ringT <= 0) { f.ringT += FLOOD_RING_EVERY; floodFireRing(); }
   if (f.timer <= 0) {
     // Storm passes: lull, and pick the NEXT storm's direction now so
-    // the countdown can name it.
+    // the minimap pulse can name it.
     f.phase = 'lull';
     f.timer = FLOOD_LULL;
     floodPickDir(f, Math.random);
