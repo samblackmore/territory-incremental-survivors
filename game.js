@@ -1791,12 +1791,14 @@ function offerCards() {
     else if (p.kind === 'stat') {
       // One stat, one chip: title is the stat + its NEW level, sub the effect.
       // The weapon icon says which weapon it belongs to.
+      // First pick of a stat (level 0 → 1) gets the yellow New! tag.
       const w = S.weapons[p.weapon];
       const cur = w && w.stats ? (w.stats[p.stat] || 0) : 0;
       title = `${p.title} <span class="lv">Lv${cur + 1}</span>`;
       sub = p.effect;
       el.dataset.weapon = p.weapon;
       el.dataset.stat = p.stat;
+      if (cur === 0) newTag = '<span class="newtag">New!</span>';
     }
     else if (p.kind === 'evo') {
       title = `Sprayer <span class="lv">EVO</span>`;
@@ -1813,6 +1815,7 @@ function offerCards() {
       // Hybrid (survival): XP-row draft card with a gold cost. Shows
       // the price like a shop card; greyed + untappable if you can't
       // afford it (click handler's cost guard covers the rest).
+      // First projectile pick gets New! like any other first stat.
       const w = S.weapons.cannon;
       const lv = w && w.stats ? (w.stats.proj || 0) : 0;
       title = `Projectiles <span class="lv">Lv${lv + 1}</span>`;
@@ -1822,6 +1825,7 @@ function offerCards() {
       el.dataset.cost = String(p.cost);
       priceHtml = `<div class="price">${p.cost}<span class="coin"></span></div>`;
       if (S.gold < p.cost) el.classList.add('unaffordable');
+      if (lv === 0) newTag = '<span class="newtag">New!</span>';
     }
     el.innerHTML = priceHtml + icon + newTag + '<b>' + title + '</b><span>' + sub + '</span>';
     // Staggered deal: cards appear one by one (prevents accidental taps).
@@ -2870,12 +2874,16 @@ function render() {
   // Stat chips, top-left: one row per owned weapon stat. Each row: weapon
   // icon + 4-letter stat label + chips (gold filled / dark empty). This
   // is the progress bar you watch climb — one chip per stat pick.
+  // A stat with no picks yet (level 0) hides its row entirely — the
+  // corner only shows stats you've actually invested in, and a stat
+  // card shows New! on its first pick (see offerCards).
   const STAT_LABEL = { dmg: 'DAMG', proj: 'PROJ', rate: 'RATE', crit: 'CRIT', growth: 'GROW', range: 'RANG', count: 'CNTS', dig: 'DIGS' };
   for (const type of ['cannon', 'bloom', 'gather', 'mole']) {
     const w = S.weapons[type];
     if (!w || !w.stats) continue;
     for (const d of (STAT_DEFS[type] || [])) {
       const lvl = w.stats[d.key] || 0;
+      if (lvl === 0) continue; // not upgraded yet: no row (and no gap — ppy doesn't advance)
       const bw = 122, bh = 18;
       ctx.fillStyle = 'rgba(10, 13, 22, 0.85)';
       rr(8, ppy, bw, bh, 6); ctx.fill();
