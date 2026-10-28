@@ -325,7 +325,10 @@
   .card b { font-size: 15px; color: #7db4ff; text-align: center; }
   .card b .lv { color: #fff; }
   .card span { color: var(--muted); font-size: 10px; letter-spacing: .05em; text-transform: uppercase; text-align: center; }
-  .card .newtag { color: #ffd75e; font-size: 13px; font-weight: bold; letter-spacing: .03em; }
+  .card .newtag {
+    position: absolute; top: 8px; left: 8px;
+    color: #ffd75e; font-size: 11px; font-weight: bold; letter-spacing: .03em;
+  }
   /* Price (top-right) and unaffordable dimming apply to any card that
      costs gold — shop cards and the XP-row projectile hybrid alike. */
   .card { position: relative; }
