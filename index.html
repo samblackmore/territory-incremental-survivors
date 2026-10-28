@@ -295,17 +295,19 @@
     margin: 0 0 18px;
     text-shadow: 0 2px 12px rgba(255, 215, 94, .35);
   }
-  .cardrow { display: flex; gap: 16px; justify-content: center; }
+  .cardrow { display: flex; gap: 12px; justify-content: center; }
+  /* Compact level-up cards: 3 per row on a phone (110px cards + 12px
+     gaps = 354px, fits even 360px-wide phones). Titles may wrap. */
   .card {
-    width: 150px; height: 190px;
+    width: 110px; height: 150px;
     background: linear-gradient(180deg, #27314d, #1a2138);
     border: 2px solid var(--blue);
     border-radius: 10px;
     color: var(--text);
     cursor: pointer;
     display: flex; flex-direction: column;
-    align-items: center; justify-content: center; gap: 8px;
-    font-size: 14px;
+    align-items: center; justify-content: center; gap: 4px;
+    font-size: 12px;
     transition: transform 120ms ease, box-shadow 120ms ease;
     opacity: 0;
     transform: translateY(20px);
@@ -318,31 +320,41 @@
     transition: opacity 250ms ease, transform 250ms ease;
   }
   .card:hover { transform: translateY(-6px); box-shadow: 0 10px 30px rgba(59,130,246,.35); }
-  .card .icon { font-size: 36px; line-height: 1; }
-  .card b { font-size: 20px; color: #7db4ff; white-space: nowrap; }
+  .card .icon { font-size: 28px; line-height: 1; }
+  .card .icon svg { width: 28px; height: 28px; }
+  .card b { font-size: 15px; color: #7db4ff; text-align: center; }
   .card b .lv { color: #fff; }
-  .card span { color: var(--muted); font-size: 12px; letter-spacing: .05em; text-transform: uppercase; text-align: center; }
-  .card .newtag { color: #ffd75e; font-size: 15px; font-weight: bold; letter-spacing: .03em; }
+  .card span { color: var(--muted); font-size: 10px; letter-spacing: .05em; text-transform: uppercase; text-align: center; }
+  .card .newtag { color: #ffd75e; font-size: 13px; font-weight: bold; letter-spacing: .03em; }
+  /* Price (top-right) and unaffordable dimming apply to any card that
+     costs gold — shop cards and the XP-row projectile hybrid alike. */
+  .card { position: relative; }
+  .card .price {
+    position: absolute; top: 8px; right: 8px;
+    color: #ffd75e; font-size: 13px; font-weight: bold;
+  }
+  .card.unaffordable.dealt { opacity: 0.45; pointer-events: none; filter: grayscale(0.6); }
   .coin {
     display: inline-block; width: 11px; height: 11px; border-radius: 50%;
     background: #f5b301; border: 1.5px solid #b8860b; margin-left: 4px; vertical-align: -1px;
   }
-  /* Shop row: gold-bordered cards below the XP row. Price sits top-right
-     of each card; your gold total sits under the Shop title so you can
-     compare at a glance. Unaffordable cards stay visible (so you can see
-     what to save for) but dimmed and untappable. */
+  /* Shop grid: 3 columns (full shop on survival = 6 items in 2 rows;
+     main's 2 drawn cards sit in the first row). Gold-bordered cards
+     below the XP row. Price sits top-right of each card; your gold
+     total sits under the Shop title so you can compare at a glance.
+     Unaffordable cards stay visible (so you can see what to save for)
+     but dimmed and untappable. */
+  #shoprow {
+    display: grid; grid-template-columns: repeat(3, 110px);
+    gap: 12px; justify-content: center;
+  }
   .shoplabel {
     color: #ffd75e; font-size: 12px; letter-spacing: .15em; text-transform: uppercase;
-    margin: 20px 0 10px; text-align: center;
+    margin: 16px 0 10px; text-align: center;
   }
   .shoplabel .shopgold { display: block; color: #ffd75e; font-size: 15px; font-weight: bold; letter-spacing: .03em; margin-top: 4px; }
-  .card.shopcard { border-color: #f5b301; position: relative; }
+  .card.shopcard { border-color: #f5b301; }
   .card.shopcard b { color: #ffd75e; }
-  .card.shopcard .price {
-    position: absolute; top: 8px; right: 10px;
-    color: #ffd75e; font-size: 15px; font-weight: bold;
-  }
-  .card.shopcard.unaffordable.dealt { opacity: 0.45; pointer-events: none; filter: grayscale(0.6); }
   /* Banners: placement prompt + wave announcements */
   .banner {
     position: fixed; top: 34px; left: 50%; transform: translateX(-50%);
@@ -496,6 +508,10 @@
     <div class="cardrow" id="shoprow">
       <button class="card shopcard"></button>
       <button class="card shopcard"></button>
+      <button class="card shopcard"></button>
+      <button class="card shopcard"></button>
+      <button class="card shopcard"></button>
+      <button class="card shopcard"></button>
     </div>
   </div>
 </div>
@@ -509,6 +525,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=89"></script>
+<script src="game.js?v=90"></script>
 </body>
 </html>

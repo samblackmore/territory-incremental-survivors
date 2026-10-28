@@ -84,7 +84,7 @@ function cannonMaxed() {
 // Mid-run unit costs (run gold, not meta gold): base + 5 per living unit
 // of that type. The starter Cannon is free (pre-placed); every duplicate
 // costs extra, and the price climbs as your army grows. Tunable.
-const UNIT_COST = { cannon: 10, mole: 8, bloom: 6, gather: 6, lantern: 4 };
+const UNIT_COST = { cannon: 10, mole: 8, bloom: 6, gather: 6, lantern: 4, wall: 2 };
 const UNIT_COST_STEP = 5;
 const LANTERN_COST_STEP = 1; // lanterns stay cheap so chaining them to extend the base is affordable
 function unitCost(type) {
@@ -111,6 +111,7 @@ const ICONS = {
   bloom: '<svg viewBox="0 0 24 24" width="36" height="36"><circle cx="12" cy="12" r="5.5" fill="#ef4444"/></svg>',
   lantern: '<svg viewBox="0 0 24 24" width="36" height="36"><rect x="7" y="6" width="10" height="12" fill="none" stroke="#ef4444" stroke-width="1.5"/><circle cx="12" cy="12" r="2.5" fill="#fef3c7"/></svg>',
   gather: '<svg viewBox="0 0 24 24" width="36" height="36"><path d="M7,6 A5,5 0 0,0 17,6" stroke="#ef4444" stroke-width="2.5" fill="none"/><circle cx="7" cy="15.5" r="1.8" fill="#ef4444"/><circle cx="17" cy="15.5" r="1.8" fill="#ef4444"/><circle cx="12" cy="12" r="2" fill="#ef4444"/></svg>',
+  wall: '<svg viewBox="0 0 24 24" width="36" height="36"><rect x="4" y="6" width="16" height="12" fill="#9ca3af" stroke="#4b5563" stroke-width="1.5"/><line x1="12" y1="6" x2="12" y2="18" stroke="#4b5563" stroke-width="1"/><line x1="4" y1="12" x2="20" y2="12" stroke="#4b5563" stroke-width="1"/></svg>',
   bounce: '<svg viewBox="0 0 24 24" width="36" height="36"><polyline points="5,17 9,7 13,17 17,7" stroke="#fb923c" stroke-width="2" fill="none"/></svg>',
   steer: '<svg viewBox="0 0 24 24" width="36" height="36"><polygon points="20,12 12,8 12,16" fill="#ef4444"/><rect x="6" y="9.5" width="7" height="5" fill="#ef4444"/></svg>',
   mole: '<svg viewBox="0 0 24 24" width="36" height="36"><ellipse cx="12" cy="14" rx="7" ry="5" fill="#8b5a2b"/><circle cx="9" cy="12" r="1.2" fill="#1a2138"/><circle cx="15" cy="12" r="1.2" fill="#1a2138"/><polygon points="12,16 10,19 14,19" fill="#d4a574"/></svg>',
@@ -120,10 +121,11 @@ const TURRET = {
   cannon: { name: 'Cannon', hp: 8, interval: 1.0, dmg: 1 },
   rocket: { name: 'Rocket', hp: 6, interval: 2.5, dmg: 3 },
   laser:  { name: 'Laser',  hp: 5, interval: 2.0, dmg: 2 },
-  bloom:  { name: 'Bloom',  hp: 4, interval: GROW_INTERVAL, dmg: 0 },
+  bloom:  { name: 'Field',  hp: 4, interval: GROW_INTERVAL, dmg: 0 },
   lantern:{ name: 'Lantern',hp: 4, interval: 0, dmg: 0 }, // pure vision, no firing
   gather: { name: 'Gather', hp: 5, interval: GATHER_COOLDOWN, dmg: 0 }, // pulls pickups in range
-  mole:   { name: 'Mole',   hp: 6, interval: 1.0, dmg: 1 }, // digs through rock, then dies
+  mole:   { name: 'Digger', hp: 6, interval: 1.0, dmg: 1 }, // digs through rock, then dies
+  wall:   { name: 'Wall',   hp: 20, interval: 0, dmg: 0 }, // terrain, not a turret (see placeTurretAt wall branch)
 };
 const MOLE_LIFETIME_MIN = 10;      // cells dug before dying (min)
 const MOLE_LIFETIME_MAX = 20;      // ... (max)
@@ -1650,10 +1652,11 @@ const CARD_POOL = [
   { kind: 'turret', type: 'cannon', title: 'Cannon', icon: ICONS.cannon, sub: 'Sweeps shots in an arc, blasting rock.' },
   { kind: 'turret', type: 'rocket', title: 'Rocket', icon: ICONS.rocket, sub: 'Fires homing missiles that crash and splash-dig.' },
   { kind: 'turret', type: 'laser', title: 'Laser', icon: ICONS.laser, sub: 'Zaps the weakest visible block.' },
-  { kind: 'turret', type: 'bloom', title: 'Bloom', icon: ICONS.bloom, sub: 'Grows territory that harvests gold coins.' },
+  { kind: 'turret', type: 'bloom', title: 'Field', icon: ICONS.bloom, sub: 'Grows territory that harvests gold coins.' },
   { kind: 'turret', type: 'lantern', title: 'Lantern', icon: ICONS.lantern, sub: 'Pushes back the fog of war.' },
   { kind: 'turret', type: 'gather', title: 'Gather', icon: ICONS.gather, sub: 'Pulls in nearby pickups.' },
-  { kind: 'turret', type: 'mole', title: 'Mole', icon: ICONS.mole, sub: 'Digs tunnels through rock.' },
+  { kind: 'turret', type: 'mole', title: 'Digger', icon: ICONS.mole, sub: 'Digs tunnels through rock.' },
+  { kind: 'turret', type: 'wall', title: 'Wall', icon: ICONS.wall, sub: '2x2 defensive barrier.' },
   // Stat cards, generated from STAT_DEFS (cannon/bloom/gather only — mole
   // dig advances via the shop bundle, never as a free XP pick; shopOnly
   // stats like projectiles are bought with gold, not XP).
@@ -1695,15 +1698,36 @@ function availableCards() {
   if (cannonMaxed()) {
     pool.push({ kind: 'evo', title: 'Sprayer', icon: ICONS.cannon, sub: 'Blazing-fast sweep spray' });
   }
+  if (SURVIVAL) {
+    // Projectiles hybrid (survival only): back in the XP row as a
+    // randomized draft card, but it costs gold (like a shop card).
+    // If you see it and can afford it, it's a strong pick — but it
+    // still consumes the level-up (pick-one holds). Main keeps proj
+    // in the shop (v75, unchanged).
+    const cw = S.weapons.cannon;
+    if (cw && cw.stats && (cw.stats.proj || 0) < 5) {
+      pool.push({ kind: 'proj', weapon: 'cannon', stat: 'proj',
+        title: 'Projectiles', icon: ICONS.cannon, cost: projCost() });
+    }
+  }
   return pool;
 }
 // Shop row: one placement card per active unit type, plus gold-gated stat
 // upgrades (currently just cannon projectiles), affordable or not.
 // Unaffordable ones still show (greyed) so you can see what to save for.
 function availableShopCards() {
-  // Survival adds the lantern: a cheap extender (fog push + a unit to
-  // place near), so the proximity placement can reach further.
-  const types = SURVIVAL ? ['cannon', 'mole', 'bloom', 'gather', 'lantern'] : ['cannon', 'mole', 'bloom', 'gather'];
+  if (SURVIVAL) {
+    // Full shop (no proj — it's an XP hybrid now): all 6 placements,
+    // cost order (cheapest first) so you can plan ahead. No draw.
+    const types = ['cannon', 'mole', 'bloom', 'gather', 'lantern', 'wall'];
+    const pool = CARD_POOL.filter(c => c.kind === 'turret' && types.includes(c.type)).map(c => ({
+      ...c, cost: unitCost(c.type), owned: !!S.weapons[c.type],
+    }));
+    pool.sort((a, b) => a.cost - b.cost);
+    return pool;
+  }
+  // Main: 4 placements + proj, drawn 2 at random (affordable-first) in offerShopCards.
+  const types = ['cannon', 'mole', 'bloom', 'gather'];
   const pool = CARD_POOL.filter(c => c.kind === 'turret' && types.includes(c.type)).map(c => ({
     ...c, cost: unitCost(c.type), owned: !!S.weapons[c.type],
   }));
@@ -1730,7 +1754,7 @@ function offerCards() {
   const weight = p => p.kind === 'gold' ? 0.5 : 1;
   const els = document.querySelectorAll('#levelup .xpcard');
   els.forEach(el => {
-    el.classList.remove('dealt');
+    el.classList.remove('dealt', 'unaffordable');
     el.dataset.kind = ''; el.dataset.type = ''; el.dataset.mult = '';
     el.dataset.add = ''; el.dataset.passive = ''; el.dataset.stat = '';
     el.dataset.cost = ''; el.dataset.amount = ''; el.dataset.weapon = '';
@@ -1754,7 +1778,7 @@ function offerCards() {
     el.dataset.cost = '';
     el.dataset.weapon = '';
     const lv = p.kind === 'passive' ? S.passives[p.passive] : 0;
-    let title = p.title, sub = p.sub, newTag = '';
+    let title = p.title, sub = p.sub, newTag = '', priceHtml = '';
     const icon = `<div class="icon">${p.icon || ''}</div>`;
     // VS-style: first time bringing it into the run gets a yellow "New!" tag,
     // separate from the name.
@@ -1785,14 +1809,28 @@ function offerCards() {
       el.dataset.amount = amt;
       sub = `+${amt}<span class="coin"></span>`;
     }
-    el.innerHTML = icon + newTag + '<b>' + title + '</b><span>' + sub + '</span>';
+    else if (p.kind === 'proj') {
+      // Hybrid (survival): XP-row draft card with a gold cost. Shows
+      // the price like a shop card; greyed + untappable if you can't
+      // afford it (click handler's cost guard covers the rest).
+      const w = S.weapons.cannon;
+      const lv = w && w.stats ? (w.stats.proj || 0) : 0;
+      title = `Projectiles <span class="lv">Lv${lv + 1}</span>`;
+      sub = `+1 projectile`;
+      el.dataset.weapon = 'cannon';
+      el.dataset.stat = 'proj';
+      el.dataset.cost = String(p.cost);
+      priceHtml = `<div class="price">${p.cost}<span class="coin"></span></div>`;
+      if (S.gold < p.cost) el.classList.add('unaffordable');
+    }
+    el.innerHTML = priceHtml + icon + newTag + '<b>' + title + '</b><span>' + sub + '</span>';
     // Staggered deal: cards appear one by one (prevents accidental taps).
     setTimeout(() => el.classList.add('dealt'), 150 + k * 120);
   }
 }
-// Shop row: 2 cards, affordable first — draw from what you can pay for,
-// then fill leftover slots with greyed goals you can't afford yet (so you
-// still see what to save for, but the row leads with a real choice).
+// Shop row: survival shows the FULL shop (all items, cost order, no
+// draw) in a 3x3 grid; main keeps the original 2-card affordable-first
+// random draw (unchanged).
 function offerShopCards() {
   const pool = availableShopCards();
   const els = document.querySelectorAll('#levelup .shopcard');
@@ -1803,14 +1841,19 @@ function offerShopCards() {
     el.dataset.kind = ''; el.dataset.type = ''; el.dataset.stat = ''; el.dataset.cost = ''; el.dataset.weapon = '';
     el.innerHTML = ''; el.style.display = 'none';
   });
-  const afford = pool.filter(p => p.cost <= S.gold);
-  const pricey = pool.filter(p => p.cost > S.gold);
-  const picks = [];
-  while (picks.length < els.length && afford.length) {
-    picks.push(afford.splice((Math.random() * afford.length) | 0, 1)[0]);
-  }
-  while (picks.length < els.length && pricey.length) {
-    picks.push(pricey.splice((Math.random() * pricey.length) | 0, 1)[0]);
+  let picks;
+  if (SURVIVAL) {
+    picks = pool; // full shop, cost order, no draw
+  } else {
+    const afford = pool.filter(p => p.cost <= S.gold);
+    const pricey = pool.filter(p => p.cost > S.gold);
+    picks = [];
+    while (picks.length < 2 && afford.length) {
+      picks.push(afford.splice((Math.random() * afford.length) | 0, 1)[0]);
+    }
+    while (picks.length < 2 && pricey.length) {
+      picks.push(pricey.splice((Math.random() * pricey.length) | 0, 1)[0]);
+    }
   }
   for (let j = 0; j < picks.length; j++) {
     const p = picks[j];
@@ -1843,7 +1886,7 @@ function offerShopCards() {
       // at 8 — after that the shop still sells plain placements.
       const dig = w.stats ? (w.stats.dig || 0) : 0;
       title = `${p.title} <span class="lv">Lv${Math.min(dig + 1, 8)}</span>`;
-      sub = dig >= 8 ? `New mole` : `New mole · +1 dig damage`;
+      sub = dig >= 8 ? `New digger` : `New digger · +1 dig damage`;
       el.dataset.stat = 'mole-place';
     } else {
       sub = `New turret`;
@@ -1860,10 +1903,13 @@ function offerShopCards() {
 
 document.querySelectorAll('#levelup .card').forEach(card => {
   card.addEventListener('click', () => {
-    // Unaffordable shop cards are visible but not tappable (CSS blocks
-    // real taps too; this guard covers programmatic clicks).
-    if (parseInt(card.dataset.cost || '0', 10) > S.gold) return;
     const kind = card.dataset.kind || 'freq';
+    // Affordability guard: only gold-costing cards (shop placements +
+    // proj hybrid) can be blocked. Free XP cards never carry a cost
+    // (offerCards clears it), so a stale cost on a reused slot can't
+    // block a free pick. (CSS blocks real taps too; this covers
+    // programmatic clicks.)
+    if ((kind === 'turret' || kind === 'proj') && parseInt(card.dataset.cost || '0', 10) > S.gold) return;
     // Choosing an upgrade resets the XP bar to zero (it stayed full
     // while the cards were showing).
     S.xp = 0; S.xpShown = 0; S.levelUpNeed = 0;
@@ -1944,6 +1990,12 @@ document.getElementById('diveagain').addEventListener('click', () => {
 });
 
 // Placement: the chosen turret clears its own 1-cell pad and goes live.
+// Wall: a 2x2 defensive barrier (GREY terrain, not a turret). Flood
+// chews through it like rock (20 hits per cell at flood dmg 1), so it
+// slows the flood rather than stopping it forever. Flat 2 gold —
+// walls aren't turrets, so unitCost never escalates them.
+const WALL_HP = 20;
+const WALL_SHADE = 3; // mid grey ([107,114,128]) — reads as stone, distinct from natural grey variation
 // Survival placement: units go near your base, not anywhere lit.
 // (Matches fogDist, so a lantern extends the placeable range by 6.)
 const PLACE_RADIUS = 6;
@@ -1967,6 +2019,53 @@ function placeTurretAt(sx, sy) {
   let cx = Math.floor(wpt.x / CELL_PX), cy = Math.floor(wpt.y / CELL_PX);
   cx = Math.max(0, Math.min(cfg.cols - 1, cx));
   cy = Math.max(0, Math.min(cfg.rows - 1, cy));
+  if (type === 'wall') {
+    // 2x2 wall: anchor + right + down + diagonal must all be in bounds,
+    // unoccupied, and EMPTY or BLUE (you can wall your own territory,
+    // but walling it stops its harvest — wall on open ground when you can).
+    if (cx + 1 >= cfg.cols || cy + 1 >= cfg.rows) {
+      S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
+      return;
+    }
+    const cells2x2 = [[cx, cy], [cx + 1, cy], [cx, cy + 1], [cx + 1, cy + 1]];
+    for (const [wx, wy] of cells2x2) {
+      const wi = wy * cfg.cols + wx;
+      if (turretAt(wx, wy) || (S.cells[wi] !== EMPTY && S.cells[wi] !== BLUE)) {
+        S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
+        return;
+      }
+    }
+    if (SURVIVAL) {
+      if (!nearBase(cx, cy)) {
+        S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
+        return;
+      }
+    } else if (S.fog[cy * cfg.cols + cx] !== 0) {
+      S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
+      return;
+    }
+    for (const [wx, wy] of cells2x2) {
+      const wi = wy * cfg.cols + wx;
+      S.cells[wi] = GREY;
+      S.hp[wi] = WALL_HP; S.maxhp[wi] = WALL_HP; S.shade[wi] = WALL_SHADE;
+      S.growN[wi] = 0; S.growBy[wi] = 0; S.harvT[wi] = 0; S.goldNug[wi] = 0; S.popT[wi] = -1;
+    }
+    spawnBurst(cx + 1, cy + 1, '#9ca3af'); // center of the 2x2 block
+    // No turret, no weapon entry — walls are terrain. (So the shop card
+    // keeps showing New! + the description every time, which is fine:
+    // each wall IS new.)
+    S.placing = null;
+    placebanner.classList.add('hidden');
+    if (!S.runOver) {
+      if (S.pending > 0) {
+        offerCards(); offerShopCards();
+        overlay.classList.remove('hidden');
+      } else {
+        S.paused = false;
+      }
+    }
+    return;
+  }
   if (turretAt(cx, cy)) {
     // Occupied: red ring says no, placement mode stays on.
     S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
@@ -2859,7 +2958,7 @@ function updateHud() {
     (ENEMIES_ENABLED ? `<div>Wave: <b>${S.wave}</b> · Your turrets: <b>${blues}</b> · Enemy: <b>${reds}</b>${S.redQueue.length ? ` (+${S.redQueue.length} incoming)` : ''}</div>` : `<div>Your turrets: <b>${blues}</b></div>`) +
     `<div>Blocks excavated: <b>${S.destroyed}</b> · Red turrets destroyed: <b>${S.redKills}</b></div>` +
     `<div>Map seed: <b>${S.seed}</b></div>` +
-    `<div>Fire rate: <b>${effFreq}/s</b> (×${S.freqMult.toFixed(2)}) · Damage: <b>+${S.dmgBonus}</b> · Steering: <b>×${S.steerMult.toFixed(2)}</b> · Bloom: <b>×${S.bloomMult.toFixed(2)}</b></div>` +
+    `<div>Fire rate: <b>${effFreq}/s</b> (×${S.freqMult.toFixed(2)}) · Damage: <b>+${S.dmgBonus}</b> · Steering: <b>×${S.steerMult.toFixed(2)}</b> · Field: <b>×${S.bloomMult.toFixed(2)}</b></div>` +
     `<div>Bounce: <b>Lv${S.passives.bounce}</b> (${Math.round(S.bounceChance * 100)}%) · Gather: <b>${gatherRange()} seek / ${gatherCount()} per stop</b></div>` +
     `<div>Weapons: <b>${Object.entries(S.weapons).map(([k, w]) => `${k} ${w.stats ? Object.entries(w.stats).map(([s, n]) => `${s} ${n}`).join('/') : ''} (×${w.rateMult.toFixed(2)} rate, +${w.dmgBonus} dmg${w.critChance ? `, ${Math.round(w.critChance * 100)}% crit` : ''}${w.proj ? `, +${w.proj} proj` : ''})`).join(' · ')}</b></div>` +
     `<div>Projectiles alive: <b>${S.projs.length}</b> · Missiles: <b>${S.missiles.length}</b></div>` +
