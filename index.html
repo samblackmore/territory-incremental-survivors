@@ -223,6 +223,7 @@
     background: rgba(5, 8, 15, 0.78);
     display: flex; align-items: center; justify-content: center;
     z-index: 10;
+    overflow-y: auto; /* 7 shop cards = 3 rows: scrolls on short phones instead of clipping */
   }
   #levelup.hidden { display: none; }
   /* Celebration particles pouring from the XP bar, behind the cards */
@@ -231,7 +232,7 @@
     width: 100%; height: 100%;
     pointer-events: none;
   }
-  #levelup .cards { position: relative; z-index: 1; }
+  #levelup .cards { position: relative; z-index: 1; margin: auto; /* centers when it fits, scrolls from the top when it doesn't */ }
   /* Pre-game start screen */
   #startscreen {
     position: fixed; inset: 0;
@@ -515,6 +516,7 @@
       <button class="card shopcard"></button>
       <button class="card shopcard"></button>
       <button class="card shopcard"></button>
+      <button class="card shopcard"></button>
     </div>
   </div>
 </div>
@@ -528,6 +530,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=94"></script>
+<script src="game.js?v=95"></script>
 </body>
 </html>

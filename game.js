@@ -80,7 +80,7 @@ function cannonMaxed() {
 // Mid-run unit costs (run gold, not meta gold): base + 5 per living unit
 // of that type. The starter Cannon is free (pre-placed); every duplicate
 // costs extra, and the price climbs as your army grows. Tunable.
-const UNIT_COST = { cannon: 10, mole: 3, bloom: 6, gather: 6, lantern: 4, wall: 2 };
+const UNIT_COST = { cannon: 10, mole: 3, bloom: 6, gather: 6, lantern: 4, wall: 2, laser: 20 };
 const UNIT_COST_STEP = 5;
 const LANTERN_COST_STEP = 1; // lanterns stay cheap so chaining them to extend the base is affordable
 function unitCost(type) {
@@ -272,8 +272,13 @@ function drawMinimap() {
     else mmctx.fillRect(W - T, 0, T, H); // from right
   }
   const total = cols * rows;
-  if (mmBlue) mmBlue.textContent = Math.round(blue / total * 100) + '%';
-  if (mmRed) mmRed.textContent = Math.round(red / total * 100) + '%';
+  // Dots match the RENDERED colors, not the internal team ids. On main,
+  // player renders blue and enemy red, so blue% = player. On survival
+  // the palette flips (player renders red, flood blue), so the values
+  // swap — otherwise the blue dot shows the red pixels' share and
+  // vice versa, which reads as backwards.
+  if (mmBlue) mmBlue.textContent = Math.round((SURVIVAL ? red : blue) / total * 100) + '%';
+  if (mmRed) mmRed.textContent = Math.round((SURVIVAL ? blue : red) / total * 100) + '%';
 }
 // Celebration particles pouring down from the XP bar while cards show.
 const lvParticles = [];
@@ -1430,12 +1435,45 @@ function weakestBlock(t) {
   return bi < 0 ? null : { x: bx, y: by, i: bi };
 }
 function fireLaser(t) {
+  if (SURVIVAL) {
+    // Anti-flood only: zap the weakest VISIBLE flood cell (line of
+    // sight = fog cleared). If no flood is in sight, do nothing —
+    // the laser sits idle, which is the drama: it activates the
+    // moment flood finally approaches. Never zaps rock on survival.
+    const tgt = weakestFlood(t);
+    if (!tgt) return;
+    S.beams.push({ x1: (t.x + 0.5) * CELL_PX, y1: (t.y + 0.5) * CELL_PX,
+                   x2: (tgt.x + 0.5) * CELL_PX, y2: (tgt.y + 0.5) * CELL_PX, t: 0 });
+    const dmg = TURRET.laser.dmg + S.dmgBonus + weaponDmgBonus(t);
+    const i = tgt.i;
+    S.hp[i] = Math.max(0, S.hp[i] - dmg);
+    spawnBurst(tgt.x + 0.5, tgt.y + 0.5, CELL_COLORS[RED]);
+    spawnChip(tgt.x + 0.5, tgt.y + 0.5, CELL_COLORS[RED], tgt.x - t.x, tgt.y - t.y);
+    if (S.hp[i] <= 0) { S.cells[i] = EMPTY; S.growN[i] = 0; S.growBy[i] = 0; }
+    return;
+  }
   const tgt = weakestBlock(t);
   if (!tgt) return; // nowhere left to dig
   S.beams.push({ x1: (t.x + 0.5) * CELL_PX, y1: (t.y + 0.5) * CELL_PX,
                  x2: (tgt.x + 0.5) * CELL_PX, y2: (tgt.y + 0.5) * CELL_PX, t: 0 });
   damageBlock(tgt.i, TURRET.laser.dmg + S.dmgBonus + weaponDmgBonus(t), t.color,
               t.x + 0.5, t.y + 0.5, tgt.x - t.x, tgt.y - t.y);
+}
+// Weakest VISIBLE flood cell (survival Laser target): flood (RED) with
+// fog cleared (line of sight), lowest HP first, nearest on ties —
+// same shape as weakestBlock, but flood-only, never rock.
+function weakestFlood(t) {
+  let bx = -1, by = -1, bi = -1, bestHp = Infinity, bd = Infinity;
+  for (let y = 0; y < cfg.rows; y++) {
+    for (let x = 0; x < cfg.cols; x++) {
+      const i = y * cfg.cols + x;
+      if (S.cells[i] !== RED || S.fog[i] !== 0) continue; // needs line of sight to flood
+      const hp = S.hp[i];
+      const d = (x - t.x) * (x - t.x) + (y - t.y) * (y - t.y);
+      if (hp < bestHp || (hp === bestHp && d < bd)) { bestHp = hp; bd = d; bx = x; by = y; bi = i; }
+    }
+  }
+  return bi < 0 ? null : { x: bx, y: by, i: bi };
 }
 // Bloom: Tiberium-style territory. Every interval it makes one growth
 // increment on the nearest empty cell in radius (preferring cells it has
@@ -1655,7 +1693,7 @@ function checkLevel() {
 const CARD_POOL = [
   { kind: 'turret', type: 'cannon', title: 'Cannon', icon: ICONS.cannon, sub: 'Sweeps shots in an arc, blasting rock.' },
   { kind: 'turret', type: 'rocket', title: 'Rocket', icon: ICONS.rocket, sub: 'Fires homing missiles that crash and splash-dig.' },
-  { kind: 'turret', type: 'laser', title: 'Laser', icon: ICONS.laser, sub: 'Zaps the weakest visible block.' },
+  { kind: 'turret', type: 'laser', title: 'Laser', icon: ICONS.laser, sub: 'Waits for flood, then zaps it.' },
   { kind: 'turret', type: 'bloom', title: 'Field', icon: ICONS.bloom, sub: 'Grows territory that harvests gold coins.' },
   { kind: 'turret', type: 'lantern', title: 'Lantern', icon: ICONS.lantern, sub: 'Pushes back the fog of war.' },
   { kind: 'turret', type: 'gather', title: 'Harvester', icon: ICONS.gather, sub: 'Collects pickups anywhere, slowly.' },
@@ -1721,9 +1759,10 @@ function availableCards() {
 // Unaffordable ones still show (greyed) so you can see what to save for.
 function availableShopCards() {
   if (SURVIVAL) {
-    // Full shop (no proj — it's an XP hybrid now): all 6 placements,
+    // Full shop (no proj — it's an XP hybrid now): all 7 placements,
     // cost order (cheapest first) so you can plan ahead. No draw.
-    const types = ['cannon', 'mole', 'bloom', 'gather', 'lantern', 'wall'];
+    // Laser is the pricey late-game anti-flood unit (20, last).
+    const types = ['cannon', 'mole', 'bloom', 'gather', 'lantern', 'wall', 'laser'];
     const pool = CARD_POOL.filter(c => c.kind === 'turret' && types.includes(c.type)).map(c => ({
       ...c, cost: unitCost(c.type), owned: !!S.weapons[c.type],
     }));
