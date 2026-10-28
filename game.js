@@ -2013,7 +2013,9 @@ function nearBase(cx, cy) {
 }
 function enterPlacement(type) {  S.placing = { type }; S.placePreview = null;
   placebanner.innerHTML = SURVIVAL
-    ? 'Tap near your base to deploy <b>' + TURRET[type].name + '</b>'
+    ? (type === 'lantern'
+        ? 'Tap near your base or any clear open cell to deploy <b>Lantern</b>'
+        : 'Tap near your base to deploy <b>' + TURRET[type].name + '</b>')
     : 'Tap the map to deploy <b>' + TURRET[type].name + '</b>';
   placebanner.classList.remove('hidden');
 }
@@ -2077,10 +2079,19 @@ function placeTurretAt(sx, sy) {
   }
   const pi = cy * cfg.cols + cx;
   if (SURVIVAL) {
-    // Survival: place near your base (within PLACE_RADIUS of a living
-    // player unit) — not just anywhere lit. Lanterns extend the base,
-    // so chaining a cheap lantern is how you reach further.
-    if (!nearBase(cx, cy)) {
+    if (type === 'lantern') {
+      // Lantern exception: near base it sits on any ground (as before);
+      // far from base it can still go anywhere that's open ground and
+      // clear of fog. That's how you extend past the build discs: drop
+      // a lantern at the edge of the revealed area, and it becomes a
+      // new anchor for the next units.
+      if (!nearBase(cx, cy) && !(S.cells[pi] === EMPTY && S.fog[pi] === 0)) {
+        S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
+        return;
+      }
+    } else if (!nearBase(cx, cy)) {
+      // Survival: place near your base (within PLACE_RADIUS of a living
+      // player unit) — not just anywhere lit.
       S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
       return;
     }
@@ -2090,7 +2101,9 @@ function placeTurretAt(sx, sy) {
     return;
   }
   if (type === 'lantern') {
-    // Lanterns sit on any visible ground: empty or terrain. No pad clearing.
+    // Lanterns sit on any visible ground near base (main: any ground;
+    // survival far lanterns already checked EMPTY + clear above).
+    // No pad clearing.
   } else {
     // Combat units and Blooms need open ground.
     if (S.cells[pi] !== EMPTY) {
@@ -2773,6 +2786,26 @@ function render() {
     ctx.beginPath();
     ctx.arc(wpt.x, wpt.y, r, 0, Math.PI * 2);
     ctx.stroke();
+    ctx.restore();
+  }
+  // Build range (survival, proximity-gated units): while placing, show
+  // the discs around your base units that a new unit must land inside.
+  // A tap outside every disc is why the red ring rejects it. Lantern
+  // gets no discs — it can also go outside them on clear open ground
+  // (see the lantern exception in placeTurretAt). Main has no
+  // proximity rule (fog shows where you can place), so no discs there.
+  if (SURVIVAL && S.placing && S.placing.type !== 'lantern') {
+    ctx.save();
+    ctx.fillStyle = 'rgba(250, 204, 21, 0.07)';
+    ctx.strokeStyle = 'rgba(250, 204, 21, 0.45)';
+    ctx.lineWidth = 2;
+    for (const t of S.turrets) {
+      if (t.dead || t.color !== BLUE) continue;
+      ctx.beginPath();
+      ctx.arc((t.x + 0.5) * CELL_PX, (t.y + 0.5) * CELL_PX, PLACE_RADIUS * CELL_PX, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
     ctx.restore();
   }
   // Missiles: little triangles flying along their velocity
