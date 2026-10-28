@@ -382,6 +382,15 @@
   }
   #runover.hidden { display: none; }
   #runover h2 { color: #ef4444; }
+  /* Commander intro dialog (dummy): same overlay as run-over, gold text. */
+  #commander {
+    position: fixed; inset: 0;
+    background: rgba(5, 8, 15, 0.85);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 10;
+  }
+  #commander.hidden { display: none; }
+  #commander-text { color: #ffd75e; font-size: 18px; line-height: 1.6; margin: 0 0 22px; max-width: 300px; }
   #runstats { color: var(--muted); margin: 0 0 22px; line-height: 2; }
   #runstats b { color: var(--text); }
   #diveagain {
@@ -529,7 +538,15 @@
   </div>
 </div>
 
+<!-- Commander intro (survival, dummy): storm warning at run start. -->
+<div id="commander" class="hidden">
+  <div class="cards">
+    <p id="commander-text"></p>
+    <button id="commander-btn">Prepare</button>
+  </div>
+</div>
+
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=95"></script>
+<script src="game.js?v=96"></script>
 </body>
 </html>

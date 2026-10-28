@@ -257,12 +257,13 @@ function drawMinimap() {
     mmctx.fillStyle = t.color === BLUE ? '#ef4444' : '#3b82f6';
     mmctx.fillRect(t.x * px, t.y * px, px, px);
   }
-  // Incoming-storm warning (survival, lull only): a gently pulsing
-  // yellow line on the minimap edge the next storm comes FROM. This
-  // replaces the old top-of-screen countdown banner — quieter, and it
-  // points at the side to watch. During the storm itself there's no
-  // pulse: the flood is visible on the minimap as blue territory.
-  if (SURVIVAL && S.flood && S.flood.phase === 'lull') {
+  // Incoming-storm warning (survival, early lull only): a gently
+  // pulsing yellow line on the minimap edge the next storm comes
+  // FROM. This is the quiet warning; the final 30s before the storm
+  // use the old toast countdown instead (see floodTick). During the
+  // storm itself there's no pulse: the flood is visible on the
+  // minimap as blue territory. No pulse during grace either.
+  if (SURVIVAL && S.flood && S.flood.phase === 'lull' && S.flood.timer > FLOOD_TOAST_AT) {
     const W = minimap.width, H = minimap.height, T = 3; // line thickness px
     const a = 0.42 + 0.18 * Math.sin(S.time * Math.PI * 2 / 2.2); // gentle 2.2s pulse, alpha 0.24–0.60
     mmctx.fillStyle = `rgba(255, 215, 94, ${a})`; // gold #ffd75e
@@ -314,6 +315,7 @@ const placebanner = document.getElementById('placebanner');
 const wavebanner = document.getElementById('wavebanner');
 const runover = document.getElementById('runover');
 const runstats = document.getElementById('runstats');
+const commander = document.getElementById('commander');
 
 const inCols   = document.getElementById('d-cols');
 const inRows   = document.getElementById('d-rows');
@@ -882,6 +884,7 @@ function newGame() {
   // A fresh run clears any finish/victory UI from the last one.
   if (typeof finishbtn !== 'undefined' && finishbtn) finishbtn.classList.add('hidden');
   if (typeof victory !== 'undefined' && victory) victory.classList.add('hidden');
+  if (typeof commander !== 'undefined' && commander) commander.classList.add('hidden');
   readDebug();
   const seedStr = inSeed.value.trim();
   const seed = seedStr === '' ? (Math.random() * 1e9) | 0 : parseInt(seedStr, 10) || 0;
@@ -1212,9 +1215,11 @@ function checkRunOver() {
 // No classes in this codebase (plain functions + S state), so the
 // flood is a controller object on S plus these functions.
 const SURVIVAL = true; // survival branch: player renders red, flood is blue, enemy base off
-const FLOOD_FIRST_STORM = 30; // seconds of grace before the first storm
+const FLOOD_GRACE_DUR = 300;  // 5 min grace before the first storm: prepare your base (commander dialog gives the ETA)
+const FLOOD_TOAST_AT = 30;    // seconds before a storm when the old toast countdown returns (earlier in the lull: minimap pulse only)
+const FLOOD_FIRST_STORM = 30; // seconds of lull after grace before the first storm (toast shows the whole time: 30 <= 30)
 const FLOOD_STORM_DUR = 20;   // seconds a storm barrages, then it passes
-const FLOOD_LULL = 20;        // seconds between storms (rebuild / reclaim)
+const FLOOD_LULL = 60;        // seconds between storms (was 20: lengthened so pulse (60→30) + toast (30→0) both get a window)
 const FLOOD_DMG = 1;          // per flood projectile — constant barrage, so toned down (was 2)
 const FLOOD_SPEED = 8;        // cells/s — slower than player shots (12.5), a lumbering front
 const FLOOD_OFF = 3;          // cells outside the map the emitter sits (never seen)
@@ -1244,7 +1249,7 @@ function floodPickDir(f, rng) {
   else { f.ex = W + FLOOD_OFF; f.ey = rng() * H; }
 }
 function floodInit(seed) {
-  const f = { dir: 0, ex: 0, ey: 0, phase: 'lull', timer: FLOOD_FIRST_STORM,
+  const f = { dir: 0, ex: 0, ey: 0, phase: 'grace', timer: FLOOD_GRACE_DUR,
               sweep: 0, ringT: 0, sweepT: 0, storms: 0, spreadT: FLOOD_SPREAD_EVERY };
   floodPickDir(f, mulberry32(seed + 99991));
   return f;
@@ -1344,15 +1349,36 @@ function floodTick(dt) {
   f.spreadT -= dt;
   if (f.spreadT <= 0) { f.spreadT += FLOOD_SPREAD_EVERY; floodSpread(); }
   f.timer -= dt;
+  if (f.phase === 'grace') {
+    // Grace: prepare your base. No storms, no warnings — the
+    // commander dialog already gave the ETA. Spread no-ops here
+    // (no RED cells exist yet, so floodSpread finds nothing).
+    wavebanner.classList.add('hidden'); // no stale toast
+    if (f.timer <= 0) {
+      // Grace over: first lull, direction already picked at init,
+      // so the toast (30s) warns the whole way to the first storm.
+      f.phase = 'lull';
+      f.timer = FLOOD_FIRST_STORM;
+    }
+    return;
+  }
   if (f.phase === 'lull') {
-    // Countdown to the next storm — direction already picked (see
-    // floodInit + the storm-end pick below). No banner anymore: the
-    // minimap edge pulse in drawMinimap names the side, quietly.
     if (f.timer <= 0) {
       f.phase = 'storm';
       f.timer = FLOOD_STORM_DUR;
       f.sweep = 0; f.ringT = 0; f.sweepT = 0; // fire immediately
       f.storms++;
+      wavebanner.classList.add('hidden'); // storm: no toast (flood visible)
+      return;
+    }
+    // Final 30s before the storm: the old toast countdown returns
+    // (explicit, urgent). Earlier in the lull the minimap pulse
+    // carries the warning quietly (see drawMinimap).
+    if (f.timer <= FLOOD_TOAST_AT) {
+      wavebanner.textContent = 'FLOOD STORM FROM THE ' + FLOOD_DIRS[f.dir].toUpperCase() + ' IN ' + Math.max(1, Math.ceil(f.timer)) + 's';
+      wavebanner.classList.remove('hidden');
+    } else {
+      wavebanner.classList.add('hidden'); // early lull: pulse only
     }
     return;
   }
@@ -1366,10 +1392,12 @@ function floodTick(dt) {
   if (f.ringT <= 0) { f.ringT += FLOOD_RING_EVERY; floodFireRing(); }
   if (f.timer <= 0) {
     // Storm passes: lull, and pick the NEXT storm's direction now so
-    // the minimap pulse can name it.
+    // the minimap pulse can name it. New lull starts in pulse phase
+    // (timer 60 > 30), so hide any toast explicitly.
     f.phase = 'lull';
     f.timer = FLOOD_LULL;
     floodPickDir(f, Math.random);
+    wavebanner.classList.add('hidden');
   }
 }
 
@@ -2035,6 +2063,7 @@ document.querySelectorAll('#levelup .card').forEach(card => {
 document.getElementById('diveagain').addEventListener('click', () => {
   runover.classList.add('hidden');
   newGame();
+  if (SURVIVAL) showCommander();
 });
 
 // Placement: the chosen turret clears its own 1-cell pad and goes live.
@@ -3280,10 +3309,25 @@ function renderShop() {
     list.appendChild(div);
   }
 }
+// Commander intro dialog (survival only, dummy): the storm warning
+// at the start of a run, with the grace ETA filled in from the
+// constant so the text can never go stale. Prepare starts the run —
+// the game stays paused while reading, so grace runs from there.
+function showCommander() {
+  const ct = document.getElementById('commander-text');
+  if (ct) ct.textContent = 'Commander, the storm is approaching. ETA ' + (FLOOD_GRACE_DUR / 60) + ' minutes till impact.';
+  S.paused = true; // newGame unpaused; re-pause while reading
+  commander.classList.remove('hidden');
+}
+document.getElementById('commander-btn').addEventListener('click', () => {
+  commander.classList.add('hidden');
+  S.paused = false;
+});
 document.getElementById('startbtn').addEventListener('click', () => {
   // Every run starts with Cannon; the shop only gates mid-run drafts.
   document.getElementById('startscreen').classList.add('hidden');
   newGame();
+  if (SURVIVAL) showCommander();
 });
 
 applyUrlParams();
