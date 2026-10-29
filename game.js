@@ -85,7 +85,10 @@ function cannonMaxed() {
 // Mid-run unit costs (run gold, not meta gold): base + 5 per living unit
 // of that type. The starter Cannon is free (pre-placed); every duplicate
 // costs extra, and the price climbs as your army grows. Tunable.
-const UNIT_COST = { cannon: 10, mole: 3, bloom: 6, gather: 6, lantern: 4, wall: 2, laser: 20 };
+// Early game is cheap on purpose: Lantern 2 (base expansion), Field 3
+// (early resources), Digger 4 (early exploration) — the flood starts at
+// 5 min, so you need cheap options before you can level the cannon.
+const UNIT_COST = { cannon: 10, mole: 4, bloom: 3, gather: 6, lantern: 2, wall: 2, laser: 20 };
 const UNIT_COST_STEP = 5;
 const LANTERN_COST_STEP = 1; // lanterns stay cheap so chaining them to extend the base is affordable
 function unitCost(type) {
@@ -136,8 +139,8 @@ const TURRET = {
   mole:   { name: 'Digger', hp: 6, interval: 1.0, dmg: 1 }, // digs through rock, then dies
   wall:   { name: 'Wall',   hp: 20, interval: 0, dmg: 0 }, // terrain, not a turret (see placeTurretAt wall branch)
 };
-const MOLE_LIFETIME_MIN = 10;      // cells dug before dying (min)
-const MOLE_LIFETIME_MAX = 20;      // ... (max)
+const MOLE_LIFETIME_MIN = 20;      // cells dug before dying (min, doubled: diggers were dying too soon to be useful)
+const MOLE_LIFETIME_MAX = 40;      // ... (max)
 const MOLE_TURN_EVERY = 3;         // cells before random turn
 const COIN_FLY_DUR = 0.45;           // seconds for a tapped coin to zip to the corner
 const RING_DUR = 0.3;                // conversion shockwave ring lifetime (s)
@@ -746,6 +749,11 @@ function mkTurret(x, y, color, type) {
     t.digT = 0;
     // Smooth-movement render state (glides cell to cell, no jumps).
     t.rx = x; t.ry = y; t.moveT = 1;
+    // Flag: the cell this digger is trying to reach (blue only — red
+    // moles keep hunting blue turrets, no flag). Set at spawn so the
+    // flag is visible immediately, retargeted on arrival / staleness.
+    t.flag = null; t.flagKind = null;
+    if (color === BLUE) retargetDigger(t);
   }
   if (type === 'gather') {
     // Harvester: roams the grid toward pickups (see harvesterStep).
@@ -853,6 +861,128 @@ function moleDirToNugget(cx, cy) {
   const dx = bx - cx, dy = by - cy;
   if (Math.abs(dx) >= Math.abs(dy)) return dx > 0 ? 1 : (dx < 0 ? 3 : 0);
   return dy > 0 ? 2 : 0;
+}
+// ---- Digger flags (blue only) ----
+// A blue digger always has a target cell (its flag): the nearest, by BFS
+// steps through rock + open ground, among gold nugget cells (WHITE +
+// goldNug) and cave cells it can't already walk to (EMPTY not reachable
+// over open ground alone — i.e. a separate cave pocket, the way into
+// the rescue caves). Whichever is closer wins; caves win ties (exploration
+// toward rescue). When the digger reaches its flag it retargets to the
+// next one; a flag that goes stale (gold broken elsewhere, cave painted
+// to territory, occupied) retargets too. Turret cells block both BFS
+// passes (a digger never stacks onto a turret, it routes around).
+function diggerPathNext(sx, sy, tx, ty) {
+  // BFS next step toward (tx, ty) over EMPTY / own BLUE / WHITE.
+  // GREY and enemy RED block. Returns a direction index (0 up, 1 right,
+  // 2 down, 3 left) for the first step, or null when already there or
+  // unreachable.
+  if (sx === tx && sy === ty) return null;
+  const W = cfg.cols, H = cfg.rows;
+  const blocked = new Set();
+  for (const t of S.turrets) if (!t.dead) blocked.add(t.y * W + t.x);
+  const dist = new Int32Array(W * H).fill(-1);
+  const prev = new Int32Array(W * H).fill(-1);
+  const start = sy * W + sx, target = ty * W + tx;
+  const q = [start]; dist[start] = 0;
+  const dirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+  let head = 0;
+  while (head < q.length) {
+    const cur = q[head++];
+    if (cur === target) break;
+    const cx = cur % W, cy = Math.floor(cur / W);
+    for (let d = 0; d < 4; d++) {
+      const nx = cx + dirs[d][0], ny = cy + dirs[d][1];
+      if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+      const ni = ny * W + nx;
+      if (dist[ni] >= 0 || (blocked.has(ni) && ni !== start)) continue;
+      const st = S.cells[ni];
+      if (st !== EMPTY && st !== BLUE && st !== WHITE) continue;
+      dist[ni] = dist[cur] + 1; prev[ni] = cur; q.push(ni);
+    }
+  }
+  if (dist[target] < 0) return null;
+  let cur = target;
+  while (prev[cur] !== -1 && prev[cur] !== start) cur = prev[cur];
+  if (prev[cur] === -1) return null;
+  const fx = cur % W, fy = Math.floor(cur / W);
+  if (fx - sx === 1) return 1;
+  if (fx - sx === -1) return 3;
+  if (fy - sy === 1) return 2;
+  return 0;
+}
+function retargetDigger(t) {
+  if (!S || !S.cells) { t.flag = null; t.flagKind = null; return; }
+  const W = cfg.cols, H = cfg.rows;
+  const start = t.y * W + t.x;
+  const dirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+  const blocked = new Set();
+  for (const u of S.turrets) if (!u.dead) blocked.add(u.y * W + u.x);
+  // Open-reachable: EMPTY / own BLUE only, no rock. Caves in this set
+  // are already connected — no need to dig to them.
+  const open = new Uint8Array(W * H);
+  {
+    const q = [start]; open[start] = 1; let head = 0;
+    while (head < q.length) {
+      const cur = q[head++];
+      const cx = cur % W, cy = Math.floor(cur / W);
+      for (let d = 0; d < 4; d++) {
+        const nx = cx + dirs[d][0], ny = cy + dirs[d][1];
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+        const ni = ny * W + nx;
+        if (open[ni] || (blocked.has(ni) && ni !== start)) continue;
+        const st = S.cells[ni];
+        if (st !== EMPTY && st !== BLUE) continue;
+        open[ni] = 1; q.push(ni);
+      }
+    }
+  }
+  // Rock BFS distances: EMPTY / BLUE / WHITE, GREY + RED block.
+  const dist = new Int32Array(W * H).fill(-1);
+  {
+    const q = [start]; dist[start] = 0; let head = 0;
+    while (head < q.length) {
+      const cur = q[head++];
+      const cx = cur % W, cy = Math.floor(cur / W);
+      for (let d = 0; d < 4; d++) {
+        const nx = cx + dirs[d][0], ny = cy + dirs[d][1];
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+        const ni = ny * W + nx;
+        if (dist[ni] >= 0 || (blocked.has(ni) && ni !== start)) continue;
+        const st = S.cells[ni];
+        if (st !== EMPTY && st !== BLUE && st !== WHITE) continue;
+        dist[ni] = dist[cur] + 1; q.push(ni);
+      }
+    }
+  }
+  let best = null, bestD = Infinity, bestKind = null;
+  for (let i = 0; i < S.cells.length; i++) {
+    if (dist[i] < 0) continue;
+    const st = S.cells[i];
+    let kind = null;
+    if (st === WHITE && S.goldNug[i]) kind = 'gold';
+    else if (st === EMPTY && !open[i]) kind = 'cave';
+    else continue;
+    if (blocked.has(i)) continue; // never target an occupied cell
+    const d = dist[i];
+    if (d < bestD || (d === bestD && kind === 'cave' && bestKind === 'gold')) {
+      best = i; bestD = d; bestKind = kind;
+    }
+  }
+  if (best === null) { t.flag = null; t.flagKind = null; }
+  else { t.flag = { x: best % W, y: Math.floor(best / W) }; t.flagKind = bestKind; }
+}
+function flagValid(t) {
+  if (!t.flag) return false;
+  const i = t.flag.y * cfg.cols + t.flag.x;
+  if (t.flagKind === 'gold') {
+    if (S.cells[i] !== WHITE || !S.goldNug[i]) return false;
+  } else if (t.flagKind === 'cave') {
+    if (S.cells[i] !== EMPTY) return false;
+  } else return false;
+  const occ = turretAt(t.flag.x, t.flag.y);
+  if (occ && occ !== t) return false;
+  return true;
 }
 // Greedy direction from (cx, cy) toward the nearest blue turret: pick the
 // axis with the larger gap (dirs: 0 up, 1 right, 2 down, 3 left). This is
@@ -2372,12 +2502,15 @@ function update(dt) {
     } else if (t.type === 'lantern') {
       // Lanterns don't fire — they just hold back the fog.
     } else if (t.type === 'mole') {
-      // Digger: chews through rock in its direction, turns, dies after
-      // its lifetime (cells dug). Red turns toward the nearest blue turret
-      // (encroachment) and opens ground toward blue. Blue prefers the nearest
-      // gold nugget (70%) with random wander mixed in (30%) — purposeful
-      // but not a beeline, and it stops looping in circles. Grey and
-      // territory block both (they turn).
+      // Digger: chews through rock, dies after its lifetime (cells dug).
+      // Red turns toward the nearest blue turret (encroachment) and opens
+      // ground toward blue. Blue follows its flag every tick (BFS next
+      // step toward gold or an unreachable cave, nearest wins) — no
+      // random turn every 3 cells while it has a flag, so it doesn't
+      // veer off its tunnel. No flag (nothing left to reach) falls back
+      // to the old nugget-bias wander on turn events. Grey and enemy
+      // territory block both; a flagged digger waits instead of turning
+      // away (next tick's steering routes around), an unflagged one turns.
       const turn = () => {
         if (t.color === RED) {
           t.moleDir = moleDirToward(t.x, t.y);
@@ -2389,11 +2522,27 @@ function update(dt) {
       t.digT += dt;
       if (t.digT >= TURRET.mole.interval) {
         t.digT = 0;
+        if (t.color === BLUE) {
+          // Flag steering, every tick: retarget on arrival / staleness /
+          // unreachability, then head down the BFS path. No turn() here
+          // (that would jitter the direction every second when unflagged).
+          if (t.flag && t.x === t.flag.x && t.y === t.flag.y) retargetDigger(t);
+          if (!t.flag || !flagValid(t)) retargetDigger(t);
+          if (t.flag) {
+            let nd = diggerPathNext(t.x, t.y, t.flag.x, t.flag.y);
+            if (nd === null) {
+              retargetDigger(t);
+              if (t.flag) nd = diggerPathNext(t.x, t.y, t.flag.x, t.flag.y);
+            }
+            if (nd !== null) t.moleDir = nd;
+          }
+        }
+        const flagged = t.color === BLUE && !!t.flag;
         const dirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];
         const [dx, dy] = dirs[t.moleDir];
         const nx = t.x + dx, ny = t.y + dy;
         if (nx < 0 || ny < 0 || nx >= cfg.cols || ny >= cfg.rows) {
-          turn(); // edge: turn
+          if (!flagged) turn(); // flagged: wait, steering routes around next tick
         } else {
           const ni = ny * cfg.cols + nx;
           if (S.cells[ni] === WHITE) {
@@ -2411,7 +2560,7 @@ function update(dt) {
               t.x = nx; t.y = ny;
               t.dug++;
               if (t.dug >= t.lifetime) { t.dead = true; continue; }
-              if (t.dug % MOLE_TURN_EVERY === 0) turn();
+              if (!flagged && t.dug % MOLE_TURN_EVERY === 0) turn();
             }
           } else if (S.cells[ni] === EMPTY || S.cells[ni] === t.color) {
             // Open ground (a cave, or own team's territory): walk straight
@@ -2422,8 +2571,8 @@ function update(dt) {
             t.rx = t.x; t.ry = t.y; t.moveT = 0;
             t.x = nx; t.y = ny;
           } else {
-            // Not rock, not walkable (grey, enemy ground): turn.
-            turn();
+            // Not rock, not walkable (grey, enemy ground).
+            if (!flagged) turn();
           }
         }
       }
@@ -2978,6 +3127,20 @@ function render() {
     ctx.stroke();
     ctx.beginPath(); ctx.arc(px - r * 0.3, py - r * 0.3, r * 0.28, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fill(); // shine
+  }
+  // Digger flags: each blue digger's target cell gets a little flag
+  // (gold for gold, white for a cave) so you can see where it's headed.
+  // Drawn after the fog, like coins, so flags in unexplored ground shine through.
+  for (const t of S.turrets) {
+    if (t.dead || t.color !== BLUE || t.type !== 'mole' || !t.flag) continue;
+    const fx = (t.flag.x + 0.5) * CELL_PX, fy = (t.flag.y + 0.5) * CELL_PX;
+    ctx.strokeStyle = '#0b0e16';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(fx - 3, fy + 6); ctx.lineTo(fx - 3, fy - 6); ctx.stroke(); // pole
+    ctx.fillStyle = t.flagKind === 'gold' ? '#ffd75e' : '#ffffff';
+    ctx.beginPath();
+    ctx.moveTo(fx - 3, fy - 6); ctx.lineTo(fx + 5, fy - 3); ctx.lineTo(fx - 3, fy - 1);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
   }
   ctx.restore(); // ---- end world pass; screen pass below (chip, floaters) ----
   // Coin-counter chip, top-left: the zip target. Pops on collect.
