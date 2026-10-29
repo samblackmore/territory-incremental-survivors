@@ -40,10 +40,10 @@ const STAT_DEFS = {
     { key: 'proj', name: 'Projectiles', cap: 5, effect: '+1 projectile', shopOnly: true },
     { key: 'rate', name: 'Fire rate', cap: 8, effect: '+15% fire rate' },
     { key: 'crit', name: 'Crit', cap: 8, effect: '+5% crit' },
-    // Penetration: how deep a shot paints into flood (VS pass-through
-    // for painting). Base depth 1 (just the edge block); each level
-    // paints one more flood cell in the same shot's path.
-    { key: 'pen', name: 'Penetration', cap: 8, effect: '+1 paint depth' },
+    // Penetration: how many cells one shot pierces (VS pass-through).
+    // Base depth 1 (just the first cell); each level pierces one more
+    // cell in the same shot's path — rock it damages, or flood it paints.
+    { key: 'pen', name: 'Penetration', cap: 8, effect: '+1 pierce depth' },
   ],
   bloom: [
     { key: 'growth', name: 'Growth', cap: 8, effect: '+20% growth speed' },
@@ -70,7 +70,7 @@ function applyStat(w, weapon, st) {
     else if (st === 'proj') w.proj = n;
     else if (st === 'rate') w.rateMult = Math.pow(1.15, n);
     else if (st === 'crit') w.critChance = 0.05 * n;
-    else if (st === 'pen') w.penDepth = 1 + n; // paint depth: base 1 + 1 per level
+    else if (st === 'pen') w.penDepth = 1 + n; // penetration depth: base 1 + 1 per level (rock hits + flood paints)
   } else if (weapon === 'bloom') {
     if (st === 'growth') w.rateMult = Math.pow(1.2, n);
   }
@@ -1614,7 +1614,7 @@ function fireTurret(t) {
     color: t.color,
     dmg, crit,
     bounces: 0,
-    paintLeft: (w && w.penDepth) || 1, // painting depth: flood cells this shot can still flip
+    paintLeft: (w && w.penDepth) || 1, // penetration left: rock cells it can still damage + flood cells it can still flip
     dead: false,
   });
 }
@@ -1769,7 +1769,21 @@ function stepProjectile(p, dt) {
     const idx = cy * cfg.cols + cx;
     const cell = S.cells[idx];
     if (cell === WHITE || cell === GREY) {
+      // Same-cell re-hit guard: a piercing shot stays inside one rock
+      // cell for several sub-steps / frames; only the first sub-step in
+      // a new rock cell damages it, otherwise one shot would drain its
+      // whole penetration budget on a single cell.
+      if (p.lastRockIdx === idx) continue;
+      p.lastRockIdx = idx;
       const destroyed = damageBlock(idx, p.dmg || 1, p.color, p.x, p.y, p.vx, p.vy, p.crit);
+      // Penetration (shared budget with flood painting): each rock hit
+      // consumes 1 paintLeft. Budget left -> keep flying straight
+      // (pierce), whether the rock broke or just took damage. Budget
+      // spent -> the old bounce-then-die behavior (so base shots still
+      // bounce, flood shots behave as before, and destroyed cells never
+      // bounce, as before).
+      if (p.paintLeft === undefined) p.paintLeft = 1; // base depth for shots without it
+      p.paintLeft--;
       if (destroyed) {
         // Flood claim: a flood shot that breaks rock takes the cell
         // (the flood advances as it destroys). No HP: flood is just
@@ -1779,8 +1793,10 @@ function stepProjectile(p, dt) {
           S.hp[idx] = 0; S.maxhp[idx] = 0; S.harvT[idx] = 0;
           S.growN[idx] = 0; S.growBy[idx] = 0;
         }
+        if (p.paintLeft > 0 && !p.flood) continue; // broke through: keep flying (next cells pass through the new EMPTY)
         p.dead = true; return;
       }
+      if (p.paintLeft > 0) continue; // pierced (damaged, intact): keep flying, same-cell sub-steps skip via lastRockIdx
       // Pinball: a surviving block may bounce the shot back out (re-rolled per hit)
       if (p.bounces < BOUNCE_MAX && Math.random() < S.bounceChance) {
         p.bounces++;
@@ -1793,15 +1809,16 @@ function stepProjectile(p, dt) {
       p.dead = true;
       return;
     }
-    if (cell === EMPTY || cell === p.color) continue; // pass through open + own color
+    if (cell === EMPTY || cell === p.color) { p.lastRockIdx = -1; continue; } // left rock: a later re-entry hits again
     if (SURVIVAL && cell === RED && !p.flood) {
       // Player shot vs flood: PAINTS it (flips to player color,
       // instant, no HP). Penetration: the shot keeps flying, painting
-      // up to paintLeft flood cells in its path, then dies. Rock still
-      // stops it (digs, as before); empty/own-color pass through.
+      // up to paintLeft cells in its path (rock hits share this same
+      // budget), then dies. Empty/own-color pass through.
       // No damage number: it's a flip, not damage — just a paint burst
       // in the new color. Painted territory harvests like field-grown
       // territory (fresh harvT, no leftover flood growth).
+      p.lastRockIdx = -1;
       S.cells[idx] = p.color;
       S.growN[idx] = 0; S.growBy[idx] = 0; S.harvT[idx] = 0;
       S.hp[idx] = 0; S.maxhp[idx] = 0; // no HP on colored cells anymore
