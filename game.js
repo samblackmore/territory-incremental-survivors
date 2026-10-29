@@ -40,6 +40,10 @@ const STAT_DEFS = {
     { key: 'proj', name: 'Projectiles', cap: 5, effect: '+1 projectile', shopOnly: true },
     { key: 'rate', name: 'Fire rate', cap: 8, effect: '+15% fire rate' },
     { key: 'crit', name: 'Crit', cap: 8, effect: '+5% crit' },
+    // Penetration: how deep a shot paints into flood (VS pass-through
+    // for painting). Base depth 1 (just the edge block); each level
+    // paints one more flood cell in the same shot's path.
+    { key: 'pen', name: 'Penetration', cap: 8, effect: '+1 paint depth' },
   ],
   bloom: [
     { key: 'growth', name: 'Growth', cap: 8, effect: '+20% growth speed' },
@@ -66,6 +70,7 @@ function applyStat(w, weapon, st) {
     else if (st === 'proj') w.proj = n;
     else if (st === 'rate') w.rateMult = Math.pow(1.15, n);
     else if (st === 'crit') w.critChance = 0.05 * n;
+    else if (st === 'pen') w.penDepth = 1 + n; // paint depth: base 1 + 1 per level
   } else if (weapon === 'bloom') {
     if (st === 'growth') w.rateMult = Math.pow(1.2, n);
   }
@@ -243,8 +248,9 @@ function drawMinimap() {
       const c = S.cells[y * cols + x];
       if (c === BLUE) { mmctx.fillStyle = '#ef4444'; mmctx.fillRect(x * px, y * px, px, px); blue++; }
       else if (c === RED) {
-        // Survival: flood minimap pixel follows the HP gradient too.
-        mmctx.fillStyle = SURVIVAL ? floodColor(S.hp[y * cols + x], S.maxhp[y * cols + x]) : '#3b82f6';
+        // Flood minimap pixel: flat base blue (no HP gradient anymore;
+        // minimap is 2px/cell, elevation shading would be invisible).
+        mmctx.fillStyle = '#3b82f6';
         mmctx.fillRect(x * px, y * px, px, px); red++;
       }
     }
@@ -472,6 +478,8 @@ let TERRAIN = [];
 let CAVE_CSS = '#4caf50';
 let CAVE_RGB = [76, 175, 80];
 let CAVE_SHADES = [];
+let PLAYER_SHADES = []; // survival painterly: player territory (red on survival) in 8 elevation shades
+let FLOOD_SHADES = [];  // survival painterly: flood (blue on survival) in 8 elevation shades
 function rebuildColors() {
   const base = hexToRgb(inTerrain.value || '#6b543a');
   TERRAIN_LIGHT = base;
@@ -489,6 +497,20 @@ function rebuildColors() {
   for (let s = 0; s < 8; s++) {
     const t = s / 7;
     CAVE_SHADES[s] = [0, 1, 2].map(j => Math.round(CAVE_RGB[j] + (caveDark[j] - CAVE_RGB[j]) * t));
+  }
+  // Painterly territory shades: player and flood each get 8 elevation
+  // shades from their base color (darkened like caves). A cell keeps its
+  // S.shade index when it flips color, so grass → field/flood (or flood
+  // → field via painting) keeps the same elevation it had as grass,
+  // just in a new hue. No HP gradient, no production glow: uniform
+  // color per cell, shading only from elevation (not game state).
+  const playerDark = BLUE_RGB.map(v => Math.round(v * 0.55));
+  const floodDark = RED_RGB.map(v => Math.round(v * 0.55));
+  PLAYER_SHADES = []; FLOOD_SHADES = [];
+  for (let s = 0; s < 8; s++) {
+    const t = s / 7;
+    PLAYER_SHADES[s] = [0, 1, 2].map(j => Math.round(BLUE_RGB[j] + (playerDark[j] - BLUE_RGB[j]) * t));
+    FLOOD_SHADES[s] = [0, 1, 2].map(j => Math.round(RED_RGB[j] + (floodDark[j] - RED_RGB[j]) * t));
   }
 }
 const BLUE_RGB = [239, 68, 68]; // survival flip: player renders red
@@ -1227,9 +1249,6 @@ const FLOOD_SWEEP_EVERY = 0.12; // seconds between sweeping-cannon shots
 const FLOOD_SWEEP_RATE = Math.PI / 2; // rad/s the sweep rotates (90 deg/s)
 const FLOOD_RING_EVERY = 1.2; // seconds between radial ring bursts
 const FLOOD_RING_DIRS = 24;   // directions per ring (before culling)
-const FLOOD_START_HP = 1;     // fresh flood: light, weak, 1 hit to reclaim
-const FLOOD_MAX_HP = 10;      // mature flood: dark, strong (like the toughest brown rock)
-const FLOOD_HP_EVERY = 5;     // seconds per +1 HP (harvT is the growth clock for flood)
 const FLOOD_SPREAD_EVERY = 2; // seconds between gradual-spread ticks
 const FLOOD_SPREAD_CHANCE = 0.1; // per flood cell per spread tick: grow one adjacent EMPTY cell
 const FLOOD_DIRS = ['north', 'south', 'west', 'east']; // edge the flood comes FROM
@@ -1253,18 +1272,6 @@ function floodInit(seed) {
               sweep: 0, ringT: 0, sweepT: 0, storms: 0, spreadT: FLOOD_SPREAD_EVERY };
   floodPickDir(f, mulberry32(seed + 99991));
   return f;
-}
-// Flood HP gradient: pale (weak, HP 1) -> dark navy (strong, HP max).
-// This REPLACES the harvest glow for flood (no lightening like bloom).
-const FLOOD_LIGHT = [191, 219, 254]; // #bfdbfe
-const FLOOD_DARK = [30, 64, 175];    // #1e40af
-function floodColor(hp, maxhp) {
-  if (!maxhp) return 'rgb(59,130,246)'; // unset cell: base flood blue
-  const t = maxhp > 1 ? Math.max(0, Math.min(1, (hp - 1) / (maxhp - 1))) : 1;
-  const r = Math.round(FLOOD_LIGHT[0] + (FLOOD_DARK[0] - FLOOD_LIGHT[0]) * t);
-  const g = Math.round(FLOOD_LIGHT[1] + (FLOOD_DARK[1] - FLOOD_LIGHT[1]) * t);
-  const b = Math.round(FLOOD_LIGHT[2] + (FLOOD_DARK[2] - FLOOD_LIGHT[2]) * t);
-  return `rgb(${r},${g},${b})`;
 }
 // Gradual, bloom-like spread: each flood cell has a chance to grow one
 // increment on a random adjacent EMPTY cell (8-dir); 4 increments
@@ -1291,7 +1298,7 @@ function floodSpread() {
       S.growT[ni] = S.time;
       if (S.growN[ni] >= GROW_STEPS) {
         S.cells[ni] = RED;
-        S.hp[ni] = FLOOD_START_HP; S.maxhp[ni] = FLOOD_MAX_HP; S.harvT[ni] = 0;
+        S.hp[ni] = 0; S.maxhp[ni] = 0; S.harvT[ni] = 0; // no HP on flood
         S.growN[ni] = 0; S.growBy[ni] = 0;
         spawnBurst(nx + 0.5, ny + 0.5, CELL_COLORS[RED]);
         S.rings.push({ x: nx + 0.5, y: ny + 0.5, t: 0, css: CELL_COLORS[RED], dead: false });
@@ -1428,6 +1435,7 @@ function fireTurret(t) {
     color: t.color,
     dmg, crit,
     bounces: 0,
+    paintLeft: (w && w.penDepth) || 1, // painting depth: flood cells this shot can still flip
     dead: false,
   });
 }
@@ -1464,20 +1472,22 @@ function weakestBlock(t) {
 }
 function fireLaser(t) {
   if (SURVIVAL) {
-    // Anti-flood only: zap the weakest VISIBLE flood cell (line of
+    // Anti-flood only: paint the nearest VISIBLE flood cell (line of
     // sight = fog cleared). If no flood is in sight, do nothing —
     // the laser sits idle, which is the drama: it activates the
     // moment flood finally approaches. Never zaps rock on survival.
+    // Painting (flip to player color), not HP damage: flood has no
+    // HP anymore, so the laser paints like the cannon, just with a
+    // beam to one precise cell instead of a penetrating line.
     const tgt = weakestFlood(t);
     if (!tgt) return;
     S.beams.push({ x1: (t.x + 0.5) * CELL_PX, y1: (t.y + 0.5) * CELL_PX,
                    x2: (tgt.x + 0.5) * CELL_PX, y2: (tgt.y + 0.5) * CELL_PX, t: 0 });
-    const dmg = TURRET.laser.dmg + S.dmgBonus + weaponDmgBonus(t);
     const i = tgt.i;
-    S.hp[i] = Math.max(0, S.hp[i] - dmg);
-    spawnBurst(tgt.x + 0.5, tgt.y + 0.5, CELL_COLORS[RED]);
-    spawnChip(tgt.x + 0.5, tgt.y + 0.5, CELL_COLORS[RED], tgt.x - t.x, tgt.y - t.y);
-    if (S.hp[i] <= 0) { S.cells[i] = EMPTY; S.growN[i] = 0; S.growBy[i] = 0; }
+    S.cells[i] = t.color;
+    S.growN[i] = 0; S.growBy[i] = 0; S.harvT[i] = 0;
+    S.hp[i] = 0; S.maxhp[i] = 0;
+    spawnBurst(tgt.x + 0.5, tgt.y + 0.5, CELL_COLORS[t.color]);
     return;
   }
   const tgt = weakestBlock(t);
@@ -1491,14 +1501,16 @@ function fireLaser(t) {
 // fog cleared (line of sight), lowest HP first, nearest on ties —
 // same shape as weakestBlock, but flood-only, never rock.
 function weakestFlood(t) {
-  let bx = -1, by = -1, bi = -1, bestHp = Infinity, bd = Infinity;
+  // Nearest VISIBLE flood cell (survival Laser target): flood (RED)
+  // with line of sight (fog cleared). No HP anymore, so nearest wins
+  // (not weakest — all flood paints the same).
+  let bx = -1, by = -1, bi = -1, bd = Infinity;
   for (let y = 0; y < cfg.rows; y++) {
     for (let x = 0; x < cfg.cols; x++) {
       const i = y * cfg.cols + x;
       if (S.cells[i] !== RED || S.fog[i] !== 0) continue; // needs line of sight to flood
-      const hp = S.hp[i];
       const d = (x - t.x) * (x - t.x) + (y - t.y) * (y - t.y);
-      if (hp < bestHp || (hp === bestHp && d < bd)) { bestHp = hp; bd = d; bx = x; by = y; bi = i; }
+      if (d < bd) { bd = d; bx = x; by = y; bi = i; }
     }
   }
   return bi < 0 ? null : { x: bx, y: by, i: bi };
@@ -1581,12 +1593,11 @@ function stepProjectile(p, dt) {
       const destroyed = damageBlock(idx, p.dmg || 1, p.color, p.x, p.y, p.vx, p.vy, p.crit);
       if (destroyed) {
         // Flood claim: a flood shot that breaks rock takes the cell
-        // (the flood advances as it destroys), fresh and weak (HP 1) —
-        // it hardens over time (see harvest: HP growth), so the source
-        // ends up darker/stronger than the edges.
+        // (the flood advances as it destroys). No HP: flood is just
+        // a uniform color to paint, not a rock to chip.
         if (p.flood) {
           S.cells[idx] = p.color;
-          S.hp[idx] = FLOOD_START_HP; S.maxhp[idx] = FLOOD_MAX_HP; S.harvT[idx] = 0;
+          S.hp[idx] = 0; S.maxhp[idx] = 0; S.harvT[idx] = 0;
           S.growN[idx] = 0; S.growBy[idx] = 0;
         }
         p.dead = true; return;
@@ -1605,21 +1616,28 @@ function stepProjectile(p, dt) {
     }
     if (cell === EMPTY || cell === p.color) continue; // pass through open + own color
     if (SURVIVAL && cell === RED && !p.flood) {
-      // Player shot vs flood: flood territory has HP (darker = stronger).
-      // Chip it; reclaim (to EMPTY) only when HP hits 0. The cell
-      // lightens as HP drops, so your shots visibly wear it down.
-      S.hp[idx] = Math.max(0, S.hp[idx] - (p.dmg || 1));
-      spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[cell]);
-      spawnChip(cx + 0.5, cy + 0.5, CELL_COLORS[cell], p.vx, p.vy);
-      if (S.hp[idx] <= 0) { S.cells[idx] = EMPTY; S.growN[idx] = 0; S.growBy[idx] = 0; }
-      p.dead = true; return;
+      // Player shot vs flood: PAINTS it (flips to player color,
+      // instant, no HP). Penetration: the shot keeps flying, painting
+      // up to paintLeft flood cells in its path, then dies. Rock still
+      // stops it (digs, as before); empty/own-color pass through.
+      // No damage number: it's a flip, not damage — just a paint burst
+      // in the new color. Painted territory harvests like field-grown
+      // territory (fresh harvT, no leftover flood growth).
+      S.cells[idx] = p.color;
+      S.growN[idx] = 0; S.growBy[idx] = 0; S.harvT[idx] = 0;
+      S.hp[idx] = 0; S.maxhp[idx] = 0; // no HP on colored cells anymore
+      spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[p.color]);
+      if (p.paintLeft === undefined) p.paintLeft = 1; // base depth for shots without it
+      p.paintLeft--;
+      if (p.paintLeft <= 0) { p.dead = true; return; }
+      continue; // still painting: keep flying to the next cell
     }
     // Enemy territory: normally bombed back to empty. A flood shot
-    // claims it instead (the flood takes over what it washes over),
-    // fresh and weak (HP 1).
+    // claims it instead (the flood takes over what it washes over).
+    // No HP on the claim: flood is paintable color, not chippable rock.
     if (p.flood) {
       S.cells[idx] = p.color;
-      S.hp[idx] = FLOOD_START_HP; S.maxhp[idx] = FLOOD_MAX_HP; S.harvT[idx] = 0;
+      S.hp[idx] = 0; S.maxhp[idx] = 0; S.harvT[idx] = 0;
     } else {
       S.cells[idx] = EMPTY;
     }
@@ -1721,7 +1739,7 @@ function checkLevel() {
 const CARD_POOL = [
   { kind: 'turret', type: 'cannon', title: 'Cannon', icon: ICONS.cannon, sub: 'Sweeps shots in an arc, blasting rock.' },
   { kind: 'turret', type: 'rocket', title: 'Rocket', icon: ICONS.rocket, sub: 'Fires homing missiles that crash and splash-dig.' },
-  { kind: 'turret', type: 'laser', title: 'Laser', icon: ICONS.laser, sub: 'Waits for flood, then zaps it.' },
+  { kind: 'turret', type: 'laser', title: 'Laser', icon: ICONS.laser, sub: 'Waits for flood, then paints it.' },
   { kind: 'turret', type: 'bloom', title: 'Field', icon: ICONS.bloom, sub: 'Grows territory that harvests gold coins.' },
   { kind: 'turret', type: 'lantern', title: 'Lantern', icon: ICONS.lantern, sub: 'Pushes back the fog of war.' },
   { kind: 'turret', type: 'gather', title: 'Harvester', icon: ICONS.gather, sub: 'Collects pickups anywhere, slowly.' },
@@ -2439,18 +2457,8 @@ function update(dt) {
   // Otherwise the glow just resets: a surprise, not a salary.
   for (let i = 0; i < S.cells.length; i++) {
     if (S.cells[i] !== BLUE && S.cells[i] !== RED) continue;
+    if (S.cells[i] === RED && SURVIVAL) continue; // Flood: no harvest, no HP — just a uniform color to paint (harvT stays 0).
     S.harvT[i] += dt;
-    if (S.cells[i] === RED && SURVIVAL) {
-      // Flood HP growth (NOT harvest): harvT is the growth clock.
-      // Flood never produces XP/gold and never glows like bloom —
-      // instead it hardens over time, so old flood (near the source)
-      // is darker/stronger than fresh flood (at the edges).
-      if (S.harvT[i] >= FLOOD_HP_EVERY) {
-        S.harvT[i] = 0;
-        if (S.hp[i] < S.maxhp[i]) S.hp[i]++;
-      }
-      continue;
-    }
     if (S.harvT[i] >= HARVEST_EVERY) {
       S.harvT[i] = 0;
       const cx = i % cfg.cols, cy = (i / cfg.cols) | 0;
@@ -2638,20 +2646,32 @@ function render() {
       const i = y * w + x;
       const st = S.cells[i];
       if (st === BLUE) {
-        // Harvest glow: lightens toward white as the next pickup approaches.
-        const k = Math.min(1, S.harvT[i] / HARVEST_EVERY) * 0.45;
-        const r = Math.round(BLUE_RGB[0] + (255 - BLUE_RGB[0]) * k);
-        const g = Math.round(BLUE_RGB[1] + (255 - BLUE_RGB[1]) * k);
-        const b = Math.round(BLUE_RGB[2] + (255 - BLUE_RGB[2]) * k);
-        ctx.fillStyle = `rgb(${r},${g},${b})`;
+        if (SURVIVAL) {
+          // Painterly field: uniform player color in the cell's
+          // elevation shade (same S.shade it had as grass). No
+          // production glow: with dozens of field cells, per-cell
+          // production timers are just a flashing checkerboard.
+          const sh = PLAYER_SHADES[S.shade[i] || 0];
+          ctx.fillStyle = `rgb(${sh[0]},${sh[1]},${sh[2]})`;
+        } else {
+          // Main (frozen): harvest glow lightens toward white as the next pickup approaches.
+          const k = Math.min(1, S.harvT[i] / HARVEST_EVERY) * 0.45;
+          const r = Math.round(BLUE_RGB[0] + (255 - BLUE_RGB[0]) * k);
+          const g = Math.round(BLUE_RGB[1] + (255 - BLUE_RGB[1]) * k);
+          const b = Math.round(BLUE_RGB[2] + (255 - BLUE_RGB[2]) * k);
+          ctx.fillStyle = `rgb(${r},${g},${b})`;
+        }
         ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX);
       }
       else if (st === RED) {
         if (SURVIVAL) {
-          // Flood HP gradient (no harvest glow): darker = stronger.
-          ctx.fillStyle = floodColor(S.hp[i], S.maxhp[i]);
+          // Painterly flood: uniform flood color in the cell's
+          // elevation shade. No HP gradient: flood has no HP anymore,
+          // it's just flippable color (paint it, don't chip it).
+          const sh = FLOOD_SHADES[S.shade[i] || 0];
+          ctx.fillStyle = `rgb(${sh[0]},${sh[1]},${sh[2]})`;
         } else {
-          // Same glow for red (its fields feed the enemy bank, same rules).
+          // Main (frozen): same glow for red (its fields feed the enemy bank, same rules).
           const k = Math.min(1, S.harvT[i] / HARVEST_EVERY) * 0.45;
           const r = Math.round(RED_RGB[0] + (255 - RED_RGB[0]) * k);
           const g = Math.round(RED_RGB[1] + (255 - RED_RGB[1]) * k);
@@ -2959,7 +2979,7 @@ function render() {
   // A stat with no picks yet (level 0) hides its row entirely — the
   // corner only shows stats you've actually invested in, and a stat
   // card shows New! on its first pick (see offerCards).
-  const STAT_LABEL = { dmg: 'DAMG', proj: 'PROJ', rate: 'RATE', crit: 'CRIT', growth: 'GROW', count: 'CNTS', dig: 'DIGS' };
+  const STAT_LABEL = { dmg: 'DAMG', proj: 'PROJ', rate: 'RATE', crit: 'CRIT', pen: 'PENE', growth: 'GROW', count: 'CNTS', dig: 'DIGS' };
   for (const type of ['cannon', 'bloom', 'gather', 'mole']) {
     const w = S.weapons[type];
     if (!w || !w.stats) continue;
