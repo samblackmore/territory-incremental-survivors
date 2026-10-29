@@ -252,6 +252,11 @@
   .startgold { color: var(--text); margin-bottom: 16px; font-size: 18px; }
   .startgold b { color: #ffd75e; }
   #buildver { color: #5b6478; font-size: 12px; margin-top: 14px; letter-spacing: 0.08em; }
+  #teamrow { display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 14px; color: var(--text); font-size: 14px; }
+  #teamrow button { padding: 6px 14px; font-size: 14px; border-radius: 8px; border: 2px solid #3a4666; background: #1a2138; color: var(--text); cursor: pointer; }
+  #teamrow button.selected { border-color: #ffd75e; background: #27314d; color: #ffd75e; }
+  #team-red.selected { border-color: #ef4444; color: #ef4444; }
+  #team-blue.selected { border-color: #3b82f6; color: #3b82f6; }
   #weaponlist { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 18px; }
   .weapon {
     display: flex; align-items: center; gap: 10px;
@@ -504,6 +509,7 @@
     <h2>Territory</h2>
     <!-- Shop grid lives here when dormant renderShop() is restored. -->
     <div id="weaponlist"></div>
+    <div id="teamrow"><span>Team color</span><button id="team-red">Red</button><button id="team-blue">Blue</button></div>
     <button id="startbtn">Start Run</button>
     <div id="buildver"></div>
   </div>
@@ -547,6 +553,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=98"></script>
+<script src="game.js?v=99"></script>
 </body>
 </html>

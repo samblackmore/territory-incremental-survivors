@@ -105,7 +105,9 @@ function redMoleCost() {
   return UNIT_COST.mole + UNIT_COST_STEP * count;
 }
 // Shared icons (inline SVG) for cards — matching the canvas badge shapes.
-const ICONS = {
+// Player icons use '#ef4444' here (the original); buildIcons() swaps that
+// hex for the current team color, so the shop cards follow a toggle.
+const ICONS_ORIG = {
   cannon: '<svg viewBox="0 0 24 24" width="36" height="36"><polygon points="20,6 8,18 20,18" fill="#ef4444"/></svg>',
   rocket: '<svg viewBox="0 0 24 24" width="36" height="36"><polygon points="20,12 12,8 12,16" fill="#ef4444"/><rect x="6" y="9.5" width="7" height="5" fill="#ef4444"/></svg>',
   laser: '<svg viewBox="0 0 24 24" width="36" height="36"><polygon points="12,5 17,12 12,19 7,12" fill="#ef4444"/></svg>',
@@ -118,6 +120,12 @@ const ICONS = {
   mole: '<svg viewBox="0 0 24 24" width="36" height="36"><ellipse cx="12" cy="14" rx="7" ry="5" fill="#8b5a2b"/><circle cx="9" cy="12" r="1.2" fill="#1a2138"/><circle cx="15" cy="12" r="1.2" fill="#1a2138"/><polygon points="12,16 10,19 14,19" fill="#d4a574"/></svg>',
   gold: '<svg viewBox="0 0 24 24" width="36" height="36"><path d="M12 9 C8 9 5.5 12 5.5 15.5 C5.5 19 8.5 21.5 12 21.5 C15.5 21.5 18.5 19 18.5 15.5 C18.5 12 16 9 12 9 Z" fill="#f5b301" stroke="#b8860b" stroke-width="1.5"/><rect x="10.5" y="3.5" width="3" height="5.5" rx="1" fill="#b8860b"/></svg>',
 };
+function buildIcons(playerHex) {
+  const o = {};
+  for (const k in ICONS_ORIG) o[k] = ICONS_ORIG[k].replaceAll('#ef4444', playerHex);
+  return o;
+}
+let ICONS = buildIcons('#ef4444');
 const TURRET = {
   cannon: { name: 'Cannon', hp: 8, interval: 1.0, dmg: 1 },
   rocket: { name: 'Rocket', hp: 6, interval: 2.5, dmg: 3 },
@@ -246,11 +254,11 @@ function drawMinimap() {
   for (let y = 0; y < rows; y++) {
     for (let x = 0; x < cols; x++) {
       const c = S.cells[y * cols + x];
-      if (c === BLUE) { mmctx.fillStyle = '#ef4444'; mmctx.fillRect(x * px, y * px, px, px); blue++; }
+      if (c === BLUE) { mmctx.fillStyle = CELL_COLORS[BLUE]; mmctx.fillRect(x * px, y * px, px, px); blue++; }
       else if (c === RED) {
-        // Flood minimap pixel: flat base blue (no HP gradient anymore;
+        // Flood minimap pixel: flat base color (no HP gradient anymore;
         // minimap is 2px/cell, elevation shading would be invisible).
-        mmctx.fillStyle = '#3b82f6';
+        mmctx.fillStyle = CELL_COLORS[RED];
         mmctx.fillRect(x * px, y * px, px, px); red++;
       }
     }
@@ -260,7 +268,7 @@ function drawMinimap() {
   // (Units sit on EMPTY cells, never on territory, so they always show.)
   for (const t of S.turrets) {
     if (t.dead) continue;
-    mmctx.fillStyle = t.color === BLUE ? '#ef4444' : '#3b82f6';
+    mmctx.fillStyle = CELL_COLORS[t.color];
     mmctx.fillRect(t.x * px, t.y * px, px, px);
   }
   // Incoming-storm warning (survival, early lull only): a gently
@@ -279,13 +287,12 @@ function drawMinimap() {
     else mmctx.fillRect(W - T, 0, T, H); // from right
   }
   const total = cols * rows;
-  // Dots match the RENDERED colors, not the internal team ids. On main,
-  // player renders blue and enemy red, so blue% = player. On survival
-  // the palette flips (player renders red, flood blue), so the values
-  // swap — otherwise the blue dot shows the red pixels' share and
-  // vice versa, which reads as backwards.
-  if (mmBlue) mmBlue.textContent = Math.round((SURVIVAL ? red : blue) / total * 100) + '%';
-  if (mmRed) mmRed.textContent = Math.round((SURVIVAL ? blue : red) / total * 100) + '%';
+  // Dots match the RENDERED colors, not the internal team ids. When the
+  // player renders blue (unflipped), blue% = player. When the player
+  // renders red (flipped), the values swap — otherwise the blue dot
+  // shows the red pixels' share and vice versa, which reads backwards.
+  if (mmBlue) mmBlue.textContent = Math.round((PLAYER_RED ? red : blue) / total * 100) + '%';
+  if (mmRed) mmRed.textContent = Math.round((PLAYER_RED ? blue : red) / total * 100) + '%';
 }
 // Celebration particles pouring down from the XP bar while cards show.
 const lvParticles = [];
@@ -513,8 +520,31 @@ function rebuildColors() {
     FLOOD_SHADES[s] = [0, 1, 2].map(j => Math.round(RED_RGB[j] + (floodDark[j] - RED_RGB[j]) * t));
   }
 }
-const BLUE_RGB = [239, 68, 68]; // survival flip: player renders red
-const RED_RGB = [59, 130, 246]; // survival flip: flood renders blue
+let BLUE_RGB = [239, 68, 68]; // player render color (set by applyTeamColors; default = branch look)
+let RED_RGB = [59, 130, 246]; // enemy render color (set by applyTeamColors; default = branch look)
+// Team colors (switchable, start screen): internal BLUE is always the
+// player, internal RED always the enemy — only the RENDER hues swap.
+// PLAYER_RED true = player red / enemy blue (current survival look);
+// false = player blue / enemy red (original main look). Stored in
+// localStorage ('tis_team'); with no stored preference, defaults to
+// the branch look (survival red, main blue) so nothing changes until
+// the player toggles. A global preference (applies to both branches).
+const TEAM_RED_HEX = '#ef4444', TEAM_BLUE_HEX = '#3b82f6';
+const TEAM_RED_RGB = [239, 68, 68], TEAM_BLUE_RGB = [59, 130, 246];
+let PLAYER_RED = true; // set by applyTeamColors at boot (before first run)
+function applyTeamColors() {
+  let stored = null;
+  try { stored = localStorage.getItem('tis_team'); } catch (e) { /* ignore */ }
+  PLAYER_RED = stored === 'red' ? true : stored === 'blue' ? false : SURVIVAL;
+  const playerHex = PLAYER_RED ? TEAM_RED_HEX : TEAM_BLUE_HEX;
+  const enemyHex = PLAYER_RED ? TEAM_BLUE_HEX : TEAM_RED_HEX;
+  BLUE_RGB = (PLAYER_RED ? TEAM_RED_RGB : TEAM_BLUE_RGB).slice();
+  RED_RGB = (PLAYER_RED ? TEAM_BLUE_RGB : TEAM_RED_RGB).slice();
+  CELL_COLORS[BLUE] = playerHex; CELL_COLORS[RED] = enemyHex;
+  ICONS = buildIcons(playerHex);
+  CARD_POOL = buildCardPool();
+  rebuildColors(); // refreshes PLAYER_SHADES/FLOOD_SHADES from the new RGBs
+}
 // Grey rock: the mid-map hard rock. Same Perlin gradient as brown, ~10x the
 // HP (30–100), in cellular-automata chunks. Fixed grey shades (light = soft,
 // charcoal = tough) — no debug picker, grey should always read as grey.
@@ -1730,7 +1760,7 @@ function checkLevel() {
 // draws from stat cards (one per weapon stat), Bag of Gold, and passives.
 // `needs` gates an upgrade on owning a turret it actually affects — no
 // steering card before you've got a rocket.
-const CARD_POOL = [
+function buildCardPool() { return [
   { kind: 'turret', type: 'cannon', title: 'Cannon', icon: ICONS.cannon, sub: 'Sweeps shots in an arc, blasting rock.' },
   { kind: 'turret', type: 'rocket', title: 'Rocket', icon: ICONS.rocket, sub: 'Fires homing missiles that crash and splash-dig.' },
   { kind: 'turret', type: 'laser', title: 'Laser', icon: ICONS.laser, sub: 'Waits for flood, then paints it.' },
@@ -1753,7 +1783,8 @@ const CARD_POOL = [
   { kind: 'gold', title: 'Bag of Gold', icon: ICONS.gold },
   { kind: 'passive', passive: 'bounce', title: 'Bounce', icon: ICONS.bounce, sub: 'Shots ricochet off rock.', needs: ['cannon'] },
   { kind: 'steer', mult: 1.3, title: '+30%', icon: ICONS.steer, sub: 'Missile steering', needs: ['rocket'] },
-];
+]; }
+let CARD_POOL = buildCardPool();
 function hasTurretTypes(types) {
   for (const t of S.turrets) {
     if (t.dead || t.color !== BLUE) continue;
@@ -3263,6 +3294,29 @@ function renderStartScreen() {
   // (diagnostic: confirms which build is actually loaded).
   const bv = document.getElementById('buildver');
   if (bv) bv.textContent = 'build v' + BUILD + (SURVIVAL ? ' · Survival prototype' : '');
+  renderTeamToggle();
+}
+function renderTeamToggle() {
+  // Start-screen team picker: highlights the current choice (PLAYER_RED
+  // set by applyTeamColors). Buttons persist the pick + reapply colors
+  // immediately, so the upcoming run uses the new hues (no reload).
+  const r = document.getElementById('team-red'), b = document.getElementById('team-blue');
+  if (r) r.classList.toggle('selected', PLAYER_RED === true);
+  if (b) b.classList.toggle('selected', PLAYER_RED === false);
+  if (r && !r.dataset.bound) {
+    r.dataset.bound = '1';
+    r.addEventListener('click', () => {
+      try { localStorage.setItem('tis_team', 'red'); } catch (e) { /* ignore */ }
+      applyTeamColors(); renderTeamToggle();
+    });
+  }
+  if (b && !b.dataset.bound) {
+    b.dataset.bound = '1';
+    b.addEventListener('click', () => {
+      try { localStorage.setItem('tis_team', 'blue'); } catch (e) { /* ignore */ }
+      applyTeamColors(); renderTeamToggle();
+    });
+  }
 }
 // ---- Shop (DORMANT — not called). Restore when other starter weapons
 // arrive: it renders the unlock grid into #weaponlist, spending meta gold.
@@ -3346,6 +3400,7 @@ document.getElementById('startbtn').addEventListener('click', () => {
 
 applyUrlParams();
 loadMeta();
+applyTeamColors(); // before first run: stored preference, else branch look (survival red, main blue)
 newGame();
 S.paused = true; // behind the start screen until the player picks a starter
 renderStartScreen();
