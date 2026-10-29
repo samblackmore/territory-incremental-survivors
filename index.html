@@ -358,14 +358,15 @@
     display: inline-block; width: 11px; height: 11px; border-radius: 50%;
     background: #f5b301; border: 1.5px solid #b8860b; margin-left: 4px; vertical-align: -1px;
   }
-  /* Shop grid: 3 columns (full shop on survival = 6 items in 2 rows;
-     main's 2 drawn cards sit in the first row). Gold-bordered cards
-     below the XP row. Price sits top-right of each card; your gold
-     total sits under the Shop title so you can compare at a glance.
-     Unaffordable cards stay visible (so you can see what to save for)
-     but dimmed and untappable. */
+  /* Shop row: flex (not grid) so an incomplete row centers instead of
+     hugging the left column. Width is exactly 3 cards + 2 gaps (354px)
+     so full rows still break at 3 per row; a 1- or 2-card row centers
+     inside that width (which is itself centered). Unaffordable cards
+     stay visible (so you can see what to save for) but dimmed and
+     untappable. Price sits top-right of each card; your gold total
+     sits under the Shop title so you can compare at a glance. */
   #shoprow {
-    display: grid; grid-template-columns: repeat(3, 110px);
+    display: flex; flex-wrap: wrap; width: 354px; margin: 0 auto;
     gap: 12px; justify-content: center;
   }
   .shoplabel {
