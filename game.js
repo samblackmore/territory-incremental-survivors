@@ -1932,6 +1932,13 @@ function checkLevel() {
 // draws from stat cards (one per weapon stat), Bag of Gold, and passives.
 // `needs` gates an upgrade on owning a turret it actually affects — no
 // steering card before you've got a rocket.
+// NOTE (v105, temporary): Bounce is OUT of the pool while Penetration
+// is evaluated alone — the two interact weirdly (a piercing shot's
+// final hit can still bounce), so Bounce is removed from selection to
+// feel Penetration clean. Physics, the passive click handler, the debug
+// knob, and S.passives all remain intact; restore by uncommenting the
+// Bounce line below. If Penetration wins against flood, this removal
+// becomes permanent (then delete the line + handler + physics).
 function buildCardPool() { return [
   { kind: 'turret', type: 'cannon', title: 'Cannon', icon: ICONS.cannon, sub: 'Sweeps shots in an arc, blasting rock.' },
   { kind: 'turret', type: 'rocket', title: 'Rocket', icon: ICONS.rocket, sub: 'Fires homing missiles that crash and splash-dig.' },
@@ -1953,7 +1960,8 @@ function buildCardPool() { return [
   // run gold — the bridge to a shop unit you can see but can't afford yet.
   // Amount rolls at deal time (3–5): you see what you get before picking.
   { kind: 'gold', title: 'Bag of Gold', icon: ICONS.gold },
-  { kind: 'passive', passive: 'bounce', title: 'Bounce', icon: ICONS.bounce, sub: 'Shots ricochet off rock.', needs: ['cannon'] },
+  // Bounce TEMPORARILY REMOVED from selection (v105, see note above):
+  // { kind: 'passive', passive: 'bounce', title: 'Bounce', icon: ICONS.bounce, sub: 'Shots ricochet off rock.', needs: ['cannon'] },
   { kind: 'steer', mult: 1.3, title: '+30%', icon: ICONS.steer, sub: 'Missile steering', needs: ['rocket'] },
 ]; }
 let CARD_POOL = buildCardPool();
