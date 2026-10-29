@@ -3216,12 +3216,12 @@ canvas.addEventListener('wheel', (e) => {
   zoomAt(e.clientX, e.clientY, cam.zoom * Math.exp(-e.deltaY * 0.0015));
 }, { passive: false });
 
-// ---- Mobile: collapsible debug panel (button only visible under 720px) ----
+// ---- Collapsible debug panel (starts hidden; <> toggles it) ----
 const debugToggle = document.getElementById('debug-toggle');
 const debugPanel = document.getElementById('debug');
 if (debugToggle && debugPanel) {
   debugToggle.addEventListener('click', () => debugPanel.classList.toggle('collapsed'));
-  if (window.innerWidth < 720) debugPanel.classList.add('collapsed'); // start tucked away on phones
+  debugPanel.classList.add('collapsed'); // start hidden by default on all screens (tap <> to open)
 }
 
 // ---- Fullscreen: hide the browser UI ----
