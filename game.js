@@ -694,12 +694,29 @@ function readDebug() {
 // in level-up drafts.
 const UNLOCK_COST = { gather: 10, mole: 20, bloom: 40 }; // cannon is free
 // Temporarily removed: rocket (20), laser (30), lantern (10) — focus is cannon/mole/bloom/gather.
-const meta = { gold: 0, unlocks: { cannon: true, gather: false, mole: false, bloom: false } };
+const meta = { gold: 0, unlocks: { cannon: true, gather: false, mole: false, bloom: false },
+  // Perma upgrades (outside runs, start screen): cannon Damage + Fire
+  // Rate, 4 levels each (circles). A perma level is a new BASE: the run
+  // starts at that level, and in-run picks stack on top (same track,
+  // same cap 8 total). No cost yet (unlock/cost design TBD).
+  perma: { dmg: 0, rate: 0 },
+  // Start-screen shop toggles: which placements appear in the in-run
+  // shop. Missing = enabled (all on by default, so runs are unchanged
+  // until the player toggles). Explicit false = excluded from the run.
+  // (Separate from unlocks: unlocks are future progression gating;
+  // toggles are player choice for this run. End-of-run unlocking TBD.)
+  enabled: {} };
 function loadMeta() {
   try {
     const m = JSON.parse(localStorage.getItem('tis_meta'));
     if (m && typeof m.gold === 'number') meta.gold = m.gold;
     if (m && m.unlocks) for (const k of Object.keys(meta.unlocks)) meta.unlocks[k] = !!m.unlocks[k];
+    if (m && m.perma) {
+      meta.perma.dmg = Math.max(0, Math.min(4, m.perma.dmg | 0));
+      meta.perma.rate = Math.max(0, Math.min(4, m.perma.rate | 0));
+    }
+    if (m && m.enabled) for (const t of ['cannon', 'mole', 'bloom', 'gather', 'lantern', 'wall', 'laser'])
+      if (typeof m.enabled[t] === 'boolean') meta.enabled[t] = m.enabled[t];
   } catch (e) { /* fresh save */ }
 }
 function saveMeta() {
@@ -1036,6 +1053,14 @@ function newGame() {
   // The starter is always Cannon; the shop only gates mid-run drafts.
   S.turrets.push(mkTurret(pc.x, pc.y, BLUE, 'cannon'));
   S.weapons.cannon = { stats: initWeaponStats('cannon'), rateMult: 1, dmgBonus: 0, critChance: 0, proj: 0, evo: false };
+  // Perma base: cannon starts at the perma levels (not 0), and in-run
+  // picks stack on top (same track, same cap 8 total). Starter is always
+  // placed even if cannon is toggled off on the start screen — the toggle
+  // only stops the shop offering cannon duplicates, it never removes the starter.
+  S.weapons.cannon.stats.dmg = (meta.perma && meta.perma.dmg) || 0;
+  S.weapons.cannon.stats.rate = (meta.perma && meta.perma.rate) || 0;
+  applyStat(S.weapons.cannon, 'cannon', 'dmg');
+  applyStat(S.weapons.cannon, 'cannon', 'rate');
   // Enemy head start: red bloom at Growth 3 (same stat, same formula as
   // blue's Growth picks — just pre-applied, so red spreads faster early).
   S.redWeapons.bloom = { stats: initWeaponStats('bloom'), rateMult: 1, dmgBonus: 0, critChance: 0, proj: 0, evo: false };
@@ -1833,7 +1858,10 @@ function availableShopCards() {
     // Full shop (no proj — it's an XP hybrid now): all 7 placements,
     // cost order (cheapest first) so you can plan ahead. No draw.
     // Laser is the pricey late-game anti-flood unit (20, last).
-    const types = ['cannon', 'mole', 'bloom', 'gather', 'lantern', 'wall', 'laser'];
+    // Start-screen toggles filter it: only enabled items appear
+    // (missing = enabled, explicit false = excluded from the run).
+    const types = ['cannon', 'mole', 'bloom', 'gather', 'lantern', 'wall', 'laser']
+      .filter(t => !(meta && meta.enabled && meta.enabled[t] === false));
     const pool = CARD_POOL.filter(c => c.kind === 'turret' && types.includes(c.type)).map(c => ({
       ...c, cost: unitCost(c.type), owned: !!S.weapons[c.type],
     }));
@@ -3295,6 +3323,64 @@ function renderStartScreen() {
   const bv = document.getElementById('buildver');
   if (bv) bv.textContent = 'build v' + BUILD + (SURVIVAL ? ' · Survival prototype' : '');
   renderTeamToggle();
+  renderShopToggles();
+  renderPerma();
+}
+function renderShopToggles() {
+  // Start-screen shop toggles: click to include/exclude a placement
+  // from the run's shop (survival only; main is frozen). Missing =
+  // enabled (all on by default). The starter cannon is always placed
+  // even if cannon is toggled off — the toggle only stops the shop
+  // offering cannon duplicates, it never removes the starter.
+  const types = ['cannon', 'mole', 'bloom', 'gather', 'lantern', 'wall', 'laser'];
+  for (const type of types) {
+    const b = document.getElementById('toggle-' + type);
+    if (!b) continue;
+    const enabled = !(meta && meta.enabled && meta.enabled[type] === false);
+    b.classList.toggle('disabled', !enabled);
+    if (!b.dataset.bound) {
+      b.dataset.bound = '1';
+      b.addEventListener('click', () => {
+        if (!meta.enabled) meta.enabled = {};
+        const enabledNow = meta.enabled[type] !== false; // missing = enabled
+        meta.enabled[type] = !enabledNow;
+        saveMeta();
+        renderShopToggles();
+      });
+    }
+  }
+}
+function renderPerma() {
+  // Perma stat cards: click to add a level (up to 4, then no-op),
+  // shown as little circles (filled = level). Reset clears all perma
+  // levels (not item toggles) — the VS-style sell-all.
+  const defs = [
+    { id: 'perma-dmg', key: 'dmg', title: 'Damage', sub: '+1 base damage per level' },
+    { id: 'perma-rate', key: 'rate', title: 'Fire Rate', sub: '+15% base fire rate per level' },
+  ];
+  for (const d of defs) {
+    const b = document.getElementById(d.id);
+    if (!b) continue;
+    const lv = (meta.perma && meta.perma[d.key]) || 0;
+    let pips = '';
+    for (let i = 0; i < 4; i++) pips += `<span class="pip${i < lv ? ' on' : ''}"></span>`;
+    b.innerHTML = `<b>${d.title}</b><div class="permasub">${d.sub}</div><div>${pips}</div>`;
+    if (!b.dataset.bound) {
+      b.dataset.bound = '1';
+      b.addEventListener('click', () => {
+        if (!meta.perma) meta.perma = { dmg: 0, rate: 0 };
+        if (meta.perma[d.key] < 4) { meta.perma[d.key]++; saveMeta(); renderPerma(); }
+      });
+    }
+  }
+  const r = document.getElementById('perma-reset');
+  if (r && !r.dataset.bound) {
+    r.dataset.bound = '1';
+    r.addEventListener('click', () => {
+      meta.perma = { dmg: 0, rate: 0 };
+      saveMeta(); renderPerma();
+    });
+  }
 }
 function renderTeamToggle() {
   // Start-screen team picker: highlights the current choice (PLAYER_RED

@@ -241,7 +241,7 @@
     z-index: 20;
   }
   #startscreen.hidden { display: none; }
-  .startpanel { text-align: center; max-width: 560px; padding: 20px; }
+  .startpanel { text-align: center; max-width: 560px; padding: 20px; max-height: 92vh; overflow-y: auto; }
   .startpanel h2 {
     color: #ffd75e;
     letter-spacing: 0.12em;
@@ -257,6 +257,17 @@
   #teamrow button.selected { border-color: #ffd75e; background: #27314d; color: #ffd75e; }
   #team-red.selected { border-color: #ef4444; color: #ef4444; }
   #team-blue.selected { border-color: #3b82f6; color: #3b82f6; }
+  .startlabel { color: #5b6478; font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; margin: 14px 0 8px; }
+  #itemtoggles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 8px; }
+  .itemtoggle { padding: 8px 6px; font-size: 14px; border-radius: 8px; border: 2px solid #3a4666; background: #1a2138; color: var(--text); cursor: pointer; }
+  .itemtoggle.disabled { opacity: 0.45; filter: grayscale(1); }
+  #permarow { display: flex; gap: 8px; justify-content: center; margin-bottom: 8px; }
+  .permabtn { flex: 1; padding: 10px 8px; border-radius: 10px; border: 2px solid #3a4666; background: #1a2138; color: var(--text); cursor: pointer; text-align: center; }
+  .permabtn b { display: block; font-size: 15px; margin-bottom: 2px; }
+  .permasub { font-size: 11px; color: #8b93a8; margin-bottom: 6px; }
+  .pip { display: inline-block; width: 12px; height: 12px; border-radius: 50%; border: 2px solid #3a4666; background: #1a2138; margin: 0 2px; }
+  .pip.on { background: #ffd75e; border-color: #ffd75e; }
+  #perma-reset { padding: 6px 14px; font-size: 13px; border-radius: 8px; border: 2px solid #3a4666; background: #1a2138; color: var(--text); cursor: pointer; margin-bottom: 14px; }
   #weaponlist { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 18px; }
   .weapon {
     display: flex; align-items: center; gap: 10px;
@@ -510,6 +521,22 @@
     <!-- Shop grid lives here when dormant renderShop() is restored. -->
     <div id="weaponlist"></div>
     <div id="teamrow"><span>Team color</span><button id="team-red">Red</button><button id="team-blue">Blue</button></div>
+    <div class="startlabel">Shop items for this run</div>
+    <div id="itemtoggles">
+      <button id="toggle-cannon" class="itemtoggle">Cannon</button>
+      <button id="toggle-mole" class="itemtoggle">Digger</button>
+      <button id="toggle-bloom" class="itemtoggle">Field</button>
+      <button id="toggle-gather" class="itemtoggle">Harvester</button>
+      <button id="toggle-lantern" class="itemtoggle">Lantern</button>
+      <button id="toggle-wall" class="itemtoggle">Wall</button>
+      <button id="toggle-laser" class="itemtoggle">Laser</button>
+    </div>
+    <div class="startlabel">Perma upgrades</div>
+    <div id="permarow">
+      <button id="perma-dmg" class="permabtn"></button>
+      <button id="perma-rate" class="permabtn"></button>
+    </div>
+    <button id="perma-reset">Reset all perma upgrades</button>
     <button id="startbtn">Start Run</button>
     <div id="buildver"></div>
   </div>
@@ -553,6 +580,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=100"></script>
+<script src="game.js?v=101"></script>
 </body>
 </html>
