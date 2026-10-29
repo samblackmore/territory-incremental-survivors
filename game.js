@@ -1730,8 +1730,8 @@ function damageBlock(idx, dmg, color, sx, sy, vx, vy, crit) {
     }
   }
   spawnChip(cx + 0.5, cy + 0.5, CELL_COLORS[color], vx, vy);
+  spawnDmgNum(cx + 0.5, cy + 0.2, dmg, crit); // every hit shows damage dealt, killing or not
   if (S.hp[idx] > 0) {
-    spawnDmgNum(cx + 0.5, cy + 0.2, dmg, crit); // the damage dealt floats up
     return false;
   }
   const wasGrey = S.cells[idx] === GREY;
