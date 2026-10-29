@@ -527,7 +527,7 @@ const GREY_MIN_DIST = 12;      // cells from the starter: no grey near the openi
 const GREY_HP_MIN = 30, GREY_HP_MAX = 100;
 const GREY_GOLD_CHANCE = 0.8;  // grey drops: mostly gold (XP is easy mid-game)
 const MOVE_DUR = 0.25; // seconds to glide from one cell to the next (moles)
-const HARVESTER_STEP_DUR = 0.5; // seconds per harvester step — slow on purpose, so speed (not range) limits collection
+const HARVESTER_STEP_DUR = 1.0; // seconds per harvester step — slow on purpose, so speed (not range) limits collection
 const MOLE_NUGGET_BIAS = 0.7; // blue mole: 70% toward nearest nugget, 30% random wander
 // Enemy moles: while the red Bloom lives, it buys moles toward blue
 // from its bank (same mole pricing as blue: base + step per living
@@ -758,24 +758,18 @@ function harvesterStep(t) {
   return { nx: cur % W, ny: Math.floor(cur / W) };
 }
 // Harvester collection: when a Gather steps onto (or is already on) a
-// cell, it collects up to Count idle pickups — those on its cell first,
-// then the nearest within 1 cell (a small cluster). Collected pickups fly
-// to the HUD like tapped ones (same 'fly' state, same grant on arrival).
+// cell, it collects up to Count idle pickups ON THAT CELL ONLY (stacked
+// pickups on one cell, up to Count per stop). No reach: it must enter
+// a pickup's exact cell to collect it — adjacent pickups stay idle
+// until it steps onto them. Collected pickups fly to the HUD like
+// tapped ones (same 'fly' state, same grant on arrival).
 function collectAtGather(t) {
-  const here = [], near = [];
+  const here = [];
   for (const c of S.coins) {
     if (c.state !== 'idle') continue;
-    const cx = Math.floor(c.x), cy = Math.floor(c.y);
-    const d = Math.max(Math.abs(cx - t.x), Math.abs(cy - t.y));
-    if (d === 0) here.push(c);
-    else if (d === 1) near.push(c);
+    if (Math.floor(c.x) === t.x && Math.floor(c.y) === t.y) here.push(c);
   }
-  near.sort((a, b) => {
-    const da = (a.x - (t.x + 0.5)) ** 2 + (a.y - (t.y + 0.5)) ** 2;
-    const db = (b.x - (t.x + 0.5)) ** 2 + (b.y - (t.y + 0.5)) ** 2;
-    return da - db;
-  });
-  const take = [...here, ...near].slice(0, gatherCount());
+  const take = here.slice(0, gatherCount());
   for (const c of take) {
     c.state = 'fly'; c.sx = c.x; c.sy = c.y; c.t = 0;
   }
@@ -1742,7 +1736,7 @@ const CARD_POOL = [
   { kind: 'turret', type: 'laser', title: 'Laser', icon: ICONS.laser, sub: 'Waits for flood, then paints it.' },
   { kind: 'turret', type: 'bloom', title: 'Field', icon: ICONS.bloom, sub: 'Grows territory that harvests gold coins.' },
   { kind: 'turret', type: 'lantern', title: 'Lantern', icon: ICONS.lantern, sub: 'Pushes back the fog of war.' },
-  { kind: 'turret', type: 'gather', title: 'Harvester', icon: ICONS.gather, sub: 'Collects pickups anywhere, slowly.' },
+  { kind: 'turret', type: 'gather', title: 'Harvester', icon: ICONS.gather, sub: 'Steps onto pickups to collect them, slowly.' },
   { kind: 'turret', type: 'mole', title: 'Digger', icon: ICONS.mole, sub: 'Digs tunnels through rock.' },
   { kind: 'turret', type: 'wall', title: 'Wall', icon: ICONS.wall, sub: '2x2 defensive barrier.' },
   // Stat cards, generated from STAT_DEFS (cannon/bloom/gather only — mole
@@ -2553,8 +2547,8 @@ function update(dt) {
   // Harvester units: each living blue Harvester roams the grid toward the
   // closest idle pickup it can reach anywhere (BFS, avoids walls). It
   // steps one cell per HARVESTER_STEP_DUR — slow, always moving, never
-  // waiting-then-zipping — and collects on arrival (plus a small Count
-  // cluster).
+  // waiting-then-zipping — and collects on arrival (same cell only,
+  // up to Count per stop).
   for (const t of S.turrets) {
     if (t.dead || t.color !== BLUE || t.type !== 'gather') continue;
     t.stepT = (t.stepT || 0) + dt;
