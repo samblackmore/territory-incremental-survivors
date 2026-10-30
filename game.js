@@ -59,7 +59,7 @@ const STAT_DEFS = {
     // paints. Since v106 each cell beyond the first has only a 50%
     // chance to continue (PENETRATE_CHANCE), so average pierce is
     // ~2 cells even at high levels, but long rare pierces stay possible.
-    { key: 'pen', name: 'Penetration', cap: 8, effect: '+1 pierce depth (50% per cell)' },
+    { key: 'pen', name: 'Penetration', cap: 8, effect: '+1 pierce depth (chance of continuing)' },
   ],
   bloom: [
     { key: 'growth', name: 'Growth', cap: 8, effect: '+20% growth speed' },
@@ -137,6 +137,7 @@ const ICONS_ORIG = {
   steer: '<svg viewBox="0 0 24 24" width="36" height="36"><polygon points="20,12 12,8 12,16" fill="#ef4444"/><rect x="6" y="9.5" width="7" height="5" fill="#ef4444"/></svg>',
   mole: '<svg viewBox="0 0 24 24" width="36" height="36"><ellipse cx="12" cy="14" rx="7" ry="5" fill="#8b5a2b"/><circle cx="9" cy="12" r="1.2" fill="#1a2138"/><circle cx="15" cy="12" r="1.2" fill="#1a2138"/><polygon points="12,16 10,19 14,19" fill="#d4a574"/></svg>',
   gold: '<svg viewBox="0 0 24 24" width="36" height="36"><path d="M12 9 C8 9 5.5 12 5.5 15.5 C5.5 19 8.5 21.5 12 21.5 C15.5 21.5 18.5 19 18.5 15.5 C18.5 12 16 9 12 9 Z" fill="#f5b301" stroke="#b8860b" stroke-width="1.5"/><rect x="10.5" y="3.5" width="3" height="5.5" rx="1" fill="#b8860b"/></svg>',
+  teleport: '<svg viewBox="0 0 24 24" width="36" height="36"><path d="M4 18 C4 8 20 8 20 18" fill="none" stroke="#ef4444" stroke-width="2.5"/><polygon points="20,18 16.5,15.5 17.5,19.5" fill="#ef4444"/><circle cx="4" cy="18" r="2.5" fill="#ef4444"/></svg>',
 };
 function buildIcons(playerHex) {
   const o = {};
@@ -1554,8 +1555,9 @@ function floodTick(dt) {
   if (f.spreadT <= 0) { f.spreadT += FLOOD_SPREAD_EVERY; floodSpread(); }
   f.timer -= dt;
   if (f.phase === 'grace') {
-    // Grace: prepare your base. No storms, no warnings — the
-    // commander dialog already gave the ETA. Spread no-ops here
+    // Grace: prepare your base. No storms, no toast/pulse — the XP bar
+    // threat countdown gives the ETA during grace (the commander
+    // dialog gave it at the start). Spread no-ops here
     // (no RED cells exist yet, so floodSpread finds nothing).
     wavebanner.classList.add('hidden'); // no stale toast
     if (f.timer <= 0) {
@@ -1980,6 +1982,12 @@ function buildCardPool() { return [
   // run gold — the bridge to a shop unit you can see but can't afford yet.
   // Amount rolls at deal time (3–5): you see what you get before picking.
   { kind: 'gold', title: 'Gold Ore', icon: ICONS.gold },
+  // Teleport: one-time XP-row pick. Pick it, tap a Cannon or Laser,
+  // tap inside a gold base circle to move it there (stats kept — the
+  // point is moving an upgraded weapon, not buying a base one).
+  // Gated in availableCards on a living BLUE cannon/laser existing,
+  // so picking it can never leave you with nothing to move.
+  { kind: 'teleport', title: 'Teleport', icon: ICONS.teleport, sub: 'Move a Cannon or Laser to a new spot.' },
   { kind: 'steer', mult: 1.3, title: '+30%', icon: ICONS.steer, sub: 'Missile steering', needs: ['rocket'] },
 ]; }
 let CARD_POOL = buildCardPool();
@@ -1987,6 +1995,17 @@ function hasTurretTypes(types) {
   for (const t of S.turrets) {
     if (t.dead || t.color !== BLUE) continue;
     if (types.includes(t.type)) return true;
+  }
+  return false;
+}
+// Teleport eligibility: a living BLUE Cannon or Laser exists to move.
+// Weapons only (no Field/Harvester/Digger/Outpost/Wall) — the point is
+// repositioning firepower, and gating here prevents picking Teleport
+// with nothing movable (which would strand the paused game in pick mode).
+function hasTeleportTarget() {
+  for (const t of S.turrets) {
+    if (t.dead || t.color !== BLUE) continue;
+    if (t.type === 'cannon' || t.type === 'laser') return true;
   }
   return false;
 }
@@ -2005,6 +2024,7 @@ function availableCards() {
       return (w.stats[c.stat] || 0) < c.cap;
     }
     if (c.kind === 'passive') return S.passives[c.passive] < 8;
+    if (c.kind === 'teleport') return hasTeleportTarget();
     return (!c.needs || hasTurretTypes(c.needs));
   });
   if (cannonMaxed()) {
@@ -2256,6 +2276,18 @@ document.querySelectorAll('#levelup .card').forEach(card => {
       enterPlacement(type);
       return;
     }
+    if (kind === 'teleport') {
+      // One-time move: like a placement, this returns early — the
+      // pending-- here replaces the generic one at the end, the overlay
+      // hides, and the game stays paused while you pick a weapon, then
+      // a destination. Completion (completeTeleport) re-offers cards
+      // if picks remain, else unpauses.
+      S.pending--;
+      overlay.classList.add('hidden');
+      updateHud();
+      enterTeleport();
+      return;
+    }
     if (kind === 'stat') {
       // One stat, one chip: fill the next chip on that track (capped).
       const w = S.weapons[card.dataset.weapon];
@@ -2443,6 +2475,88 @@ function placeTurretAt(sx, sy) {
       S.paused = false;
     }
   }
+}
+
+// ---- Teleport: one-time XP pick, move a Cannon or Laser ----
+// Flow (game stays paused throughout, like placement, no cancel):
+//   pick Teleport card -> enterTeleport (stage 'pick', banner)
+//   -> tap a BLUE Cannon/Laser -> stage 'dest', banner names it,
+//      gold base discs show (survival) where it may land
+//   -> tap inside a disc on EMPTY unoccupied ground -> it moves there
+//      instantly (no glide), re-aims at map centre, fog recomputed,
+//      then pending handling mirrors placement (more picks -> re-offer,
+//      else unpause).
+// Destination rule mirrors placement per branch: survival = nearBase
+// (inside a PLACE_RADIUS disc around any living BLUE turret, including
+// the moving unit itself — so it can hop up to 6 cells from its old
+// spot, or jump to any Outpost anchor); main = fog-clear (no discs,
+// fog is the visualization, like placement).
+// Tapping another eligible weapon in 'dest' switches selection;
+// tapping the selected weapon itself keeps it; any other occupied cell
+// or invalid ground shows a red ring and stays in the current stage.
+function enterTeleport() {
+  S.teleporting = { stage: 'pick', unit: null };
+  S.placing = null;
+  placebanner.innerHTML = 'Tap a Cannon or Laser to teleport';
+  placebanner.classList.remove('hidden');
+}
+function teleportRedRing(cx, cy) {
+  S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
+}
+function handleTeleportTap(sx, sy) {
+  const tp = S.teleporting;
+  if (!tp) return;
+  const wpt = screenToWorld(sx, sy);
+  let cx = Math.floor(wpt.x / CELL_PX), cy = Math.floor(wpt.y / CELL_PX);
+  cx = Math.max(0, Math.min(cfg.cols - 1, cx));
+  cy = Math.max(0, Math.min(cfg.rows - 1, cy));
+  const tapped = turretAt(cx, cy);
+  const isWeapon = tapped && !tapped.dead && tapped.color === BLUE &&
+    (tapped.type === 'cannon' || tapped.type === 'laser');
+  if (tp.stage === 'pick') {
+    if (isWeapon) {
+      tp.unit = tapped;
+      tp.stage = 'dest';
+      placebanner.innerHTML = 'Tap inside a gold circle to move <b>' + TURRET[tapped.type].name + '</b>';
+    } else {
+      teleportRedRing(cx, cy);
+    }
+    return;
+  }
+  // Destination stage.
+  if (isWeapon) {
+    // Re-pick (or re-tap the selected unit): switch selection, stay here.
+    tp.unit = tapped;
+    placebanner.innerHTML = 'Tap inside a gold circle to move <b>' + TURRET[tapped.type].name + '</b>';
+    return;
+  }
+  if (tapped) { teleportRedRing(cx, cy); return; } // occupied: can't land here
+  const pi = cy * cfg.cols + cx;
+  const okGround = S.cells[pi] === EMPTY &&
+    (SURVIVAL ? nearBase(cx, cy) : S.fog[pi] === 0);
+  if (!okGround) { teleportRedRing(cx, cy); return; }
+  completeTeleport(tp.unit, cx, cy);
+}
+function completeTeleport(t, cx, cy) {
+  const ox = t.x, oy = t.y;
+  spawnBurst(ox + 0.5, oy + 0.5, CELL_COLORS[BLUE]); // leave: burst at origin
+  t.x = cx; t.y = cy; t.rx = cx; t.ry = cy; t.moveT = 1; // instant, no glide
+  // Re-aim at map centre from the new spot (BLUE weapons aim centre).
+  t.base = Math.atan2(cfg.rows / 2 - cy, cfg.cols / 2 - cx);
+  t.angle = t.base;
+  spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[BLUE]); // arrive: burst at destination
+  computeFog(); // new home cave (if any) reveals, like placement
+  S.teleporting = null;
+  placebanner.classList.add('hidden');
+  if (!S.runOver) {
+    if (S.pending > 0) {
+      offerCards(); offerShopCards(); // more picks: fresh XP + shop rows, stays paused
+      overlay.classList.remove('hidden');
+    } else {
+      S.paused = false;
+    }
+  }
+  updateHud();
 }
 
 // ---- Update ----
@@ -3135,6 +3249,23 @@ function render() {
       ctx.stroke();
       ctx.restore();
     }
+    // Teleport rings: pick stage = dashed gold ring on every movable
+    // weapon (Cannon/Laser, BLUE) so you see the candidates; destination
+    // stage = solid gold ring on the selected weapon only.
+    if (S.teleporting && !t.dead && t.color === BLUE &&
+        (t.type === 'cannon' || t.type === 'laser')) {
+      const isSel = S.teleporting.stage === 'dest' && S.teleporting.unit === t;
+      if (S.teleporting.stage === 'pick' || isSel) {
+        ctx.save();
+        ctx.strokeStyle = isSel ? 'rgba(250, 204, 21, 0.95)' : 'rgba(250, 204, 21, 0.6)';
+        ctx.lineWidth = isSel ? 2.5 : 2;
+        if (!isSel) ctx.setLineDash([6, 6]);
+        ctx.beginPath();
+        ctx.arc(px, py, 14, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
     // HP bar above damaged turrets
     if (t.hp < t.maxhp) {
       const w = 24, k = Math.max(0, t.hp / t.maxhp);
@@ -3150,7 +3281,10 @@ function render() {
   // gets no discs — it can also go outside them on clear open ground
   // (see the outpost exception in placeTurretAt). Main has no
   // proximity rule (fog shows where you can place), so no discs there.
-  if (SURVIVAL && S.placing && S.placing.type !== 'lantern') {
+  // Teleport shows the same discs, but only in its destination stage
+  // (after a weapon is picked) — pick stage shows unit rings instead.
+  if (SURVIVAL && ((S.placing && S.placing.type !== 'lantern') ||
+      (S.teleporting && S.teleporting.stage === 'dest'))) {
     ctx.save();
     ctx.fillStyle = 'rgba(250, 204, 21, 0.07)';
     ctx.strokeStyle = 'rgba(250, 204, 21, 0.45)';
@@ -3323,7 +3457,17 @@ function updateHud() {
   // Run timer (play time, pauses excluded) after the level + XP counts.
   const tsec = Math.floor(S.time || 0);
   const timer = `${Math.floor(tsec / 60)}:${String(tsec % 60).padStart(2, '0')}`;
-  const label = `LV ${lvl} &nbsp;·&nbsp; ${Math.floor(S.xpShown)}/${need} XP &nbsp;·&nbsp; ${timer}`;
+  // Threat countdown (survival, grace only): time until the flood cycle
+  // starts, counting down from the grace duration (5:00). Short + vague
+  // on purpose ("threat", not "flood storm"), yellow, inside the XP bar
+  // next to the run timer. Hidden once grace ends — lull/storm warnings
+  // (minimap pulse + toast) take over from there.
+  let threat = '';
+  if (SURVIVAL && S.flood && S.flood.phase === 'grace') {
+    const gsec = Math.max(0, Math.ceil(S.flood.timer));
+    threat = ` &nbsp;·&nbsp; <span style="color:#ffd75e">${Math.floor(gsec / 60)}:${String(gsec % 60).padStart(2, '0')} threat incoming!</span>`;
+  }
+  const label = `LV ${lvl} &nbsp;·&nbsp; ${Math.floor(S.xpShown)}/${need} XP &nbsp;·&nbsp; ${timer}${threat}`;
   xpfill.style.width = (pct * 100).toFixed(1) + '%';
   xplabel.innerHTML = label;
 
@@ -3348,7 +3492,7 @@ function updateHud() {
     `<div>Map seed: <b>${S.seed}</b></div>` +
     `<div>Fire rate: <b>${effFreq}/s</b> (×${S.freqMult.toFixed(2)}) · Damage: <b>+${S.dmgBonus}</b> · Steering: <b>×${S.steerMult.toFixed(2)}</b> · Field: <b>×${S.bloomMult.toFixed(2)}</b></div>` +
     `<div>Harvester: <b>${gatherCount()} per stop</b></div>` +
-    `<div>Weapons: <b>${Object.entries(S.weapons).map(([k, w]) => `${k} ${w.stats ? Object.entries(w.stats).map(([s, n]) => `${s} ${n}`).join('/') : ''} (×${w.rateMult.toFixed(2)} rate, +${w.dmgBonus} dmg${w.critChance ? `, ${Math.round(w.critChance * 100)}% crit` : ''}${w.proj ? `, +${w.proj} proj` : ''})`).join(' · ')}</b></div>` +
+    `<div>Weapons: <b>${Object.entries(S.weapons).filter(([, w]) => w).map(([k, w]) => `${k} ${w.stats ? Object.entries(w.stats).map(([s, n]) => `${s} ${n}`).join('/') : ''} (×${w.rateMult.toFixed(2)} rate, +${w.dmgBonus} dmg${w.critChance ? `, ${Math.round(w.critChance * 100)}% crit` : ''}${w.proj ? `, +${w.proj} proj` : ''})`).join(' · ')}</b></div>` +
     `<div>Projectiles alive: <b>${S.projs.length}</b> · Missiles: <b>${S.missiles.length}</b></div>` +
     `<div>Pickups: <b>${S.coins.length}</b> on field · Gold this run: <b>${S.gold}</b> · Total: <b>${meta.gold}</b> · Red bank: <b>${S.redGold || 0}</b> (next mole <b>${redMoleCost()}</b>)</div>`;
 }
@@ -3428,6 +3572,7 @@ function endPointer(e) {
   if (pointers.size === 0) {
     if (downPos && !panning) {
       if (S.placing) placeTurretAt(downPos.x, downPos.y); // placement eats the tap
+      else if (S.teleporting) handleTeleportTap(downPos.x, downPos.y); // teleport eats the tap
       else if (tryChipDoubleTap(downPos.x, downPos.y)) { /* debug level grant */ }
       else tapCoin(downPos.x, downPos.y); // tap a coin to collect it; anything else does nothing
     }
