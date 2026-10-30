@@ -27,6 +27,18 @@ const HARVEST_EVERY = 8;           // territory: seconds between pickups per cel
 // Turret roster: distinct damage patterns, no homing except the missile's
 // steering (which is deliberately dumb: limited turn rate, walls win).
 const GATHER_COOLDOWN = 6;           // seconds between pulls (legacy interval field, unused by the moving harvester)
+// Outpost vacuum (original Gather mechanic, pre-Harvester, revived v107):
+// a stationary Outpost pulls nearby idle pickups toward itself every
+// few seconds, nearest first, lerp to Outpost, grant on arrival (same
+// 'gather' coin state as original Gather, still in the coin update).
+// Starting values are buffed vs the original Gather base (range 3,
+// 1 per pull, 6s cooldown — no upgrades, so it must keep up with cannon
+// fire on the frontier): range 4, 3 per pull, every 4s. Tunable.
+// Harvester unchanged (roams, same-cell only, Count per stop).
+const OUTPOST_RANGE = 4;             // vacuum pull range in cells (Euclidean)
+const OUTPOST_PULL_COUNT = 3;        // pickups per pull (nearest first)
+const OUTPOST_PULL_EVERY = 4;        // seconds between pulls
+const OUTPOST_FLASH_DUR = 1.5;       // range ring flash duration on pull (s, same as original Gather)
 // Cannon hand-designed 8-level track (VS-style: predictable, no random rolls).
 // Index 0 = L1 base (unused); index N = upgrade from LN to LN+1.
 // Split stat tracks: each weapon stat levels independently (chips top-left),
@@ -89,12 +101,12 @@ function cannonMaxed() {
 // Mid-run unit costs (run gold, not meta gold): base + 5 per living unit
 // of that type. The starter Cannon is free (pre-placed); every duplicate
 // costs extra, and the price climbs as your army grows. Tunable.
-// Early game is cheap on purpose: Lantern 2 (base expansion), Field 3
+// Early game is cheap on purpose: Outpost 2 (base expansion), Field 3
 // (early resources), Digger 4 (early exploration) — the flood starts at
 // 5 min, so you need cheap options before you can level the cannon.
 const UNIT_COST = { cannon: 10, mole: 4, bloom: 3, gather: 6, lantern: 2, wall: 2, laser: 20 };
 const UNIT_COST_STEP = 5;
-const LANTERN_COST_STEP = 1; // lanterns stay cheap so chaining them to extend the base is affordable
+const LANTERN_COST_STEP = 1; // outposts stay cheap so chaining them to extend the base is affordable
 function unitCost(type) {
   let count = 0;
   for (const t of S.turrets) {
@@ -137,7 +149,7 @@ const TURRET = {
   rocket: { name: 'Rocket', hp: 6, interval: 2.5, dmg: 3 },
   laser:  { name: 'Laser',  hp: 5, interval: 2.0, dmg: 2 },
   bloom:  { name: 'Field',  hp: 4, interval: GROW_INTERVAL, dmg: 0 },
-  lantern:{ name: 'Lantern',hp: 4, interval: 0, dmg: 0 }, // pure vision, no firing
+  lantern:{ name: 'Outpost',hp: 4, interval: 0, dmg: 0 }, // fog light + vacuum collector, no firing (display rename v107, internal type still 'lantern', like Field/Digger/Harvester)
   gather: { name: 'Harvester', hp: 5, interval: GATHER_COOLDOWN, dmg: 0 }, // roams for pickups, anywhere, slowly
   mole:   { name: 'Digger', hp: 6, interval: 1.0, dmg: 1 }, // digs through rock, then dies
   wall:   { name: 'Wall',   hp: 20, interval: 0, dmg: 0 }, // terrain, not a turret (see placeTurretAt wall branch)
@@ -759,6 +771,12 @@ function mkTurret(x, y, color, type) {
     // Harvester: roams the grid toward pickups (see harvesterStep).
     t.rx = x; t.ry = y; t.moveT = 1; t.stepT = 0;
   }
+  if (type === 'lantern') {
+    // Outpost: stationary vacuum (see update loop lantern branch).
+    // coolT is the pull timer (already 0 above); showRange is the
+    // range-flash timer, fading after each pull.
+    t.showRange = 0;
+  }
   return t;
 }
 // Gather pickups per pull, from its Count stat track.
@@ -1276,8 +1294,8 @@ function newGame() {
 // 0 = clear, 1 = half (smooth transition), 2 = full (black).
 // Reveal sources: every cave containing a blue turret (flood-filled through
 // EMPTY, plus fogDist beyond the boundary) and a fogDist radius around each
-// lantern. Recomputed whenever the cave changes (a block is excavated) or a
-// lantern is placed. Fog only ever clears, never closes back in.
+// outpost. Recomputed whenever the cave changes (a block is excavated) or an
+// outpost is placed. Fog only ever clears, never closes back in.
 function computeFog() {
   const W = cfg.cols, H = cfg.rows, n = W * H;
   const nf = new Uint8Array(n).fill(2);
@@ -1315,7 +1333,7 @@ function computeFog() {
       if (S.cells[ni] === EMPTY && !home[ni]) { home[ni] = 1; stack.push(ni); }
     }
   }
-  // Lanterns push back the dark in a radius.
+  // Outposts push back the dark in a radius.
   for (const t of S.turrets) {
     if (t.dead || t.type !== 'lantern') continue;
     revealDisc(t.x, t.y);
@@ -1931,7 +1949,7 @@ function buildCardPool() { return [
   { kind: 'turret', type: 'rocket', title: 'Rocket', icon: ICONS.rocket, sub: 'Fires homing missiles that crash and splash-dig.' },
   { kind: 'turret', type: 'laser', title: 'Laser', icon: ICONS.laser, sub: 'Waits for flood, then paints it.' },
   { kind: 'turret', type: 'bloom', title: 'Field', icon: ICONS.bloom, sub: 'Grows territory that harvests gold coins.' },
-  { kind: 'turret', type: 'lantern', title: 'Lantern', icon: ICONS.lantern, sub: 'Pushes back the fog of war.' },
+  { kind: 'turret', type: 'lantern', title: 'Outpost', icon: ICONS.lantern, sub: 'Pushes back fog and pulls in nearby pickups.' },
   { kind: 'turret', type: 'gather', title: 'Harvester', icon: ICONS.gather, sub: 'Steps onto pickups to collect them, slowly.' },
   { kind: 'turret', type: 'mole', title: 'Digger', icon: ICONS.mole, sub: 'Digs tunnels through rock.' },
   { kind: 'turret', type: 'wall', title: 'Wall', icon: ICONS.wall, sub: '2x2 defensive barrier.' },
@@ -2283,7 +2301,7 @@ document.getElementById('diveagain').addEventListener('click', () => {
 const WALL_HP = 200;
 const WALL_SHADE = 3; // mid grey ([107,114,128]) — reads as stone, distinct from natural grey variation
 // Survival placement: units go near your base, not anywhere lit.
-// (Matches fogDist, so a lantern extends the placeable range by 6.)
+// (Matches fogDist, so an outpost extends the placeable range by 6.)
 const PLACE_RADIUS = 6;
 function nearBase(cx, cy) {
   for (const t of S.turrets) {
@@ -2296,7 +2314,7 @@ function nearBase(cx, cy) {
 function enterPlacement(type) {  S.placing = { type };
   placebanner.innerHTML = SURVIVAL
     ? (type === 'lantern'
-        ? 'Tap near your base or any clear open cell to deploy <b>Lantern</b>'
+        ? 'Tap near your base or any clear open cell to deploy <b>Outpost</b>'
         : 'Tap near your base to deploy <b>' + TURRET[type].name + '</b>')
     : 'Tap the map to deploy <b>' + TURRET[type].name + '</b>';
   placebanner.classList.remove('hidden');
@@ -2362,10 +2380,10 @@ function placeTurretAt(sx, sy) {
   const pi = cy * cfg.cols + cx;
   if (SURVIVAL) {
     if (type === 'lantern') {
-      // Lantern exception: near base it sits on any ground (as before);
+      // Outpost exception: near base it sits on any ground (as before);
       // far from base it can still go anywhere that's open ground and
       // clear of fog. That's how you extend past the build discs: drop
-      // a lantern at the edge of the revealed area, and it becomes a
+      // an outpost at the edge of the revealed area, and it becomes a
       // new anchor for the next units.
       if (!nearBase(cx, cy) && !(S.cells[pi] === EMPTY && S.fog[pi] === 0)) {
         S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
@@ -2383,8 +2401,8 @@ function placeTurretAt(sx, sy) {
     return;
   }
   if (type === 'lantern') {
-    // Lanterns sit on any visible ground near base (main: any ground;
-    // survival far lanterns already checked EMPTY + clear above).
+    // Outposts sit on any visible ground near base (main: any ground;
+    // survival far outposts already checked EMPTY + clear above).
     // No pad clearing.
   } else {
     // Combat units and Blooms need open ground.
@@ -2399,7 +2417,7 @@ function placeTurretAt(sx, sy) {
     S.weapons[type] = { stats: initWeaponStats(type), rateMult: 1, dmgBonus: 0, critChance: 0, proj: 0, evo: false };
   }
   spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[BLUE]);
-  if (type === 'lantern') computeFog(); // the lantern pushes back the dark
+  if (type === 'lantern') computeFog(); // the outpost pushes back the dark
   S.placing = null;
   placebanner.classList.add('hidden');
   if (!S.runOver) {
@@ -2508,7 +2526,38 @@ function update(dt) {
       t.cd -= dt;
       if (t.cd <= 0) { t.cd = TURRET.bloom.interval / rateMult * S.bloomMult; bloomGrowth(t); }
     } else if (t.type === 'lantern') {
-      // Lanterns don't fire — they just hold back the fog.
+      // Outpost: fog light + stationary vacuum (original Gather
+      // mechanic, pre-Harvester, revived v107). Every OUTPOST_PULL_EVERY
+      // seconds, pull up to OUTPOST_PULL_COUNT nearest idle pickups
+      // within OUTPOST_RANGE cells toward itself (state 'gather', lerp
+      // to Outpost, grant on arrival — same coin handler as original
+      // Gather). Blue only; red lanterns (none in game) don't vacuum.
+      // Harvester unchanged (roams, same-cell only). Division is
+      // natural, not hard-zoned: Outpost claims frontier pickups
+      // quickly (Harvester BFS ignores non-idle), so Harvester stays
+      // on field pickups back home — as long as Outpost keeps up.
+      if (t.color === BLUE) {
+        if (t.showRange > 0) t.showRange -= dt;
+        t.coolT += dt;
+        if (t.coolT >= OUTPOST_PULL_EVERY) {
+          t.coolT = 0;
+          t.showRange = OUTPOST_FLASH_DUR; // flash vacuum range on every pull
+          const r2 = OUTPOST_RANGE * OUTPOST_RANGE;
+          const inRange = [];
+          for (const c of S.coins) {
+            if (c.state !== 'idle') continue;
+            const dx = c.x - (t.x + 0.5), dy = c.y - (t.y + 0.5);
+            const d2 = dx * dx + dy * dy;
+            if (d2 <= r2) inRange.push({ c, d2 });
+          }
+          inRange.sort((a, b) => a.d2 - b.d2);
+          const n = Math.min(OUTPOST_PULL_COUNT, inRange.length);
+          for (let k = 0; k < n; k++) {
+            const c = inRange[k].c;
+            c.state = 'gather'; c.sx = c.x; c.sy = c.y; c.gx = t.x + 0.5; c.gy = t.y + 0.5; c.t = 0;
+          }
+        }
+      }
     } else if (t.type === 'mole') {
       // Digger: chews through rock, dies after its lifetime (cells dug).
       // Red turns toward the nearest blue turret (encroachment) and opens
@@ -3048,7 +3097,7 @@ function render() {
       ctx.fillStyle = '#1a2138';
       ctx.beginPath(); ctx.arc(-3, 0, 1.2, 0, Math.PI * 2); ctx.fill();
       ctx.beginPath(); ctx.arc(3, 0, 1.2, 0, Math.PI * 2); ctx.fill();
-    } else { // lantern: a little glowing lantern
+    } else { // outpost: a little glowing lantern (icon unchanged from Lantern)
       ctx.strokeStyle = col;
       ctx.fillStyle = col;
       ctx.lineWidth = 1.5;
@@ -3058,6 +3107,19 @@ function render() {
       ctx.beginPath(); ctx.arc(0, 1, 3, 0, Math.PI * 2); ctx.fill();
     }
     ctx.restore();
+    // Outpost vacuum range flash: on every pull, a fading dashed gold
+    // ring shows the vacuum radius (original Gather flash, revived).
+    if (t.type === 'lantern' && t.showRange > 0) {
+      const fade = Math.min(1, t.showRange / OUTPOST_FLASH_DUR);
+      ctx.save();
+      ctx.strokeStyle = `rgba(250, 204, 21, ${0.6 * fade})`;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 6]);
+      ctx.beginPath();
+      ctx.arc(px, py, OUTPOST_RANGE * CELL_PX, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
     // HP bar above damaged turrets
     if (t.hp < t.maxhp) {
       const w = 24, k = Math.max(0, t.hp / t.maxhp);
@@ -3069,9 +3131,9 @@ function render() {
   }
   // Build range (survival, proximity-gated units): while placing, show
   // the discs around your base units that a new unit must land inside.
-  // A tap outside every disc is why the red ring rejects it. Lantern
+  // A tap outside every disc is why the red ring rejects it. Outpost
   // gets no discs — it can also go outside them on clear open ground
-  // (see the lantern exception in placeTurretAt). Main has no
+  // (see the outpost exception in placeTurretAt). Main has no
   // proximity rule (fog shows where you can place), so no discs there.
   if (SURVIVAL && S.placing && S.placing.type !== 'lantern') {
     ctx.save();
