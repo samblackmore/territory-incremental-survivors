@@ -573,6 +573,7 @@ const GREY_FILL = 0.40;        // CA seed fill for grey chunks (caves use 0.38; 
 const GREY_MIN_DIST = 12;      // cells from the starter: no grey near the opening
 const GREY_HP_MIN = 30, GREY_HP_MAX = 100;
 const GREY_GOLD_CHANCE = 0.8;  // grey drops: mostly gold (XP is easy mid-game)
+const BROWN_GOLD_CHANCE = 0.1; // regular brown rock: 10% gold on break (BLUE only, non-nugget, non-grey) — you don't have to rely on nuggets alone; independent of the XP roll, so a break can drop both
 const MOVE_DUR = 0.25; // seconds to glide from one cell to the next (moles)
 const HARVESTER_STEP_DUR = 1.0; // seconds per harvester step — slow on purpose, so speed (not range) limits collection
 const MOLE_NUGGET_BIAS = 0.7; // blue mole: 70% toward nearest nugget, 30% random wander
@@ -1891,6 +1892,7 @@ function damageBlock(idx, dmg, color, sx, sy, vx, vy, crit) {
     return false;
   }
   const wasGrey = S.cells[idx] === GREY;
+  const wasNugget = !!S.goldNug[idx];
   S.cells[idx] = EMPTY; // excavated: the block is gone, not painted over
   S.destroyed++;
   if (color === BLUE) S.destroyedBlue++;
@@ -1910,6 +1912,19 @@ function damageBlock(idx, dmg, color, sx, sy, vx, vy, crit) {
   }
   if (color === BLUE && Math.random() < cfg.coinChance) {
     S.coins.push({ x: cx + 0.5, y: cy + 0.5, state: 'idle', kind: 'xp',
+                   phase: Math.random() * 6.283, sx: 0, sy: 0, t: 0, dead: false });
+    if (S.coins.length > 800) { // safety valve: drop oldest idle coin
+      const i = S.coins.findIndex(c => c.state === 'idle');
+      if (i >= 0) S.coins.splice(i, 1);
+    }
+  }
+  if (color === BLUE && !wasGrey && !wasNugget && Math.random() < BROWN_GOLD_CHANCE) {
+    // Regular brown rock pays a little gold sometimes (10%): you don't
+    // have to rely on nuggets alone. Independent of the XP roll above,
+    // so a break can drop both XP + gold (3% of the time). Nugget cells
+    // keep their single guaranteed gold (no extra roll); grey keeps its
+    // 80/20 guaranteed pickup below. Red/flood breaks pay nothing.
+    S.coins.push({ x: cx + 0.5, y: cy + 0.5, state: 'idle', kind: 'gold',
                    phase: Math.random() * 6.283, sx: 0, sy: 0, t: 0, dead: false });
     if (S.coins.length > 800) { // safety valve: drop oldest idle coin
       const i = S.coins.findIndex(c => c.state === 'idle');
@@ -1938,7 +1953,7 @@ function checkLevel() {
 }
 
 // Card pool: turret entries feed the SHOP row (placements); the XP row
-// draws from stat cards (one per weapon stat), Bag of Gold, and steer.
+// draws from stat cards (one per weapon stat), Gold Ore, and steer.
 // `needs` gates an upgrade on owning a turret it actually affects — no
 // steering card before you've got a rocket.
 // No passives currently: Bounce was removed in v106, replaced by
@@ -1961,10 +1976,10 @@ function buildCardPool() { return [
       kind: 'stat', weapon, stat: d.key, cap: d.cap,
       title: d.name, icon: ICONS[weapon], effect: d.effect,
     }))),
-  // Bag of Gold: the XP-for-gold exchange. A free XP-row pick that grants
+  // Gold Ore: the XP-for-gold exchange. A free XP-row pick that grants
   // run gold — the bridge to a shop unit you can see but can't afford yet.
   // Amount rolls at deal time (3–5): you see what you get before picking.
-  { kind: 'gold', title: 'Bag of Gold', icon: ICONS.gold },
+  { kind: 'gold', title: 'Gold Ore', icon: ICONS.gold },
   { kind: 'steer', mult: 1.3, title: '+30%', icon: ICONS.steer, sub: 'Missile steering', needs: ['rocket'] },
 ]; }
 let CARD_POOL = buildCardPool();
@@ -1979,7 +1994,7 @@ function availableCards() {
   // XP row: FREE cards only. Turret placements live in the shop row, so
   // no turret kind appears here at all. What remains: stat cards for
   // owned weapons (below cap; EVO'd cannon offers no more stats),
-  // Bag of Gold, steer (via needs), and the EVO capstone when earned.
+  // Gold Ore, steer (via needs), and the EVO capstone when earned.
   // (Passive branch below remains for future passives; none in pool.)
   const pool = CARD_POOL.filter(c => {
     if (c.kind === 'turret') return false;
@@ -2047,7 +2062,7 @@ function projCost() {
   return 10 + lv * UNIT_COST_STEP;
 }
 function offerCards() {
-  // XP row: 3 free cards, weighted draw without replacement. Bag of Gold
+  // XP row: 3 free cards, weighted draw without replacement. Gold Ore
   // counts three-quarters (weight 0.75 vs 1 for everything else) — it's
   // uncapped, so without a discount it would crowd out real upgrades
   // as stats max out, but early on you're craving gold.
@@ -2271,7 +2286,7 @@ document.querySelectorAll('#levelup .card').forEach(card => {
     } else if (kind === 'steer') {
       S.steerMult *= parseFloat(card.dataset.mult);
     } else if (kind === 'gold') {
-      // Bag of Gold: free XP pick that grants run gold.
+      // Gold Ore: free XP pick that grants run gold.
       S.gold += parseInt(card.dataset.amount || '10', 10);
     } else {
       S.freqMult *= parseFloat(card.dataset.mult);
