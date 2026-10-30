@@ -12,7 +12,8 @@ const WHITE = 0, EMPTY = 1, BLUE = 2, RED = 3, GREY = 4;
 const CELL_COLORS = ['#eef1f6', '#3d4454', '#ef4444', '#3b82f6', '#6b7280'];
 
 const CELL_PX = 16;                 // render size of one cell
-const BOUNCE_MAX = 8;               // bounces per projectile (backstop, not a target)
+const PENETRATE_CHANCE = 0.5;       // per-cell chance a piercing shot keeps going (v106, start 50%).
+                                      // Each rock/flood cell beyond the first rolls to continue; max depth still caps at penDepth.
 const STEER_RATE = 3;               // missile turn rate, rad/s (x S.steerMult)
 const RED_DEPLOY_EVERY = 12;        // seconds between red turret deployments
 const GROW_INTERVAL = 5;            // Bloom: seconds per growth increment (x S.bloomMult)
@@ -41,9 +42,12 @@ const STAT_DEFS = {
     { key: 'rate', name: 'Fire rate', cap: 8, effect: '+15% fire rate' },
     { key: 'crit', name: 'Crit', cap: 8, effect: '+5% crit' },
     // Penetration: how many cells one shot pierces (VS pass-through).
-    // Base depth 1 (just the first cell); each level pierces one more
-    // cell in the same shot's path — rock it damages, or flood it paints.
-    { key: 'pen', name: 'Penetration', cap: 8, effect: '+1 pierce depth' },
+    // Base depth 1 (just the first cell); each level adds one more
+    // MAX cell in the same shot's path — rock it damages, or flood it
+    // paints. Since v106 each cell beyond the first has only a 50%
+    // chance to continue (PENETRATE_CHANCE), so average pierce is
+    // ~2 cells even at high levels, but long rare pierces stay possible.
+    { key: 'pen', name: 'Penetration', cap: 8, effect: '+1 pierce depth (50% per cell)' },
   ],
   bloom: [
     { key: 'growth', name: 'Growth', cap: 8, effect: '+20% growth speed' },
@@ -70,7 +74,7 @@ function applyStat(w, weapon, st) {
     else if (st === 'proj') w.proj = n;
     else if (st === 'rate') w.rateMult = Math.pow(1.15, n);
     else if (st === 'crit') w.critChance = 0.05 * n;
-    else if (st === 'pen') w.penDepth = 1 + n; // penetration depth: base 1 + 1 per level (rock hits + flood paints)
+    else if (st === 'pen') w.penDepth = 1 + n; // max penetration depth: base 1 + 1 per level (rock hits + flood paints, each step 50% chance v106)
   } else if (weapon === 'bloom') {
     if (st === 'growth') w.rateMult = Math.pow(1.2, n);
   }
@@ -118,7 +122,6 @@ const ICONS_ORIG = {
   lantern: '<svg viewBox="0 0 24 24" width="36" height="36"><rect x="7" y="6" width="10" height="12" fill="none" stroke="#ef4444" stroke-width="1.5"/><circle cx="12" cy="12" r="2.5" fill="#fef3c7"/></svg>',
   gather: '<svg viewBox="0 0 24 24" width="36" height="36"><path d="M7,6 A5,5 0 0,0 17,6" stroke="#ef4444" stroke-width="2.5" fill="none"/><circle cx="7" cy="15.5" r="1.8" fill="#ef4444"/><circle cx="17" cy="15.5" r="1.8" fill="#ef4444"/><circle cx="12" cy="12" r="2" fill="#ef4444"/></svg>',
   wall: '<svg viewBox="0 0 24 24" width="36" height="36"><rect x="4" y="6" width="16" height="12" fill="#9ca3af" stroke="#4b5563" stroke-width="1.5"/><line x1="12" y1="6" x2="12" y2="18" stroke="#4b5563" stroke-width="1"/><line x1="4" y1="12" x2="20" y2="12" stroke="#4b5563" stroke-width="1"/></svg>',
-  bounce: '<svg viewBox="0 0 24 24" width="36" height="36"><polyline points="5,17 9,7 13,17 17,7" stroke="#fb923c" stroke-width="2" fill="none"/></svg>',
   steer: '<svg viewBox="0 0 24 24" width="36" height="36"><polygon points="20,12 12,8 12,16" fill="#ef4444"/><rect x="6" y="9.5" width="7" height="5" fill="#ef4444"/></svg>',
   mole: '<svg viewBox="0 0 24 24" width="36" height="36"><ellipse cx="12" cy="14" rx="7" ry="5" fill="#8b5a2b"/><circle cx="9" cy="12" r="1.2" fill="#1a2138"/><circle cx="15" cy="12" r="1.2" fill="#1a2138"/><polygon points="12,16 10,19 14,19" fill="#d4a574"/></svg>',
   gold: '<svg viewBox="0 0 24 24" width="36" height="36"><path d="M12 9 C8 9 5.5 12 5.5 15.5 C5.5 19 8.5 21.5 12 21.5 C15.5 21.5 18.5 19 18.5 15.5 C18.5 12 16 9 12 9 Z" fill="#f5b301" stroke="#b8860b" stroke-width="1.5"/><rect x="10.5" y="3.5" width="3" height="5.5" rx="1" fill="#b8860b"/></svg>',
@@ -339,7 +342,6 @@ const inSpeed  = document.getElementById('d-speed');
 const inFreq   = document.getElementById('d-freq');
 const inArc    = document.getElementById('d-arc');
 const inTurn   = document.getElementById('d-turn');
-const inBounce  = document.getElementById('d-bounce');
 const inCave   = document.getElementById('d-cave');
 const inSeed   = document.getElementById('d-seed');
 const inCoin   = document.getElementById('d-coin');
@@ -665,7 +667,6 @@ function readDebug() {
     freq: clampNum(inFreq.value, 0.1, 20, 1),            // shots/s (both cannons)
     arc: clampNum(inArc.value, 0, 360, 120),             // degrees
     turnRate: clampNum(inTurn.value, 0, 720, 100),          // cannon sweep speed (deg/s)
-    bouncePerLevel: clampNum(inBounce.value, 0, 1, 0.12),     // bounce chance per passive level
     caveChance: clampNum(inCave.value, 0, 0.95, 0.38),      // CA cave fill
     coinChance: clampNum(inCoin.value, 0, 1, 0.3),          // coin drop per block excavated by blue
     popHold: clampNum(inPopHold.value, 0, 0.5, 0.03),        // big square hold time (s)
@@ -681,7 +682,6 @@ function readDebug() {
   inSpeed.value = cfg.projSpeed; inFreq.value = cfg.freq;
   inArc.value = cfg.arc; inCave.value = cfg.caveChance;
   inTurn.value = cfg.turnRate;
-  inBounce.value = cfg.bouncePerLevel;
   inCoin.value = cfg.coinChance;
   inPopHold.value = cfg.popHold; inPopDur.value = cfg.popDur;
   inPopPush.value = cfg.popPush; inRipple.value = cfg.rippleAmp;
@@ -1114,10 +1114,10 @@ function newGame() {
         redGold: 0,
         particles: [], particlesSpawned: 0, rings: [], dmgNums: [],
         destroyed: 0, destroyedBlue: 0,
-        bounceChance: 0,
-        // passives (VS-style): level 0 = not owned, max 8. Proposed once
-        // active; upgrades stop at 8.
-        passives: { bounce: 0 },
+        // passives (VS-style): none currently — Bounce removed v106,
+        // replaced by Penetration (forward, not random ricochet).
+        // Future passives go here with initial level 0.
+        passives: {},
         // auto-battler state
         turrets: [], missiles: [], beams: [],
         wave: 0, redQueue: [], redTimer: 0, waveBreak: 0, redKills: 0,
@@ -1519,9 +1519,8 @@ function floodFireAt(angle) {
   const dx = Math.cos(angle), dy = Math.sin(angle);
   const e = floodEntry(f.ex, f.ey, dx, dy);
   if (!e) return false;
-  // bounces = max: flood shots never pinball (that's the player's passive).
   S.projs.push({ x: e.x, y: e.y, vx: dx * FLOOD_SPEED, vy: dy * FLOOD_SPEED,
-                 color: RED, dmg: FLOOD_DMG, flood: true, bounces: BOUNCE_MAX, crit: false, dead: false });
+                 color: RED, dmg: FLOOD_DMG, flood: true, crit: false, dead: false });
   return true;
 }
 function floodFireRing() {
@@ -1613,8 +1612,7 @@ function fireTurret(t) {
     vy: Math.sin(t.angle) * speed,
     color: t.color,
     dmg, crit,
-    bounces: 0,
-    paintLeft: (w && w.penDepth) || 1, // penetration left: rock cells it can still damage + flood cells it can still flip
+    paintLeft: (w && w.penDepth) || 1, // penetration left (max): rock cells it can still damage + flood cells it can still flip, each step 50% chance to continue
     dead: false,
   });
 }
@@ -1777,11 +1775,10 @@ function stepProjectile(p, dt) {
       p.lastRockIdx = idx;
       const destroyed = damageBlock(idx, p.dmg || 1, p.color, p.x, p.y, p.vx, p.vy, p.crit);
       // Penetration (shared budget with flood painting): each rock hit
-      // consumes 1 paintLeft. Budget left -> keep flying straight
-      // (pierce), whether the rock broke or just took damage. Budget
-      // spent -> the old bounce-then-die behavior (so base shots still
-      // bounce, flood shots behave as before, and destroyed cells never
-      // bounce, as before).
+      // consumes 1 paintLeft. Budget left -> roll PENETRATE_CHANCE to
+      // keep flying straight (pierce), whether the rock broke or just
+      // took damage. Budget spent, or the roll fails -> dies (no
+      // ricochet anymore — Penetration replaced Bounce in v106).
       if (p.paintLeft === undefined) p.paintLeft = 1; // base depth for shots without it
       p.paintLeft--;
       if (destroyed) {
@@ -1793,19 +1790,10 @@ function stepProjectile(p, dt) {
           S.hp[idx] = 0; S.maxhp[idx] = 0; S.harvT[idx] = 0;
           S.growN[idx] = 0; S.growBy[idx] = 0;
         }
-        if (p.paintLeft > 0 && !p.flood) continue; // broke through: keep flying (next cells pass through the new EMPTY)
+        if (p.paintLeft > 0 && !p.flood && Math.random() < PENETRATE_CHANCE) continue; // broke through and rolled to keep going
         p.dead = true; return;
       }
-      if (p.paintLeft > 0) continue; // pierced (damaged, intact): keep flying, same-cell sub-steps skip via lastRockIdx
-      // Pinball: a surviving block may bounce the shot back out (re-rolled per hit)
-      if (p.bounces < BOUNCE_MAX && Math.random() < S.bounceChance) {
-        p.bounces++;
-        p.x -= sx; p.y -= sy; // back out to the pre-entry position
-        if (Math.abs(sx) >= Math.abs(sy)) p.vx = -p.vx; else p.vy = -p.vy;
-        sx = (p.vx * dt) / steps;
-        sy = (p.vy * dt) / steps;
-        continue;
-      }
+      if (p.paintLeft > 0 && Math.random() < PENETRATE_CHANCE) continue; // pierced (damaged, intact) and rolled to keep going
       p.dead = true;
       return;
     }
@@ -1814,7 +1802,9 @@ function stepProjectile(p, dt) {
       // Player shot vs flood: PAINTS it (flips to player color,
       // instant, no HP). Penetration: the shot keeps flying, painting
       // up to paintLeft cells in its path (rock hits share this same
-      // budget), then dies. Empty/own-color pass through.
+      // budget), each step beyond the first rolling PENETRATE_CHANCE
+      // to continue (v106), then dies on budget spent or roll failed.
+      // Empty/own-color pass through.
       // No damage number: it's a flip, not damage — just a paint burst
       // in the new color. Painted territory harvests like field-grown
       // territory (fresh harvT, no leftover flood growth).
@@ -1825,8 +1815,9 @@ function stepProjectile(p, dt) {
       spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[p.color]);
       if (p.paintLeft === undefined) p.paintLeft = 1; // base depth for shots without it
       p.paintLeft--;
-      if (p.paintLeft <= 0) { p.dead = true; return; }
-      continue; // still painting: keep flying to the next cell
+      if (p.paintLeft <= 0) { p.dead = true; return; } // max depth reached, no roll needed
+      if (Math.random() >= PENETRATE_CHANCE) { p.dead = true; return; } // roll failed: stop early, budget remains
+      continue; // rolled to keep painting
     }
     // Enemy territory: normally bombed back to empty. A flood shot
     // claims it instead (the flood takes over what it washes over).
@@ -1929,16 +1920,12 @@ function checkLevel() {
 }
 
 // Card pool: turret entries feed the SHOP row (placements); the XP row
-// draws from stat cards (one per weapon stat), Bag of Gold, and passives.
+// draws from stat cards (one per weapon stat), Bag of Gold, and steer.
 // `needs` gates an upgrade on owning a turret it actually affects — no
 // steering card before you've got a rocket.
-// NOTE (v105, temporary): Bounce is OUT of the pool while Penetration
-// is evaluated alone — the two interact weirdly (a piercing shot's
-// final hit can still bounce), so Bounce is removed from selection to
-// feel Penetration clean. Physics, the passive click handler, the debug
-// knob, and S.passives all remain intact; restore by uncommenting the
-// Bounce line below. If Penetration wins against flood, this removal
-// becomes permanent (then delete the line + handler + physics).
+// No passives currently: Bounce was removed in v106, replaced by
+// Penetration — forward pierce fits the fantasy better than a random
+// ricochet back at your own cannon.
 function buildCardPool() { return [
   { kind: 'turret', type: 'cannon', title: 'Cannon', icon: ICONS.cannon, sub: 'Sweeps shots in an arc, blasting rock.' },
   { kind: 'turret', type: 'rocket', title: 'Rocket', icon: ICONS.rocket, sub: 'Fires homing missiles that crash and splash-dig.' },
@@ -1960,8 +1947,6 @@ function buildCardPool() { return [
   // run gold — the bridge to a shop unit you can see but can't afford yet.
   // Amount rolls at deal time (3–5): you see what you get before picking.
   { kind: 'gold', title: 'Bag of Gold', icon: ICONS.gold },
-  // Bounce TEMPORARILY REMOVED from selection (v105, see note above):
-  // { kind: 'passive', passive: 'bounce', title: 'Bounce', icon: ICONS.bounce, sub: 'Shots ricochet off rock.', needs: ['cannon'] },
   { kind: 'steer', mult: 1.3, title: '+30%', icon: ICONS.steer, sub: 'Missile steering', needs: ['rocket'] },
 ]; }
 let CARD_POOL = buildCardPool();
@@ -1976,7 +1961,8 @@ function availableCards() {
   // XP row: FREE cards only. Turret placements live in the shop row, so
   // no turret kind appears here at all. What remains: stat cards for
   // owned weapons (below cap; EVO'd cannon offers no more stats),
-  // Bag of Gold, passives, and the EVO capstone when earned.
+  // Bag of Gold, steer (via needs), and the EVO capstone when earned.
+  // (Passive branch below remains for future passives; none in pool.)
   const pool = CARD_POOL.filter(c => {
     if (c.kind === 'turret') return false;
     if (c.kind === 'stat') {
@@ -2083,8 +2069,6 @@ function offerCards() {
     if (p.kind === 'passive' && lv === 0) newTag = '<span class="newtag">New!</span>';
     else if (p.kind === 'passive' && lv > 0) {
       title = `${p.title} <span class="lv">Lv${lv + 1}</span>`;
-      // Show the stat change, not just the description.
-      if (p.passive === 'bounce') sub = `+${Math.round(cfg.bouncePerLevel * 100)}% bounce chance`;
     }
     else if (p.kind === 'stat') {
       // One stat, one chip: title is the stat + its NEW level, sub the effect.
@@ -2265,7 +2249,6 @@ document.querySelectorAll('#levelup .card').forEach(card => {
       const p = card.dataset.passive;
       if (S.passives[p] < 8) {
         S.passives[p]++;
-        if (p === 'bounce') S.bounceChance = Math.min(0.95, S.passives.bounce * cfg.bouncePerLevel);
       }
     } else if (kind === 'steer') {
       S.steerMult *= parseFloat(card.dataset.mult);
@@ -3188,32 +3171,9 @@ function render() {
   ctx.textBaseline = 'middle';
   ctx.fillText('× ' + S.gold, CHIP_CX - chw / 2 + 26, CHIP_CY + 1);
   ctx.restore();
-  // Passive badges, top-left under the gold chip: icon + level pips (8 max).
+  // Stat chips start under the gold chip (no passive badges anymore —
+  // Bounce removed v106, Penetration is a stat row, not a badge).
   let ppy = CHIP_CY + 32;
-  for (const key of ['bounce']) {
-    const lvl = S.passives[key];
-    if (lvl === 0) continue;
-    const bw = 96, bh = 20;
-    ctx.fillStyle = 'rgba(10, 13, 22, 0.85)';
-    rr(8, ppy, bw, bh, 6); ctx.fill();
-    ctx.lineWidth = 1; ctx.strokeStyle = '#2a3145';
-    rr(8, ppy, bw, bh, 6); ctx.stroke();
-    const iy = ppy + bh / 2;
-    ctx.strokeStyle = '#fb923c';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(13, iy + 5); ctx.lineTo(17, iy - 5);
-    ctx.lineTo(21, iy + 5); ctx.lineTo(25, iy - 5);
-    ctx.stroke();
-    // level pips
-    for (let i = 0; i < 8; i++) {
-      ctx.beginPath();
-      ctx.arc(34 + i * 7.5, iy, 2.5, 0, Math.PI * 2);
-      ctx.fillStyle = i < lvl ? '#ffd75e' : '#2a3145';
-      ctx.fill();
-    }
-    ppy += bh + 6;
-  }
   // Stat chips, top-left: one row per owned weapon stat. Each row: weapon
   // icon + 4-letter stat label + chips (gold filled / dark empty). This
   // is the progress bar you watch climb — one chip per stat pick.
@@ -3310,7 +3270,7 @@ function updateHud() {
     `<div>Blocks excavated: <b>${S.destroyed}</b> · Red turrets destroyed: <b>${S.redKills}</b></div>` +
     `<div>Map seed: <b>${S.seed}</b></div>` +
     `<div>Fire rate: <b>${effFreq}/s</b> (×${S.freqMult.toFixed(2)}) · Damage: <b>+${S.dmgBonus}</b> · Steering: <b>×${S.steerMult.toFixed(2)}</b> · Field: <b>×${S.bloomMult.toFixed(2)}</b></div>` +
-    `<div>Bounce: <b>Lv${S.passives.bounce}</b> (${Math.round(S.bounceChance * 100)}%) · Harvester: <b>${gatherCount()} per stop</b></div>` +
+    `<div>Harvester: <b>${gatherCount()} per stop</b></div>` +
     `<div>Weapons: <b>${Object.entries(S.weapons).map(([k, w]) => `${k} ${w.stats ? Object.entries(w.stats).map(([s, n]) => `${s} ${n}`).join('/') : ''} (×${w.rateMult.toFixed(2)} rate, +${w.dmgBonus} dmg${w.critChance ? `, ${Math.round(w.critChance * 100)}% crit` : ''}${w.proj ? `, +${w.proj} proj` : ''})`).join(' · ')}</b></div>` +
     `<div>Projectiles alive: <b>${S.projs.length}</b> · Missiles: <b>${S.missiles.length}</b></div>` +
     `<div>Pickups: <b>${S.coins.length}</b> on field · Gold this run: <b>${S.gold}</b> · Total: <b>${meta.gold}</b> · Red bank: <b>${S.redGold || 0}</b> (next mole <b>${redMoleCost()}</b>)</div>`;
@@ -3332,7 +3292,7 @@ function frame(now) {
 }
 
 // ---- Debug wiring: any change restarts the game ----
-[inCols, inRows, inSpeed, inFreq, inArc, inTurn, inBounce, inCave, inCoin, inSeed,
+[inCols, inRows, inSpeed, inFreq, inArc, inTurn, inCave, inCoin, inSeed,
  inPopHold, inPopDur, inPopPush, inRipple, inTrail, inGravity].forEach(el => {
   el.addEventListener('change', newGame);
 });
@@ -3454,7 +3414,7 @@ function applyUrlParams() {
   if (typeof location === 'undefined' || !location.search) return;
   const q = new URLSearchParams(location.search);
   const map = { cols: inCols, rows: inRows, speed: inSpeed, freq: inFreq, arc: inArc,
-    turn: inTurn, bounce: inBounce, cave: inCave, seed: inSeed, coin: inCoin,
+    turn: inTurn, cave: inCave, seed: inSeed, coin: inCoin,
     pophold: inPopHold, popdur: inPopDur,
     poppush: inPopPush, ripple: inRipple, trail: inTrail, gravity: inGravity,
     terrain: inTerrain, empty: inEmpty, fogdist: inFogDist };
@@ -3469,7 +3429,7 @@ document.getElementById('d-copylink').addEventListener('click', () => {
   readDebug();
   const q = new URLSearchParams({
     cols: cfg.cols, rows: cfg.rows, speed: cfg.projSpeed, freq: cfg.freq, arc: cfg.arc,
-    turn: cfg.turnRate, bounce: cfg.bouncePerLevel, cave: cfg.caveChance, seed: inSeed.value.trim(), coin: cfg.coinChance,
+    turn: cfg.turnRate, cave: cfg.caveChance, seed: inSeed.value.trim(), coin: cfg.coinChance,
     pophold: cfg.popHold, popdur: cfg.popDur, poppush: cfg.popPush,
     ripple: cfg.rippleAmp, trail: cfg.trailT, gravity: cfg.gravity,
     terrain: inTerrain.value, empty: inEmpty.value, fogdist: cfg.fogDist,
