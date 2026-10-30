@@ -17,10 +17,18 @@ const PENETRATE_CHANCE = 0.5;       // per-cell chance a piercing shot keeps goi
 const STEER_RATE = 3;               // missile turn rate, rad/s (x S.steerMult)
 const RED_DEPLOY_EVERY = 12;        // seconds between red turret deployments
 const GROW_INTERVAL = 5;            // Bloom: seconds per growth increment (x S.bloomMult)
-const GROW_STEPS = 4;              // quarters to turn a cell into territory
-// Quarter fill order for bloom growth: top-left, top-right,
-// bottom-left, bottom-right (each is a 0.5 x 0.5 mini-square).
-const GROW_QUARTERS = [[0, 0], [0.5, 0], [0, 0.5], [0.5, 0.5]];
+const GROW_STEPS = 4;              // increments to turn a cell into territory
+const GROW_ANIM_DUR = 0.5;         // centre-square growth animation, seconds per increment (render only, pacing unchanged)
+// Centre-square growth fraction: how much of the cell the growing
+// square fills, interpolating smoothly from the previous step over
+// GROW_ANIM_DUR after each increment (growT), then holding. Pure
+// render math (no game state changed), so the pacing stays exactly
+// the discrete growN steps — only the visual is smooth.
+function growthSquareFrac(n, growT, time) {
+  const t = Math.min(1, Math.max(0, (time - growT) / GROW_ANIM_DUR));
+  const ease = 1 - (1 - t) * (1 - t); // easeOut: fast start, gentle settle, no overshoot
+  return ((n - 1) + ease) / GROW_STEPS;
+}
 const BLOOM_RADIUS = 8;            // Bloom: how far (cells) it reaches for empty ground
 const HARVEST_EVERY = 8;           // territory: seconds between pickups per cell
 
@@ -1449,7 +1457,18 @@ const FLOOD_SWEEP_RATE = Math.PI / 2; // rad/s the sweep rotates (90 deg/s)
 const FLOOD_RING_EVERY = 1.2; // seconds between radial ring bursts
 const FLOOD_RING_DIRS = 24;   // directions per ring (before culling)
 const FLOOD_SPREAD_EVERY = 2; // seconds between gradual-spread ticks
-const FLOOD_SPREAD_CHANCE = 0.1; // per flood cell per spread tick: grow one adjacent EMPTY cell
+// Pressure (v110): base chance per flood cell per spread tick, AFTER
+// picking a valid target (see floodSpread). Retuned 0.1 -> 0.04: the old
+// pick-then-filter wasted most rolls on invalid directions (self, rock,
+// out of bounds), so removing those wastes speeds spread ~3x; lowering
+// the base keeps average frontier pace similar while redistributing
+// growth toward bottlenecks (see PRESSURE_BONUS_PER_SOLID).
+const FLOOD_SPREAD_CHANCE = 0.04;
+// Per solid neighbor of the growth target (rock, grey, player territory,
+// map edge, unit — NOT flood, NOT empty), chance multiplier bonus.
+// A corridor target boxed in by walls rolls much higher than an open
+// target, so flood punches through chokes fast and fans out slowly.
+const PRESSURE_BONUS_PER_SOLID = 0.25;
 const FLOOD_DIRS = ['north', 'south', 'west', 'east']; // edge the flood comes FROM
 // dir: 0 = from top, 1 = from bottom, 2 = from left, 3 = from right.
 // The emitter is a single point just outside the map on that edge —
@@ -1472,26 +1491,57 @@ function floodInit(seed) {
   floodPickDir(f, mulberry32(seed + 99991));
   return f;
 }
-// Gradual, bloom-like spread: each flood cell has a chance to grow one
-// increment on a random adjacent EMPTY cell (8-dir); 4 increments
-// (quarters, same GROW_STEPS as bloom) → flood, fresh and weak (HP 1).
-// No pickup — flood never pays. Runs always (storm or lull): the flood
-// creeps even between storms, so waiting it out doesn't work.
+// Gradual, bloom-like spread with pressure (v110): each flood cell
+// collects its valid adjacent EMPTY targets first (filter-then-pick,
+// no wasted picks on self/rock/out-of-bounds), picks one at random,
+// then rolls with a confinement bonus: the more solid neighbors the
+// target has (rock, grey, player territory, map edge, unit — not flood,
+// not empty), the higher the chance. So a corridor target boxed in by
+// walls grows fast, while an open target with many escape routes grows
+// slow — flow forced through a small opening moves faster than a mass
+// spreading into empty space. 4 increments (same GROW_STEPS as bloom)
+// → flood, fresh and weak (HP 1). No pickup — flood never pays.
+// Runs always (storm or lull): the flood creeps even between storms,
+// so waiting it out doesn't work.
 function floodSpread() {
   const W = cfg.cols, H = cfg.rows;
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const i = y * W + x;
       if (S.cells[i] !== RED) continue;
-      if (Math.random() >= FLOOD_SPREAD_CHANCE) continue;
-      const dx = Math.floor(Math.random() * 3) - 1, dy = Math.floor(Math.random() * 3) - 1;
-      if (!dx && !dy) continue;
-      const nx = x + dx, ny = y + dy;
-      if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
-      const ni = ny * W + nx;
-      if (S.cells[ni] !== EMPTY || S.growN[ni] >= GROW_STEPS) continue;
-      if (S.growBy[ni] !== 0 && S.growBy[ni] !== RED) continue;
-      if (turretAt(nx, ny)) continue;
+      // Valid targets first: EMPTY, not finished, growing for flood
+      // (or unclaimed), unoccupied. No valid target -> no attempt.
+      const targets = [];
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (!dx && !dy) continue;
+          const nx = x + dx, ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+          const ni = ny * W + nx;
+          if (S.cells[ni] !== EMPTY || S.growN[ni] >= GROW_STEPS) continue;
+          if (S.growBy[ni] !== 0 && S.growBy[ni] !== RED) continue;
+          if (turretAt(nx, ny)) continue;
+          targets.push(ni);
+        }
+      }
+      if (!targets.length) continue;
+      const ni = targets[Math.floor(Math.random() * targets.length)];
+      const nx = ni % W, ny = Math.floor(ni / W);
+      // Confinement: solid neighbors of the target (rock/grey/player
+      // territory, map edge, unit). Flood and empty don't count.
+      let solid = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (!dx && !dy) continue;
+          const mx = nx + dx, my = ny + dy;
+          if (mx < 0 || my < 0 || mx >= W || my >= H) { solid++; continue; }
+          if (turretAt(mx, my)) { solid++; continue; }
+          const mc = S.cells[my * W + mx];
+          if (mc !== EMPTY && mc !== RED) solid++;
+        }
+      }
+      const chance = FLOOD_SPREAD_CHANCE * (1 + solid * PRESSURE_BONUS_PER_SOLID);
+      if (Math.random() >= chance) continue;
       S.growN[ni]++;
       S.growBy[ni] = RED;
       S.growT[ni] = S.time;
@@ -3089,25 +3139,23 @@ function render() {
       }
     }
   }
-  // Territory growth: each increment fills one quarter of the cell with
-  // a mini-square (top-left, top-right, bottom-left, bottom-right, in
-  // that order); the newest quarter pops in with an overshoot. At
-  // GROW_STEPS the cell blooms into solid territory (handled in bloomGrowth).
+  // Territory growth: a single square growing from the cell centre.
+  // Size is growN / GROW_STEPS of the cell, interpolating smoothly
+  // from the previous step over GROW_ANIM_DUR after each increment
+  // (growT), then holding until the next increment. At GROW_STEPS
+  // the cell becomes solid territory (handled in bloomGrowth /
+  // floodSpread). One coherent shape, not fragments, so a growing
+  // cell reads as becoming solid, not broken.
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const i = y * w + x;
       const n = S.growN[i];
       if (n <= 0 || S.cells[i] !== EMPTY) continue;
       ctx.fillStyle = CELL_COLORS[S.growBy[i]];
-      for (let k = 0; k < n; k++) {
-        const [qx, qy] = GROW_QUARTERS[k];
-        let s = 1;
-        if (k === n - 1) s = Math.max(0.01, easeOutBack(Math.min(1, (S.time - S.growT[i]) / 0.2)));
-        // Scale the newest quarter around its own center so it pops in.
-        const cx = (x + qx + 0.25) * CELL_PX, cy = (y + qy + 0.25) * CELL_PX;
-        const half = 0.25 * s * CELL_PX;
-        ctx.fillRect(cx - half, cy - half, half * 2, half * 2);
-      }
+      const frac = growthSquareFrac(n, S.growT[i], S.time);
+      const size = Math.max(0.01, frac) * CELL_PX;
+      const cx = (x + 0.5) * CELL_PX, cy = (y + 0.5) * CELL_PX;
+      ctx.fillRect(cx - size / 2, cy - size / 2, size, size);
     }
   }
   // Projectiles (with white tracer trails)
