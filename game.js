@@ -110,9 +110,10 @@ function cannonMaxed() {
 // of that type. The starter Cannon is free (pre-placed); every duplicate
 // costs extra, and the price climbs as your army grows. Tunable.
 // Early game is cheap on purpose: Outpost 2 (base expansion), Field 3
-// (early resources), Digger 4 (early exploration) — the flood starts at
-// 5 min, so you need cheap options before you can level the cannon.
-const UNIT_COST = { cannon: 10, mole: 4, bloom: 3, gather: 6, lantern: 2, wall: 2, laser: 20 };
+// (early resources), Digger 4 (early exploration), Waypoint 5 (cannon
+// aiming) — the flood starts at 5 min, so you need cheap options before
+// you can level the cannon.
+const UNIT_COST = { cannon: 10, mole: 4, bloom: 3, gather: 6, lantern: 2, wall: 2, laser: 20, waypoint: 5 };
 const UNIT_COST_STEP = 5;
 const LANTERN_COST_STEP = 1; // outposts stay cheap so chaining them to extend the base is affordable
 function unitCost(type) {
@@ -146,6 +147,7 @@ const ICONS_ORIG = {
   mole: '<svg viewBox="0 0 24 24" width="36" height="36"><ellipse cx="12" cy="14" rx="7" ry="5" fill="#8b5a2b"/><circle cx="9" cy="12" r="1.2" fill="#1a2138"/><circle cx="15" cy="12" r="1.2" fill="#1a2138"/><polygon points="12,16 10,19 14,19" fill="#d4a574"/></svg>',
   gold: '<svg viewBox="0 0 24 24" width="36" height="36"><path d="M12 9 C8 9 5.5 12 5.5 15.5 C5.5 19 8.5 21.5 12 21.5 C15.5 21.5 18.5 19 18.5 15.5 C18.5 12 16 9 12 9 Z" fill="#f5b301" stroke="#b8860b" stroke-width="1.5"/><rect x="10.5" y="3.5" width="3" height="5.5" rx="1" fill="#b8860b"/></svg>',
   teleport: '<svg viewBox="0 0 24 24" width="36" height="36"><path d="M4 18 C4 8 20 8 20 18" fill="none" stroke="#ef4444" stroke-width="2.5"/><polygon points="20,18 16.5,15.5 17.5,19.5" fill="#ef4444"/><circle cx="4" cy="18" r="2.5" fill="#ef4444"/></svg>',
+  waypoint: '<svg viewBox="0 0 24 24" width="36" height="36"><circle cx="12" cy="12" r="8" fill="none" stroke="#ef4444" stroke-width="2"/><circle cx="12" cy="12" r="2.5" fill="#ef4444"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4" stroke="#ef4444" stroke-width="2"/></svg>',
 };
 function buildIcons(playerHex) {
   const o = {};
@@ -297,6 +299,29 @@ function drawMinimap() {
     if (t.dead) continue;
     mmctx.fillStyle = CELL_COLORS[t.color];
     mmctx.fillRect(t.x * px, t.y * px, px, px);
+  }
+  // Rescue (survival only): moving civilians show as pink pixels (so
+  // you can track the walk home); undiscovered sites show a pink ?
+  // at the site anchor, shining through fog — the ? disappears once
+  // the site clears (you can see the blobs on the main map then) or
+  // once every civilian from that site is rescued.
+  if (SURVIVAL && S.rescue) {
+    for (const c of (S.rescue.civilians || [])) {
+      if (c.state !== 'moving') continue;
+      mmctx.fillStyle = CIV_PINK;
+      mmctx.fillRect(c.x * px, c.y * px, px, px);
+    }
+    for (let si = 0; si < (S.rescue.sites || []).length; si++) {
+      const site = S.rescue.sites[si];
+      const remaining = (S.rescue.civilians || []).some(c => c.site === si);
+      if (!remaining) continue;
+      if (S.fog[site.y * cols + site.x] === 0) continue; // discovered: no ? needed
+      mmctx.fillStyle = CIV_PINK;
+      mmctx.font = 'bold 10px sans-serif';
+      mmctx.textAlign = 'center';
+      mmctx.textBaseline = 'middle';
+      mmctx.fillText('?', site.x * px + 1, site.y * px + 1);
+    }
   }
   // Incoming-storm warning (survival, early lull only): a gently
   // pulsing yellow line on the minimap edge the next storm comes
@@ -1012,6 +1037,156 @@ function flagValid(t) {
   if (occ && occ !== t) return false;
   return true;
 }
+// ---- Rescue sites (survival only) ----
+// Pick RESCUE_SITES pockets, 1-5 civilians each (capped by pocket size).
+// One site per separate pocket first (spread across the map), then extra
+// sites in already-used pockets, then home-pocket cells as a last resort
+// — so a run always has 3 sites, even on a map with no separate pockets.
+// Uses the map-gen rng (same seed -> same sites); cells themselves are
+// untouched, so the map stays identical to main for the same seed.
+function pickRescueSites(rng) {
+  if (!SURVIVAL || !S || !S.cells) return;
+  const W = cfg.cols, H = cfg.rows, n = W * H;
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  // Components over EMPTY (4-dir, turret cells count as EMPTY for
+  // connectivity — same definition as computeFog's home region, so a
+  // "separate pocket" really is disconnected until you dig to it).
+  const comp = new Int32Array(n).fill(-1);
+  let compCount = 0;
+  for (let i = 0; i < n; i++) {
+    if (S.cells[i] !== EMPTY || comp[i] >= 0) continue;
+    const q = [i]; comp[i] = compCount; let head = 0;
+    while (head < q.length) {
+      const cur = q[head++];
+      const cx = cur % W, cy = Math.floor(cur / W);
+      for (const [dx, dy] of DIRS) {
+        const nx = cx + dx, ny = cy + dy;
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+        const ni = ny * W + nx;
+        if (S.cells[ni] !== EMPTY || comp[ni] >= 0) continue;
+        comp[ni] = compCount; q.push(ni);
+      }
+    }
+    compCount++;
+  }
+  // Home component = the one holding the starter cannon.
+  let homeComp = -1;
+  for (const t of S.turrets) {
+    if (!t.dead && t.color === BLUE) { homeComp = comp[t.y * W + t.x]; break; }
+  }
+  // Pockets: component index -> cell list (turret-free cells only, so a
+  // civilian never starts stacked on a turret).
+  const pockets = new Map();
+  for (let i = 0; i < n; i++) {
+    if (S.cells[i] !== EMPTY || comp[i] < 0) continue;
+    const x = i % W, y = Math.floor(i / W);
+    if (turretAt(x, y)) continue;
+    if (!pockets.has(comp[i])) pockets.set(comp[i], []);
+    pockets.get(comp[i]).push(i);
+  }
+  const separate = [];
+  for (const [ci, cellsList] of pockets) {
+    if (ci !== homeComp) separate.push(cellsList);
+  }
+  // Shuffle pockets with the map rng (same seed -> same sites).
+  for (let i = separate.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [separate[i], separate[j]] = [separate[j], separate[i]];
+  }
+  const used = new Set(); // cell indices already holding a civilian
+  const sites = [];
+  const addSite = (cellList) => {
+    const avail = cellList.filter(i => !used.has(i));
+    if (!avail.length) return false;
+    for (let i = avail.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      [avail[i], avail[j]] = [avail[j], avail[i]];
+    }
+    const count = Math.min(CIV_MIN + Math.floor(rng() * (CIV_MAX - CIV_MIN + 1)), avail.length);
+    const siteIdx = sites.length;
+    const anchor = avail[0];
+    for (let k = 0; k < count; k++) {
+      const ci = avail[k];
+      used.add(ci);
+      S.rescue.civilians.push({ x: ci % W, y: Math.floor(ci / W), rx: ci % W, ry: Math.floor(ci / W),
+                               moveT: 1, stepT: 0, state: 'waiting', site: siteIdx });
+    }
+    sites.push({ x: anchor % W, y: Math.floor(anchor / W) });
+    return true;
+  };
+  // One site per separate pocket first (spread across the map).
+  for (const pocket of separate) {
+    if (sites.length >= RESCUE_SITES) break;
+    addSite(pocket);
+  }
+  // Fallback: extra sites in already-used pockets (different cells),
+  // then home pocket cells, until we have 3 sites or run out of cells.
+  if (sites.length < RESCUE_SITES) {
+    for (const pocket of separate) {
+      if (sites.length >= RESCUE_SITES) break;
+      addSite(pocket);
+    }
+  }
+  if (sites.length < RESCUE_SITES && homeComp >= 0 && pockets.has(homeComp)) {
+    while (sites.length < RESCUE_SITES) {
+      if (!addSite(pockets.get(homeComp))) break;
+    }
+  }
+  S.rescue.sites = sites;
+  S.rescue.total = S.rescue.civilians.length;
+  S.rescue.rescued = 0;
+}
+// Rescue target: a living BLUE Cannon or Outpost counts as base (Field,
+// Harvester, Digger, Laser do not — Sam's spec: cannon or outpost for
+// now). A civilian is rescued when it stands adjacent to one.
+function isBaseAdjacent(cx, cy) {
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  for (const [dx, dy] of DIRS) {
+    const t = turretAt(cx + dx, cy + dy);
+    if (t && !t.dead && t.color === BLUE && (t.type === 'cannon' || t.type === 'lantern')) return true;
+  }
+  return false;
+}
+// BFS next step toward the nearest base-adjacent cell (see isBaseAdjacent),
+// over EMPTY / own BLUE, turret cells blocked. Returns a direction index
+// (0 up, 1 right, 2 down, 3 left) for the first step, or null when already
+// base-adjacent (caller rescues instead of moving) or unreachable (no
+// path yet — the civilian waits until you dig one open).
+function civilianPathNext(sx, sy) {
+  if (isBaseAdjacent(sx, sy)) return null;
+  const W = cfg.cols, H = cfg.rows;
+  const blocked = new Set();
+  for (const t of S.turrets) if (!t.dead) blocked.add(t.y * W + t.x);
+  const dist = new Int32Array(W * H).fill(-1);
+  const prev = new Int32Array(W * H).fill(-1);
+  const start = sy * W + sx;
+  const q = [start]; dist[start] = 0;
+  const dirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+  let head = 0, target = -1;
+  while (head < q.length) {
+    const cur = q[head++];
+    const cx = cur % W, cy = Math.floor(cur / W);
+    if (cur !== start && isBaseAdjacent(cx, cy)) { target = cur; break; }
+    for (let d = 0; d < 4; d++) {
+      const nx = cx + dirs[d][0], ny = cy + dirs[d][1];
+      if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+      const ni = ny * W + nx;
+      if (dist[ni] >= 0 || (blocked.has(ni) && ni !== start)) continue;
+      const st = S.cells[ni];
+      if (st !== EMPTY && st !== BLUE) continue;
+      dist[ni] = dist[cur] + 1; prev[ni] = cur; q.push(ni);
+    }
+  }
+  if (target < 0) return null;
+  let cur = target;
+  while (prev[cur] !== -1 && prev[cur] !== start) cur = prev[cur];
+  if (prev[cur] === -1) return null;
+  const fx = cur % W, fy = Math.floor(cur / W);
+  if (fx - sx === 1) return 1;
+  if (fx - sx === -1) return 3;
+  if (fy - sy === 1) return 2;
+  return 0;
+}
 // Greedy direction from (cx, cy) toward the nearest blue turret: pick the
 // axis with the larger gap (dirs: 0 up, 1 right, 2 down, 3 left). This is
 // how red moles encroach instead of wandering.
@@ -1150,6 +1325,12 @@ function newGame() {
         turrets: [], missiles: [], beams: [],
         wave: 0, redQueue: [], redTimer: 0, waveBreak: 0, redKills: 0,
         placing: null, runOver: false,
+        // rescue (survival only, populated by pickRescueSites below):
+        // sites = anchor cells for the minimap ?, civilians walk home.
+        rescue: { sites: [], civilians: [], rescued: 0, total: 0 },
+        // waypoints (survival shop only): gold aim markers, not turrets —
+        // cannons orient to the nearest one (see cannon update).
+        waypoints: [],
         dmgBonus: 0, steerMult: 1,
         // territory (Tiberium fields): per-cell growth progress
         growN: new Uint8Array(n), growBy: new Uint8Array(n), growT: new Float32Array(n),
@@ -1287,6 +1468,7 @@ function newGame() {
       S.redBloomSpawned = true;
     }
   }
+  if (SURVIVAL) pickRescueSites(rng); // 3 cave pockets, 1-5 civilians each (see pickRescueSites)
   startWave(1);
   computeFog();   // fog of war: only the home cave + fogDist is visible
 
@@ -1423,7 +1605,8 @@ function checkRunOver() {
       ? 'Flood storms <b>' + (S.flood ? S.flood.storms : 0) + '</b> · Level <b>' + S.level + '</b><br>' +
         'Survived <b>' + Math.round(S.time) + 's</b> · ' +
         'Excavated <b>' + S.destroyed + '</b> · ' +
-        'Gold <b>' + meta.gold + '</b>'
+        'Gold <b>' + meta.gold + '</b><br>' +
+        'Civilians rescued <b>' + (S.rescue ? S.rescue.rescued : 0) + '/' + (S.rescue ? S.rescue.total : 0) + '</b>'
       : 'Wave <b>' + S.wave + '</b> · Level <b>' + S.level + '</b><br>' +
         'Survived <b>' + Math.round(S.time) + 's</b> · ' +
         'Excavated <b>' + S.destroyed + '</b> · ' +
@@ -1470,6 +1653,17 @@ const FLOOD_SPREAD_CHANCE = 0.04;
 // target, so flood punches through chokes fast and fans out slowly.
 const PRESSURE_BONUS_PER_SOLID = 0.25;
 const FLOOD_DIRS = ['north', 'south', 'west', 'east']; // edge the flood comes FROM
+// Rescue (v112): 3 sites in random cave pockets, 1-5 civilians each
+// (capped by pocket size — a 2-cell pocket holds 2, not 5). Civilians
+// wait, hidden by fog, until their cell clears, then walk home 1 cell
+// per second (Harvester pace) to the nearest Cannon or Outpost. They
+// never die in v112 (flood can trap them, painting them back out frees
+// them) — death/stakes are a later tuning call, not a v112 mechanic.
+const RESCUE_SITES = 3;
+const CIV_MIN = 1;
+const CIV_MAX = 5;
+const CIV_STEP_DUR = 1.0; // seconds per civilian step — slow on purpose, like Harvester
+const CIV_PINK = '#f472b6'; // civilian blob + minimap ? + rescue burst, one pink everywhere
 // dir: 0 = from top, 1 = from bottom, 2 = from left, 3 = from right.
 // The emitter is a single point just outside the map on that edge —
 // never seen, only its effects creeping in. Each storm picks a new
@@ -2040,6 +2234,7 @@ function buildCardPool() { return [
   { kind: 'turret', type: 'gather', title: 'Harvester', icon: ICONS.gather, sub: 'Steps onto pickups to collect them, slowly.' },
   { kind: 'turret', type: 'mole', title: 'Digger', icon: ICONS.mole, sub: 'Digs tunnels through rock.' },
   { kind: 'turret', type: 'wall', title: 'Wall', icon: ICONS.wall, sub: '2x2 defensive barrier.' },
+  { kind: 'turret', type: 'waypoint', title: 'Waypoint', icon: ICONS.waypoint, sub: 'Cannons aim at the nearest waypoint.' },
   // Stat cards, generated from STAT_DEFS (cannon/bloom/gather only — mole
   // dig advances via the shop bundle, never as a free XP pick; shopOnly
   // stats like projectiles are bought with gold, not XP).
@@ -2119,12 +2314,12 @@ function availableCards() {
 // Unaffordable ones still show (greyed) so you can see what to save for.
 function availableShopCards() {
   if (SURVIVAL) {
-    // Full shop (no proj — it's an XP hybrid now): all 7 placements,
+    // Full shop (no proj — it's an XP hybrid now): all 8 placements,
     // cost order (cheapest first) so you can plan ahead. No draw.
     // Laser is the pricey late-game anti-flood unit (20, last).
     // Start-screen toggles filter it: only enabled items appear
     // (missing = enabled, explicit false = excluded from the run).
-    const types = ['cannon', 'mole', 'bloom', 'gather', 'lantern', 'wall', 'laser']
+    const types = ['cannon', 'mole', 'bloom', 'gather', 'lantern', 'wall', 'laser', 'waypoint']
       .filter(t => !(meta && meta.enabled && meta.enabled[t] === false));
     const pool = CARD_POOL.filter(c => c.kind === 'turret' && types.includes(c.type)).map(c => ({
       ...c, cost: unitCost(c.type), owned: !!S.weapons[c.type],
@@ -2429,11 +2624,18 @@ function nearBase(cx, cy) {
   return false;
 }
 function enterPlacement(type) {  S.placing = { type };
-  placebanner.innerHTML = SURVIVAL
-    ? (type === 'lantern'
-        ? 'Tap near your base or any clear open cell to deploy <b>Outpost</b>'
-        : 'Tap near your base to deploy <b>' + TURRET[type].name + '</b>')
-    : 'Tap the map to deploy <b>' + TURRET[type].name + '</b>';
+  if (type === 'waypoint') {
+    // Waypoints bypass the base discs: any clear cell, any ground
+    // (rock, territory, cave — you aim at walls, not just open ground).
+    // Same rule on both branches (main is fog-gated anyway).
+    placebanner.innerHTML = 'Tap any clear cell to deploy <b>Waypoint</b>';
+  } else {
+    placebanner.innerHTML = SURVIVAL
+      ? (type === 'lantern'
+          ? 'Tap near your base or any clear open cell to deploy <b>Outpost</b>'
+          : 'Tap near your base to deploy <b>' + TURRET[type].name + '</b>')
+      : 'Tap the map to deploy <b>' + TURRET[type].name + '</b>';
+  }
   placebanner.classList.remove('hidden');
 }
 function placeTurretAt(sx, sy) {
@@ -2477,6 +2679,33 @@ function placeTurretAt(sx, sy) {
     // No turret, no weapon entry — walls are terrain. (So the shop card
     // keeps showing New! + the description every time, which is fine:
     // each wall IS new.)
+    S.placing = null;
+    placebanner.classList.add('hidden');
+    if (!S.runOver) {
+      if (S.pending > 0) {
+        offerCards(); offerShopCards();
+        overlay.classList.remove('hidden');
+      } else {
+        S.paused = false;
+      }
+    }
+    return;
+  }
+  if (type === 'waypoint') {
+    // Waypoint marker (not a turret, no weapon entry — so the shop cost
+    // stays flat 5, like Wall's flat 2): any fog-clear cell, any ground
+    // (rock, territory, cave), but not on a turret (a waypoint on its
+    // own cannon would aim at itself) and not on another waypoint.
+    // No nearBase check — "anywhere not fog" is the whole point.
+    const pi = cy * cfg.cols + cx;
+    if (!S.waypoints) S.waypoints = [];
+    const dup = S.waypoints.some(w => w.x === cx && w.y === cy);
+    if (dup || turretAt(cx, cy) || S.fog[pi] !== 0) {
+      S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
+      return;
+    }
+    S.waypoints.push({ x: cx, y: cy });
+    spawnBurst(cx + 0.5, cy + 0.5, '#ffd75e'); // gold, matching the marker
     S.placing = null;
     placebanner.classList.add('hidden');
     if (!S.runOver) {
@@ -2684,6 +2913,20 @@ function update(dt) {
     if (t.rx !== undefined) t.moveT += dt;
     const rateMult = cfg.freq * (t.color === BLUE ? S.freqMult : 1) * weaponRateMult(t);
     if (t.type === 'cannon') {
+      // Waypoint aim (BLUE only): if any waypoint exists, the arc
+      // centre re-aims at the nearest waypoint each frame (so a
+      // teleported cannon re-aims from its new spot automatically).
+      // Arc, sweep, and turn rate are unchanged — only the centre
+      // moves. No waypoints = base untouched (map-centre aim, as set
+      // at placement / teleport). Red cannons never use waypoints.
+      if (t.color === BLUE && S.waypoints && S.waypoints.length) {
+        let best = null, bd = Infinity;
+        for (const w of S.waypoints) {
+          const d2 = (w.x - t.x) ** 2 + (w.y - t.y) ** 2;
+          if (d2 < bd) { bd = d2; best = w; }
+        }
+        if (best) t.base = Math.atan2(best.y - t.y, best.x - t.x);
+      }
       // Sweep the aim within the turn arc (full 360 = continuous spin)
       if (cfg.arc >= 360) {
         t.angle += turnRate * dt;
@@ -2835,6 +3078,36 @@ function update(dt) {
     }
   }
   S.turrets = S.turrets.filter(t => !t.dead);
+  // Civilians (survival only): wait, hidden by fog, until their cell
+  // clears, then walk home 1 cell per second to the nearest Cannon or
+  // Outpost (BFS each step, so tunnels opening / bases moving / flood
+  // blocking all reroute automatically). No path yet = wait in place.
+  // Reaching base-adjacent = rescued (burst, count, removed). No death.
+  if (SURVIVAL && S.rescue && S.rescue.civilians) {
+    for (const c of S.rescue.civilians) {
+      if (c.rescued) continue;
+      if (c.rx !== undefined) c.moveT += dt; // glide clock, like turrets
+      c.stepT = (c.stepT || 0) + dt;
+      if (c.stepT < CIV_STEP_DUR) continue;
+      c.stepT = 0;
+      if (c.state === 'waiting') {
+        if (S.fog[c.y * cfg.cols + c.x] !== 0) continue; // still hidden: wait
+        c.state = 'moving'; // discovered: start escaping now, same tick
+      }
+      if (isBaseAdjacent(c.x, c.y)) {
+        c.rescued = true;
+        S.rescue.rescued++;
+        spawnBurst(c.x + 0.5, c.y + 0.5, CIV_PINK);
+        continue;
+      }
+      const nd = civilianPathNext(c.x, c.y);
+      if (nd === null) continue; // no path yet: wait for a tunnel / base
+      const dirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+      c.rx = c.x; c.ry = c.y; c.moveT = 0;
+      c.x += dirs[nd][0]; c.y += dirs[nd][1];
+    }
+    S.rescue.civilians = S.rescue.civilians.filter(c => !c.rescued);
+  }
   for (const p of S.projs) stepProjectile(p, dt);
   if (S.projs.length > 4000) S.projs.splice(0, S.projs.length - 4000); // safety valve
   S.projs = S.projs.filter(p => !p.dead);
@@ -3343,6 +3616,35 @@ function render() {
       ctx.fillRect(px - w / 2, py - 18, w * k, 5);
     }
   }
+  // Civilians (survival only): pink blobs, gliding cell to cell like
+  // Harvesters (step duration = glide duration, so they walk smoothly).
+  // Rendered BEFORE fog, so waiting civilians in fogged caves stay
+  // hidden — only the minimap ? hints at them until discovery.
+  if (SURVIVAL && S.rescue && S.rescue.civilians) {
+    for (const c of S.rescue.civilians) {
+      let dx = c.x, dy = c.y;
+      if (c.rx !== undefined && c.moveT < CIV_STEP_DUR) {
+        const k = c.moveT / CIV_STEP_DUR;
+        dx = c.rx + (c.x - c.rx) * k;
+        dy = c.ry + (c.y - c.ry) * k;
+      }
+      const px = (dx + 0.5) * CELL_PX, py = (dy + 0.5) * CELL_PX;
+      ctx.beginPath(); ctx.arc(px, py, 5, 0, Math.PI * 2);
+      ctx.fillStyle = CIV_PINK; ctx.fill();
+      ctx.lineWidth = 1.5; ctx.strokeStyle = '#0b0e16'; ctx.stroke();
+    }
+  }
+  // Waypoints (survival only): gold crosshairs, before fog (waypoints
+  // only ever sit on clear cells, so fog never covers them anyway).
+  if (SURVIVAL && S.waypoints) {
+    for (const w of S.waypoints) {
+      const px = (w.x + 0.5) * CELL_PX, py = (w.y + 0.5) * CELL_PX;
+      ctx.strokeStyle = '#ffd75e'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(px, py, 6, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = '#ffd75e';
+      ctx.beginPath(); ctx.arc(px, py, 2, 0, Math.PI * 2); ctx.fill();
+    }
+  }
   // Build range (survival, proximity-gated units): while placing, show
   // the discs around your base units that a new unit must land inside.
   // A tap outside every disc is why the red ring rejects it. Outpost
@@ -3604,6 +3906,29 @@ function tapCoin(sx, sy) {
   }
   return false;
 }
+// Waypoint removal (not requested, but a misplaced waypoint would
+// otherwise hijack a cannon's aim for the whole run): tap the exact
+// waypoint cell during normal play to remove it, free. Placement taps
+// never remove (they refuse duplicates with a red ring instead), so
+// removal never charges gold. Last removal reverts BLUE cannons to
+// map-centre aim (placement formula, so aim returns exactly).
+function tryWaypointRemove(sx, sy) {
+  if (!S.waypoints || !S.waypoints.length) return false;
+  const wpt = screenToWorld(sx, sy);
+  const cx = Math.floor(wpt.x / CELL_PX), cy = Math.floor(wpt.y / CELL_PX);
+  const idx = S.waypoints.findIndex(w => w.x === cx && w.y === cy);
+  if (idx < 0) return false;
+  S.waypoints.splice(idx, 1);
+  spawnBurst(cx + 0.5, cy + 0.5, '#9ca3af'); // grey puff: marker gone
+  if (!S.waypoints.length) {
+    for (const t of S.turrets) {
+      if (!t.dead && t.color === BLUE && t.type === 'cannon') {
+        t.base = Math.atan2(cfg.rows / 2 - t.y, cfg.cols / 2 - t.x);
+      }
+    }
+  }
+  return true;
+}
 const pointers = new Map(); // pointerId -> {x, y} in client px
 let pinchD0 = 0;
 let downPos = null, panning = false;
@@ -3643,7 +3968,7 @@ function endPointer(e) {
       if (S.placing) placeTurretAt(downPos.x, downPos.y); // placement eats the tap
       else if (S.teleporting) handleTeleportTap(downPos.x, downPos.y); // teleport eats the tap
       else if (tryChipDoubleTap(downPos.x, downPos.y)) { /* debug level grant */ }
-      else tapCoin(downPos.x, downPos.y); // tap a coin to collect it; anything else does nothing
+      else if (!tapCoin(downPos.x, downPos.y)) tryWaypointRemove(downPos.x, downPos.y); // coin first (a coin on a waypoint collects, it does not remove it), then free waypoint removal
     }
     downPos = null; panning = false;
   } else if (pointers.size === 1) {
@@ -3771,7 +4096,7 @@ function renderShopToggles() {
   // enabled (all on by default). The starter cannon is always placed
   // even if cannon is toggled off — the toggle only stops the shop
   // offering cannon duplicates, it never removes the starter.
-  const types = ['cannon', 'mole', 'bloom', 'gather', 'lantern', 'wall', 'laser'];
+  const types = ['cannon', 'mole', 'bloom', 'gather', 'lantern', 'wall', 'laser', 'waypoint'];
   for (const type of types) {
     const b = document.getElementById('toggle-' + type);
     if (!b) continue;
