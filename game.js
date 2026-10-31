@@ -300,14 +300,16 @@ function drawMinimap() {
     mmctx.fillStyle = CELL_COLORS[t.color];
     mmctx.fillRect(t.x * px, t.y * px, px, px);
   }
-  // Rescue (survival only): moving civilians show as pink pixels (so
-  // you can track the walk home); undiscovered sites show a pink ?
-  // at the site anchor, shining through fog — the ? disappears once
-  // the site clears (you can see the blobs on the main map then) or
-  // once every civilian from that site is rescued.
+  // Rescue (survival only): moving + settled civilians show as pink
+  // pixels (so you can track the walk home and the crowd around a
+  // base); undiscovered sites show a pink ? at the site anchor,
+  // shining through fog — the ? disappears once the site clears (you
+  // can see the blobs on the main map then). Civilians are never
+  // removed now (v113: they congregate, not vanish), so the ? is
+  // purely fog-gated.
   if (SURVIVAL && S.rescue) {
     for (const c of (S.rescue.civilians || [])) {
-      if (c.state !== 'moving') continue;
+      if (c.state !== 'moving' && c.state !== 'settled') continue;
       mmctx.fillStyle = CIV_PINK;
       mmctx.fillRect(c.x * px, c.y * px, px, px);
     }
@@ -1109,7 +1111,8 @@ function pickRescueSites(rng) {
       const ci = avail[k];
       used.add(ci);
       S.rescue.civilians.push({ x: ci % W, y: Math.floor(ci / W), rx: ci % W, ry: Math.floor(ci / W),
-                               moveT: 1, stepT: 0, state: 'waiting', site: siteIdx });
+                               moveT: 1, stepT: 0, state: 'waiting', site: siteIdx,
+                               counted: false, baseX: -1, baseY: -1 });
     }
     sites.push({ x: anchor % W, y: Math.floor(anchor / W) });
     return true;
@@ -1167,6 +1170,75 @@ function civilianPathNext(sx, sy) {
     const cur = q[head++];
     const cx = cur % W, cy = Math.floor(cur / W);
     if (cur !== start && isBaseAdjacent(cx, cy)) { target = cur; break; }
+    for (let d = 0; d < 4; d++) {
+      const nx = cx + dirs[d][0], ny = cy + dirs[d][1];
+      if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+      const ni = ny * W + nx;
+      if (dist[ni] >= 0 || (blocked.has(ni) && ni !== start)) continue;
+      const st = S.cells[ni];
+      if (st !== EMPTY && st !== BLUE) continue;
+      dist[ni] = dist[cur] + 1; prev[ni] = cur; q.push(ni);
+    }
+  }
+  if (target < 0) return null;
+  let cur = target;
+  while (prev[cur] !== -1 && prev[cur] !== start) cur = prev[cur];
+  if (prev[cur] === -1) return null;
+  const fx = cur % W, fy = Math.floor(cur / W);
+  if (fx - sx === 1) return 1;
+  if (fx - sx === -1) return 3;
+  if (fy - sy === 1) return 2;
+  return 0;
+}
+// Civilian on a cell (any state), or null — so placement never stacks a
+// turret / wall / waypoint on a civilian (v113).
+function civilianAt(cx, cy) {
+  if (!SURVIVAL || !S.rescue || !S.rescue.civilians) return null;
+  for (const c of S.rescue.civilians) if (c.x === cx && c.y === cy) return c;
+  return null;
+}
+// Congregation (v113): the base a civilian may settle around, or null.
+// A cell is settleable when it is open ground (EMPTY/BLUE), not turret-
+// occupied, not already holding another civilian (self excluded — the
+// caller is standing there), and within CIV_SETTLE_RADIUS (Manhattan)
+// of a living BLUE Cannon or Outpost. Nearest such base wins when a
+// cell sits between two bases (that base is "the base they chose").
+function civilianSettleBase(cx, cy, self) {
+  if (cx < 0 || cy < 0 || cx >= cfg.cols || cy >= cfg.rows) return null;
+  const st = S.cells[cy * cfg.cols + cx];
+  if (st !== EMPTY && st !== BLUE) return null;
+  if (turretAt(cx, cy)) return null;
+  for (const c of (S.rescue.civilians || [])) {
+    if (c !== self && c.x === cx && c.y === cy) return null;
+  }
+  let best = null, bd = Infinity;
+  for (const t of S.turrets) {
+    if (t.dead || t.color !== BLUE || (t.type !== 'cannon' && t.type !== 'lantern')) continue;
+    const d = Math.abs(t.x - cx) + Math.abs(t.y - cy);
+    if (d <= CIV_SETTLE_RADIUS && d < bd) { bd = d; best = t; }
+  }
+  return best;
+}
+// BFS next step toward the nearest settleable cell (see
+// civilianSettleBase), over EMPTY / own BLUE, turret cells blocked.
+// Settled cells are pass-through for transit (otherwise a crowd in a
+// corridor would deadlock) — only the settle target must be free, so
+// final resting cells never overlap. Returns a direction index, or
+// null when no free spot is reachable yet.
+function civilianSettleNext(sx, sy, self) {
+  const W = cfg.cols, H = cfg.rows;
+  const blocked = new Set();
+  for (const t of S.turrets) if (!t.dead) blocked.add(t.y * W + t.x);
+  const dist = new Int32Array(W * H).fill(-1);
+  const prev = new Int32Array(W * H).fill(-1);
+  const start = sy * W + sx;
+  const q = [start]; dist[start] = 0;
+  const dirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+  let head = 0, target = -1;
+  while (head < q.length) {
+    const cur = q[head++];
+    const cx = cur % W, cy = Math.floor(cur / W);
+    if (cur !== start && civilianSettleBase(cx, cy, self)) { target = cur; break; }
     for (let d = 0; d < 4; d++) {
       const nx = cx + dirs[d][0], ny = cy + dirs[d][1];
       if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
@@ -1335,6 +1407,11 @@ function newGame() {
         // territory (Tiberium fields): per-cell growth progress
         growN: new Uint8Array(n), growBy: new Uint8Array(n), growT: new Float32Array(n),
         bloomMult: 1, harvT: new Float32Array(n),
+        // paint (v113): 1 = cannon-painted territory, no harvest (Field
+        // still owns resources); 0 = Field-grown or flipped flood, harvests.
+        // Painted cells render, count for %, and block exactly like field
+        // cells — only harvest (and placement, see placeTurretAt) cares.
+        noHarvest: new Uint8Array(n),
         // fog of war: 0 = clear, 1 = half, 2 = full (black)
         fog: new Uint8Array(n).fill(2) };
   // Survival: the flood controller (random edge, wave timer). Its own
@@ -1664,6 +1741,7 @@ const CIV_MIN = 1;
 const CIV_MAX = 5;
 const CIV_STEP_DUR = 1.0; // seconds per civilian step — slow on purpose, like Harvester
 const CIV_PINK = '#f472b6'; // civilian blob + minimap ? + rescue burst, one pink everywhere
+const CIV_SETTLE_RADIUS = 2; // Manhattan distance from a base a civilian may settle (v113: congregate, not vanish)
 // dir: 0 = from top, 1 = from bottom, 2 = from left, 3 = from right.
 // The emitter is a single point just outside the map on that edge —
 // never seen, only its effects creeping in. Each storm picks a new
@@ -1743,6 +1821,7 @@ function floodSpread() {
         S.cells[ni] = RED;
         S.hp[ni] = 0; S.maxhp[ni] = 0; S.harvT[ni] = 0; // no HP on flood
         S.growN[ni] = 0; S.growBy[ni] = 0;
+        if (S.noHarvest) S.noHarvest[ni] = 0;
         spawnBurst(nx + 0.5, ny + 0.5, CELL_COLORS[RED]);
         S.rings.push({ x: nx + 0.5, y: ny + 0.5, t: 0, css: CELL_COLORS[RED], dead: false });
       }
@@ -1949,6 +2028,7 @@ function fireLaser(t) {
     S.cells[i] = t.color;
     S.growN[i] = 0; S.growBy[i] = 0; S.harvT[i] = 0;
     S.hp[i] = 0; S.maxhp[i] = 0;
+    if (S.noHarvest) S.noHarvest[i] = 0; // laser-painted flood: harvests like field (v97)
     spawnBurst(tgt.x + 0.5, tgt.y + 0.5, CELL_COLORS[t.color]);
     return;
   }
@@ -2007,6 +2087,7 @@ function bloomGrowth(t) {
     // Bloomed: the cell becomes solid territory.
     S.cells[bi] = t.color;
     S.growN[bi] = 0; S.growBy[bi] = 0;
+    if (S.noHarvest) S.noHarvest[bi] = 0; // Field-grown: harvests
     spawnBurst(bx + 0.5, by + 0.5, CELL_COLORS[t.color]);
     S.rings.push({ x: bx + 0.5, y: by + 0.5, t: 0, css: CELL_COLORS[t.color], dead: false });
     // A finished bloom drops a pickup: usually XP, sometimes gold.
@@ -2074,6 +2155,7 @@ function stepProjectile(p, dt) {
           S.cells[idx] = p.color;
           S.hp[idx] = 0; S.maxhp[idx] = 0; S.harvT[idx] = 0;
           S.growN[idx] = 0; S.growBy[idx] = 0;
+          if (S.noHarvest) S.noHarvest[idx] = 0;
         }
         if (p.paintLeft > 0 && !p.flood && Math.random() < PENETRATE_CHANCE) continue; // broke through and rolled to keep going
         p.dead = true; return;
@@ -2082,7 +2164,33 @@ function stepProjectile(p, dt) {
       p.dead = true;
       return;
     }
-    if (cell === EMPTY || cell === p.color) { p.lastRockIdx = -1; continue; } // left rock: a later re-entry hits again
+    if (cell === EMPTY) {
+      p.lastRockIdx = -1;
+      // Paint trail (v113, survival only): a shot paints open ground
+      // as it flies — player cannon paints player color, storm paints
+      // flood color — free, no paintLeft cost (it's a trail, not a
+      // depth budget), and the shot keeps flying. Only player shots
+      // (BLUE) and flood shots (p.flood) paint — enemy-cannon shots
+      // (RED, not flood, which don't exist in survival play, only in
+      // tests) pass through empty as before, so red excavation still
+      // leaves empty ground, not flood color. Growing cells are left
+      // alone (growN > 0): Field growth completes to harvestable
+      // territory, flood spread completes to flood, instead of being
+      // stolen mid-growth. No burst per painted cell (a burst every
+      // cell would spam particles) — the trail itself is the visual.
+      // Shading is automatic: colored cells render with elevation
+      // shades, exactly like field cells. Player paint is no-harvest
+      // (Field still owns resources); flood paint is RED, which never
+      // harvests on survival anyway.
+      if (SURVIVAL && (p.color === BLUE || p.flood) && S.growN[idx] === 0) {
+        S.cells[idx] = p.color;
+        S.hp[idx] = 0; S.maxhp[idx] = 0; S.harvT[idx] = 0;
+        S.growN[idx] = 0; S.growBy[idx] = 0;
+        if (S.noHarvest) S.noHarvest[idx] = (p.color === BLUE && !p.flood) ? 1 : 0;
+      }
+      continue; // left rock: a later re-entry hits again
+    }
+    if (cell === p.color) { p.lastRockIdx = -1; continue; } // own color: pass through
     if (SURVIVAL && cell === RED && !p.flood) {
       // Player shot vs flood: PAINTS it (flips to player color,
       // instant, no HP). Penetration: the shot keeps flying, painting
@@ -2097,6 +2205,7 @@ function stepProjectile(p, dt) {
       S.cells[idx] = p.color;
       S.growN[idx] = 0; S.growBy[idx] = 0; S.harvT[idx] = 0;
       S.hp[idx] = 0; S.maxhp[idx] = 0; // no HP on colored cells anymore
+      if (S.noHarvest) S.noHarvest[idx] = 0; // flipped flood: harvests like field (v97)
       spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[p.color]);
       if (p.paintLeft === undefined) p.paintLeft = 1; // base depth for shots without it
       p.paintLeft--;
@@ -2114,6 +2223,7 @@ function stepProjectile(p, dt) {
       S.cells[idx] = EMPTY;
     }
     S.growN[idx] = 0; S.growBy[idx] = 0;
+    if (S.noHarvest) S.noHarvest[idx] = 0;
     spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[cell]);
     spawnChip(cx + 0.5, cy + 0.5, CELL_COLORS[cell], p.vx, p.vy);
     p.dead = true; return;
@@ -2160,6 +2270,7 @@ function damageBlock(idx, dmg, color, sx, sy, vx, vy, crit) {
   const wasGrey = S.cells[idx] === GREY;
   const wasNugget = !!S.goldNug[idx];
   S.cells[idx] = EMPTY; // excavated: the block is gone, not painted over
+  if (S.noHarvest) S.noHarvest[idx] = 0;
   S.destroyed++;
   if (color === BLUE) S.destroyedBlue++;
   computeFog(); // the cave grew: push the fog boundary out
@@ -2655,7 +2766,7 @@ function placeTurretAt(sx, sy) {
     const cells2x2 = [[cx, cy], [cx + 1, cy], [cx, cy + 1], [cx + 1, cy + 1]];
     for (const [wx, wy] of cells2x2) {
       const wi = wy * cfg.cols + wx;
-      if (turretAt(wx, wy) || (S.cells[wi] !== EMPTY && S.cells[wi] !== BLUE)) {
+      if (turretAt(wx, wy) || civilianAt(wx, wy) || (S.cells[wi] !== EMPTY && S.cells[wi] !== BLUE)) {
         S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
         return;
       }
@@ -2674,6 +2785,7 @@ function placeTurretAt(sx, sy) {
       S.cells[wi] = GREY;
       S.hp[wi] = WALL_HP; S.maxhp[wi] = WALL_HP; S.shade[wi] = WALL_SHADE;
       S.growN[wi] = 0; S.growBy[wi] = 0; S.harvT[wi] = 0; S.goldNug[wi] = 0; S.popT[wi] = -1;
+      if (S.noHarvest) S.noHarvest[wi] = 0;
     }
     spawnBurst(cx + 1, cy + 1, '#9ca3af'); // center of the 2x2 block
     // No turret, no weapon entry — walls are terrain. (So the shop card
@@ -2700,7 +2812,7 @@ function placeTurretAt(sx, sy) {
     const pi = cy * cfg.cols + cx;
     if (!S.waypoints) S.waypoints = [];
     const dup = S.waypoints.some(w => w.x === cx && w.y === cy);
-    if (dup || turretAt(cx, cy) || S.fog[pi] !== 0) {
+    if (dup || turretAt(cx, cy) || civilianAt(cx, cy) || S.fog[pi] !== 0) {
       S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
       return;
     }
@@ -2718,7 +2830,7 @@ function placeTurretAt(sx, sy) {
     }
     return;
   }
-  if (turretAt(cx, cy)) {
+  if (turretAt(cx, cy) || civilianAt(cx, cy)) {
     // Occupied: red ring says no, placement mode stays on.
     S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
     return;
@@ -2751,12 +2863,19 @@ function placeTurretAt(sx, sy) {
     // survival far outposts already checked EMPTY + clear above).
     // No pad clearing.
   } else {
-    // Combat units and Blooms need open ground.
-    if (S.cells[pi] !== EMPTY) {
+    // Combat units and Blooms need open ground — or cannon-painted
+    // ground (v113: painted territory is just color, no resources,
+    // so building on it is fine; it clears the paint at that cell.
+    // Field-grown / flipped territory still refuses, to protect its
+    // harvest — that's the painted-vs-field distinction, for now
+    // behavioral, not visual, as Sam said to worry about visuals later).
+    const paintedPad = S.cells[pi] === BLUE && S.noHarvest && S.noHarvest[pi] === 1;
+    if (S.cells[pi] !== EMPTY && !paintedPad) {
       S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
       return;
     }
-    S.cells[pi] = EMPTY; // clear a pad
+    S.cells[pi] = EMPTY; // clear a pad (clears paint too, if painted)
+    if (S.noHarvest) S.noHarvest[pi] = 0;
   }
   S.turrets.push(mkTurret(cx, cy, BLUE, type));
   if (!S.weapons[type]) {
@@ -2830,6 +2949,7 @@ function handleTeleportTap(sx, sy) {
     return;
   }
   if (tapped) { teleportRedRing(cx, cy); return; } // occupied: can't land here
+  if (civilianAt(cx, cy)) { teleportRedRing(cx, cy); return; } // civilian crowd: can't land on them
   const pi = cy * cfg.cols + cx;
   const okGround = S.cells[pi] === EMPTY &&
     (SURVIVAL ? nearBase(cx, cy) : S.fog[pi] === 0);
@@ -3082,10 +3202,14 @@ function update(dt) {
   // clears, then walk home 1 cell per second to the nearest Cannon or
   // Outpost (BFS each step, so tunnels opening / bases moving / flood
   // blocking all reroute automatically). No path yet = wait in place.
-  // Reaching base-adjacent = rescued (burst, count, removed). No death.
+  // Arriving = settle, not vanish (v113): civilians congregate around
+  // the base they chose, one per cell (settle radius 2, nearest base
+  // wins), counted once toward rescued on first arrival. A settled
+  // civilian stays until its base is gone (destroyed, teleported
+  // away) or its cell stops being open ground (flood paints it),
+  // then it walks to the next nearest base, same tick. No death.
   if (SURVIVAL && S.rescue && S.rescue.civilians) {
     for (const c of S.rescue.civilians) {
-      if (c.rescued) continue;
       if (c.rx !== undefined) c.moveT += dt; // glide clock, like turrets
       c.stepT = (c.stepT || 0) + dt;
       if (c.stepT < CIV_STEP_DUR) continue;
@@ -3094,19 +3218,38 @@ function update(dt) {
         if (S.fog[c.y * cfg.cols + c.x] !== 0) continue; // still hidden: wait
         c.state = 'moving'; // discovered: start escaping now, same tick
       }
-      if (isBaseAdjacent(c.x, c.y)) {
-        c.rescued = true;
-        S.rescue.rescued++;
-        spawnBurst(c.x + 0.5, c.y + 0.5, CIV_PINK);
+      if (c.state === 'settled') {
+        const bt = (c.baseX !== undefined && c.baseX >= 0) ? turretAt(c.baseX, c.baseY) : null;
+        const cellSt = S.cells[c.y * cfg.cols + c.x];
+        if (bt && !bt.dead && bt.color === BLUE && (bt.type === 'cannon' || bt.type === 'lantern') &&
+            (cellSt === EMPTY || cellSt === BLUE) && !turretAt(c.x, c.y)) {
+          continue; // still home: stay, no move
+        }
+        c.state = 'moving'; c.baseX = -1; c.baseY = -1; // base gone / cell taken: leave, same tick
+      }
+      // Moving: settle if already standing on a free spot around a base.
+      const dirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+      const settleHere = civilianSettleBase(c.x, c.y, c);
+      if (settleHere) {
+        c.state = 'settled'; c.baseX = settleHere.x; c.baseY = settleHere.y;
+        if (!c.counted) { c.counted = true; S.rescue.rescued++; spawnBurst(c.x + 0.5, c.y + 0.5, CIV_PINK); }
         continue;
       }
-      const nd = civilianPathNext(c.x, c.y);
+      // Otherwise walk one step toward the nearest free spot; if none
+      // exists (base full / no space yet), walk toward the nearest
+      // base anyway so the crowd waits near base, not stranded mid-map.
+      let nd = civilianSettleNext(c.x, c.y, c);
+      if (nd === null) nd = civilianPathNext(c.x, c.y);
       if (nd === null) continue; // no path yet: wait for a tunnel / base
-      const dirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];
       c.rx = c.x; c.ry = c.y; c.moveT = 0;
       c.x += dirs[nd][0]; c.y += dirs[nd][1];
+      // Arrived on a free spot? Settle immediately (no extra second).
+      const settleNow = civilianSettleBase(c.x, c.y, c);
+      if (settleNow) {
+        c.state = 'settled'; c.baseX = settleNow.x; c.baseY = settleNow.y;
+        if (!c.counted) { c.counted = true; S.rescue.rescued++; spawnBurst(c.x + 0.5, c.y + 0.5, CIV_PINK); }
+      }
     }
-    S.rescue.civilians = S.rescue.civilians.filter(c => !c.rescued);
   }
   for (const p of S.projs) stepProjectile(p, dt);
   if (S.projs.length > 4000) S.projs.splice(0, S.projs.length - 4000); // safety valve
@@ -3189,6 +3332,7 @@ function update(dt) {
   for (let i = 0; i < S.cells.length; i++) {
     if (S.cells[i] !== BLUE && S.cells[i] !== RED) continue;
     if (S.cells[i] === RED && SURVIVAL) continue; // Flood: no harvest, no HP — just a uniform color to paint (harvT stays 0).
+    if (S.cells[i] === BLUE && S.noHarvest && S.noHarvest[i] === 1) continue; // Cannon-painted (v113): color only, no resources — Field still owns harvest.
     S.harvT[i] += dt;
     if (S.harvT[i] >= HARVEST_EVERY) {
       S.harvT[i] = 0;
