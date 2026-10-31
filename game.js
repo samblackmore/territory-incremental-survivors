@@ -161,6 +161,12 @@ const ICONS_ORIG = {
   gold: '<svg viewBox="0 0 24 24" width="36" height="36"><path d="M12 9 C8 9 5.5 12 5.5 15.5 C5.5 19 8.5 21.5 12 21.5 C15.5 21.5 18.5 19 18.5 15.5 C18.5 12 16 9 12 9 Z" fill="#f5b301" stroke="#b8860b" stroke-width="1.5"/><rect x="10.5" y="3.5" width="3" height="5.5" rx="1" fill="#b8860b"/></svg>',
   teleport: '<svg viewBox="0 0 24 24" width="36" height="36"><path d="M4 18 C4 8 20 8 20 18" fill="none" stroke="#ef4444" stroke-width="2.5"/><polygon points="20,18 16.5,15.5 17.5,19.5" fill="#ef4444"/><circle cx="4" cy="18" r="2.5" fill="#ef4444"/></svg>',
   waypoint: '<svg viewBox="0 0 24 24" width="36" height="36"><circle cx="12" cy="12" r="8" fill="none" stroke="#ef4444" stroke-width="2"/><circle cx="12" cy="12" r="2.5" fill="#ef4444"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4" stroke="#ef4444" stroke-width="2"/></svg>',
+  // Evo icons (v115): same flat SVG style, player color via buildIcons.
+  // Sprayer = spray fan (origin dot + 3 fanning lines); Painter =
+  // paint splash (filled starburst blob + droplets). No names on Evo
+  // cards — just these icons + the word EVO.
+  evoSpray: '<svg viewBox="0 0 24 24" width="36" height="36"><circle cx="6" cy="12" r="2.5" fill="#ef4444"/><path d="M9 10 L19 5 M9 12 L20 12 M9 14 L19 19" stroke="#ef4444" stroke-width="2.5" stroke-linecap="round" fill="none"/></svg>',
+  evoPaint: '<svg viewBox="0 0 24 24" width="36" height="36"><path d="M12 3 L14 7 L19 6 L17 11 L21 13 L16 15 L18 20 L12 17 L6 20 L8 15 L3 13 L7 11 L5 6 L10 7 Z" fill="#ef4444"/><circle cx="20" cy="4" r="1.5" fill="#ef4444"/><circle cx="4" cy="19" r="1.2" fill="#ef4444"/></svg>',
 };
 function buildIcons(playerHex) {
   const o = {};
@@ -2424,10 +2430,10 @@ function availableCards() {
     return (!c.needs || hasTurretTypes(c.needs));
   });
   if (cannonRateMaxed()) {
-    pool.push({ kind: 'evo', title: 'Sprayer', icon: ICONS.cannon, sub: 'Blazing-fast sweep spray' });
+    pool.push({ kind: 'evo', title: 'EVO', icon: ICONS.evoSpray, sub: 'Blazing-fast sweep spray' });
   }
   if (cannonDmgMaxed()) {
-    pool.push({ kind: 'evoPaint', title: 'Painter', icon: ICONS.cannon, sub: 'Cannon paints ground as it fires — painted ground pays, weaker than Field' });
+    pool.push({ kind: 'evoPaint', title: 'EVO', icon: ICONS.evoPaint, sub: 'Cannon paints ground as it fires — painted ground pays, weaker than Field' });
   }
   if (SURVIVAL) {
     // Projectiles hybrid (survival only): back in the XP row as a
@@ -2514,7 +2520,7 @@ function offerCards() {
     el.dataset.cost = '';
     el.dataset.weapon = '';
     const lv = p.kind === 'passive' ? S.passives[p.passive] : 0;
-    let title = p.title, sub = p.sub, newTag = '', priceHtml = '';
+    let title = p.title, sub = p.sub, newTag = '', priceHtml = '', evoLine = '';
     const icon = `<div class="icon">${p.icon || ''}</div>`;
     // VS-style: first time bringing it into the run gets a yellow "New!" tag,
     // separate from the name.
@@ -2526,6 +2532,10 @@ function offerCards() {
       // One stat, one chip: title is the stat + its NEW level, sub the effect.
       // The weapon icon says which weapon it belongs to.
       // First pick of a stat (level 0 → 1) gets the yellow New! tag.
+      // v115: cannon Damage/Rate cards (the only tracks with Evos) get
+      // a little gold Evo line — icon + the word EVO, no Evo name —
+      // so you can see at a glance that this track evolves. Other
+      // tracks (Projectiles, Penetration, Bloom, Gather) get no line.
       const w = S.weapons[p.weapon];
       const cur = w && w.stats ? (w.stats[p.stat] || 0) : 0;
       title = `${p.title} <span class="lv">Lv${cur + 1}</span>`;
@@ -2533,13 +2543,15 @@ function offerCards() {
       el.dataset.weapon = p.weapon;
       el.dataset.stat = p.stat;
       if (cur === 0) newTag = '<span class="newtag">New!</span>';
+      if (p.weapon === 'cannon' && p.stat === 'dmg') evoLine = `<span class="evoline">${ICONS.evoPaint} EVO</span>`;
+      if (p.weapon === 'cannon' && p.stat === 'rate') evoLine = `<span class="evoline">${ICONS.evoSpray} EVO</span>`;
     }
     else if (p.kind === 'evo') {
-      title = `Sprayer <span class="lv">EVO</span>`;
+      title = `EVO`;
       sub = p.sub;
     }
     else if (p.kind === 'evoPaint') {
-      title = `Painter <span class="lv">EVO</span>`;
+      title = `EVO`;
       sub = p.sub;
     }
     else if (p.kind === 'gold') {
@@ -2565,7 +2577,7 @@ function offerCards() {
       if (S.gold < p.cost) el.classList.add('unaffordable');
       if (lv === 0) newTag = '<span class="newtag">New!</span>';
     }
-    el.innerHTML = priceHtml + icon + newTag + '<b>' + title + '</b><span>' + sub + '</span>';
+    el.innerHTML = priceHtml + icon + newTag + '<b>' + title + '</b><span>' + sub + '</span>' + evoLine;
     // Staggered deal: cards appear one by one (prevents accidental taps).
     setTimeout(() => el.classList.add('dealt'), 150 + k * 120);
   }
