@@ -47,27 +47,32 @@ const OUTPOST_RANGE = 4;             // vacuum pull range in cells (Euclidean)
 const OUTPOST_PULL_COUNT = 3;        // pickups per pull (nearest first)
 const OUTPOST_PULL_EVERY = 4;        // seconds between pulls
 const OUTPOST_FLASH_DUR = 1.5;       // range ring flash duration on pull (s, same as original Gather)
-// Cannon hand-designed 8-level track (VS-style: predictable, no random rolls).
-// Index 0 = L1 base (unused); index N = upgrade from LN to LN+1.
-// Split stat tracks: each weapon stat levels independently (chips top-left),
-// one card per stat boost — no more bundled tracks. Caps vary: projectiles
-// stops at 5 (volume control), the rest run to 8. Steps are uniform by
-// design, so a card always tells you exactly what you get.
+// Cannon split stat tracks (v114): each weapon stat levels independently
+// (chips top-left), one card per stat boost — no more bundled tracks.
+// Caps are 5 for cannon (v114, down from 8 — a 30-minute round never
+// reached 8, so 8 was a paper max, not a real one). Crit is NOT a
+// separate track anymore (v114): nobody picked it, so it rides on
+// Damage instead (+5% crit per Damage level, max 25% at Damage 5).
+// Steps are uniform by design, so a card always tells you exactly
+// what you get. Rate step is +25% (v114, up from +15%): +15% sat inside
+// the ±20% fire jitter, so a Rate pick felt invisible; +25% restores
+// the old 8-level final rate (1.25^5 ≈ 3.05x ≈ 1.15^8 ≈ 3.06x) in 5 picks.
 const STAT_DEFS = {
   cannon: [
-    { key: 'dmg', name: 'Damage', cap: 8, effect: '+1 damage' },
+    { key: 'dmg', name: 'Damage', cap: 5, effect: '+1 damage, +5% crit' },
     // Projectiles is shop-only (gold-gated): it's the strongest stat, so
     // it costs gold instead of a free XP pick. Still a track (chips + cap).
     { key: 'proj', name: 'Projectiles', cap: 5, effect: '+1 projectile', shopOnly: true },
-    { key: 'rate', name: 'Fire rate', cap: 8, effect: '+15% fire rate' },
-    { key: 'crit', name: 'Crit', cap: 8, effect: '+5% crit' },
+    { key: 'rate', name: 'Fire rate', cap: 5, effect: '+25% fire rate' },
     // Penetration: how many cells one shot pierces (VS pass-through).
     // Base depth 1 (just the first cell); each level adds one more
     // MAX cell in the same shot's path — rock it damages, or flood it
     // paints. Since v106 each cell beyond the first has only a 50%
     // chance to continue (PENETRATE_CHANCE), so average pierce is
     // ~2 cells even at high levels, but long rare pierces stay possible.
-    { key: 'pen', name: 'Penetration', cap: 8, effect: '+1 pierce depth (chance of continuing)' },
+    // Cap 5 (v114, down from 8): max depth 6, average pierce ~1.97 vs
+    // ~2.00 at depth 9, so the cap cut costs almost nothing in practice.
+    { key: 'pen', name: 'Penetration', cap: 5, effect: '+1 pierce depth (chance of continuing)' },
   ],
   bloom: [
     { key: 'growth', name: 'Growth', cap: 8, effect: '+20% growth speed' },
@@ -90,10 +95,9 @@ function initWeaponStats(type) {
 function applyStat(w, weapon, st) {
   const n = w.stats[st];
   if (weapon === 'cannon') {
-    if (st === 'dmg') w.dmgBonus = n;
+    if (st === 'dmg') { w.dmgBonus = n; w.critChance = 0.05 * n; } // v114: crit rides on Damage, no separate Crit track
     else if (st === 'proj') w.proj = n;
-    else if (st === 'rate') w.rateMult = Math.pow(1.15, n);
-    else if (st === 'crit') w.critChance = 0.05 * n;
+    else if (st === 'rate') w.rateMult = Math.pow(1.25, n); // v114: +25% per level (was +15%)
     else if (st === 'pen') w.penDepth = 1 + n; // max penetration depth: base 1 + 1 per level (rock hits + flood paints, each step 50% chance v106)
   } else if (weapon === 'bloom') {
     if (st === 'growth') w.rateMult = Math.pow(1.2, n);
@@ -101,10 +105,19 @@ function applyStat(w, weapon, st) {
   // gather count derives from stats (gatherCount); mole
   // dig uses dmgBonus, set by the bundle below.
 }
-// Cannon EVO (Sprayer) unlocks when every cannon stat track is maxed.
-function cannonMaxed() {
+// Per-stat Cannon EVOS (v114, replacing the old cannon-wide Evo).
+// The old Evo required ALL cannon stats maxed (37 picks, never reached
+// in a 30-minute round). Now each stat evolves on its own at cap 5:
+// Rate 5 → Sprayer (w.evo, 12x fire speed, as before), Damage 5 →
+// Painter (w.evoPaint, trail painting, see stepProjectile). Other
+// tracks (Projectiles, Penetration) cap at 5 with no Evo yet.
+function cannonRateMaxed() {
   const w = S.weapons.cannon;
-  return !!w && !w.evo && STAT_DEFS.cannon.every(d => (w.stats[d.key] || 0) >= d.cap);
+  return !!w && !w.evo && (w.stats.rate || 0) >= 5;
+}
+function cannonDmgMaxed() {
+  const w = S.weapons.cannon;
+  return !!w && !w.evoPaint && (w.stats.dmg || 0) >= 5;
 }
 // Mid-run unit costs (run gold, not meta gold): base + 5 per living unit
 // of that type. The starter Cannon is free (pre-placed); every duplicate
@@ -624,6 +637,10 @@ const RED_BLOOM_GROWTH = 3;
 // Territory harvest: a cell glows over HARVEST_EVERY seconds, then has
 // this chance to produce (same as the rock XP surprise, not a salary).
 const BLOOM_HARVEST_CHANCE = 0.3;
+// Painted harvest (v114, middle option): cannon-painted ground pays
+// too, but clearly weaker than Field — 10% vs Field's 30% per cycle,
+// same 8-second cycle, same 80% XP / 20% gold split. Tunable.
+const PAINTED_HARVEST_CHANCE = 0.1;
 
 // Hit-pop envelope: full amp during the hold (instant big square), then lerp to 0
 function popFactor(i) {
@@ -1468,9 +1485,9 @@ function newGame() {
   }
   // The starter is always Cannon; the shop only gates mid-run drafts.
   S.turrets.push(mkTurret(pc.x, pc.y, BLUE, 'cannon'));
-  S.weapons.cannon = { stats: initWeaponStats('cannon'), rateMult: 1, dmgBonus: 0, critChance: 0, proj: 0, evo: false };
+  S.weapons.cannon = { stats: initWeaponStats('cannon'), rateMult: 1, dmgBonus: 0, critChance: 0, proj: 0, evo: false, evoPaint: false };
   // Perma base: cannon starts at the perma levels (not 0), and in-run
-  // picks stack on top (same track, same cap 8 total). Starter is always
+  // picks stack on top (same track, same cap 5 total). Starter is always
   // placed even if cannon is toggled off on the start screen — the toggle
   // only stops the shop offering cannon duplicates, it never removes the starter.
   S.weapons.cannon.stats.dmg = (meta.perma && meta.perma.dmg) || 0;
@@ -2166,23 +2183,25 @@ function stepProjectile(p, dt) {
     }
     if (cell === EMPTY) {
       p.lastRockIdx = -1;
-      // Paint trail (v113, survival only): a shot paints open ground
-      // as it flies — player cannon paints player color, storm paints
-      // flood color — free, no paintLeft cost (it's a trail, not a
-      // depth budget), and the shot keeps flying. Only player shots
-      // (BLUE) and flood shots (p.flood) paint — enemy-cannon shots
-      // (RED, not flood, which don't exist in survival play, only in
-      // tests) pass through empty as before, so red excavation still
-      // leaves empty ground, not flood color. Growing cells are left
-      // alone (growN > 0): Field growth completes to harvestable
-      // territory, flood spread completes to flood, instead of being
-      // stolen mid-growth. No burst per painted cell (a burst every
-      // cell would spam particles) — the trail itself is the visual.
-      // Shading is automatic: colored cells render with elevation
-      // shades, exactly like field cells. Player paint is no-harvest
-      // (Field still owns resources); flood paint is RED, which never
-      // harvests on survival anyway.
-      if (SURVIVAL && (p.color === BLUE || p.flood) && S.growN[idx] === 0) {
+      // Paint trail (v113, survival only; gated on Damage EVO in v114):
+      // a shot paints open ground as it flies — player cannon paints
+      // player color ONLY once Damage is evolved to Painter, storm
+      // paints flood color always — free, no paintLeft cost (it's a
+      // trail, not a depth budget), and the shot keeps flying. Only
+      // player shots (BLUE, Painter-evolved) and flood shots (p.flood)
+      // paint — enemy-cannon shots (RED, not flood, which don't exist
+      // in survival play, only in tests) pass through empty as before,
+      // so red excavation still leaves empty ground, not flood color.
+      // Growing cells are left alone (growN > 0): Field growth completes
+      // to harvestable territory, flood spread completes to flood,
+      // instead of being stolen mid-growth. No burst per painted cell
+      // (a burst every cell would spam particles) — the trail itself
+      // is the visual. Shading is automatic: colored cells render with
+      // elevation shades, exactly like field cells. Player paint is
+      // weaker-harvest (v114: 10% vs Field 30%, see harvest loop);
+      // flood paint is RED, which never harvests on survival anyway.
+      const canPaintBlue = p.color === BLUE && S.weapons.cannon && S.weapons.cannon.evoPaint;
+      if (SURVIVAL && (canPaintBlue || p.flood) && S.growN[idx] === 0) {
         S.cells[idx] = p.color;
         S.hp[idx] = 0; S.maxhp[idx] = 0; S.harvT[idx] = 0;
         S.growN[idx] = 0; S.growBy[idx] = 0;
@@ -2388,23 +2407,27 @@ function hasTeleportTarget() {
 function availableCards() {
   // XP row: FREE cards only. Turret placements live in the shop row, so
   // no turret kind appears here at all. What remains: stat cards for
-  // owned weapons (below cap; EVO'd cannon offers no more stats),
-  // Gold Ore, steer (via needs), and the EVO capstone when earned.
+  // owned weapons (below cap), Gold Ore, steer (via needs), and the
+  // per-stat EVO capstones when earned (v114: Rate→Sprayer, Damage→
+  // Painter — evolving one stat does NOT hide the other stat cards,
+  // capped stats are already filtered by the cap check below).
   // (Passive branch below remains for future passives; none in pool.)
   const pool = CARD_POOL.filter(c => {
     if (c.kind === 'turret') return false;
     if (c.kind === 'stat') {
       const w = S.weapons[c.weapon];
       if (!w || !w.stats) return false;
-      if (c.weapon === 'cannon' && w.evo) return false;
       return (w.stats[c.stat] || 0) < c.cap;
     }
     if (c.kind === 'passive') return S.passives[c.passive] < 8;
     if (c.kind === 'teleport') return hasTeleportTarget();
     return (!c.needs || hasTurretTypes(c.needs));
   });
-  if (cannonMaxed()) {
+  if (cannonRateMaxed()) {
     pool.push({ kind: 'evo', title: 'Sprayer', icon: ICONS.cannon, sub: 'Blazing-fast sweep spray' });
+  }
+  if (cannonDmgMaxed()) {
+    pool.push({ kind: 'evoPaint', title: 'Painter', icon: ICONS.cannon, sub: 'Cannon paints ground as it fires — painted ground pays, weaker than Field' });
   }
   if (SURVIVAL) {
     // Projectiles hybrid (survival only): back in the XP row as a
@@ -2513,6 +2536,10 @@ function offerCards() {
     }
     else if (p.kind === 'evo') {
       title = `Sprayer <span class="lv">EVO</span>`;
+      sub = p.sub;
+    }
+    else if (p.kind === 'evoPaint') {
+      title = `Painter <span class="lv">EVO</span>`;
       sub = p.sub;
     }
     else if (p.kind === 'gold') {
@@ -2674,8 +2701,11 @@ document.querySelectorAll('#levelup .card').forEach(card => {
         applyStat(w, card.dataset.weapon, st);
       }
     } else if (kind === 'evo') {
-      // Cannon capstone: all stat tracks maxed → becomes the Sprayer.
+      // Rate EVO: Rate 5 → becomes the Sprayer (12x fire speed).
       if (S.weapons.cannon) S.weapons.cannon.evo = true;
+    } else if (kind === 'evoPaint') {
+      // Damage EVO: Damage 5 → becomes the Painter (trail painting on).
+      if (S.weapons.cannon) S.weapons.cannon.evoPaint = true;
     } else if (kind === 'proj') {
       // Gold-gated stat upgrade: pay, then fill one chip on the track.
       // (Affordability was already guarded above; no placement follows.)
@@ -2864,11 +2894,12 @@ function placeTurretAt(sx, sy) {
     // No pad clearing.
   } else {
     // Combat units and Blooms need open ground — or cannon-painted
-    // ground (v113: painted territory is just color, no resources,
-    // so building on it is fine; it clears the paint at that cell.
-    // Field-grown / flipped territory still refuses, to protect its
-    // harvest — that's the painted-vs-field distinction, for now
-    // behavioral, not visual, as Sam said to worry about visuals later).
+    // ground (v113: painted territory is just color, weaker harvest
+    // since v114, so building on it is fine; it clears the paint at
+    // that cell. Field-grown / flipped territory still refuses, to
+    // protect its harvest — that's the painted-vs-field distinction,
+    // for now behavioral, not visual, as Sam said to worry about
+    // visuals later).
     const paintedPad = S.cells[pi] === BLUE && S.noHarvest && S.noHarvest[pi] === 1;
     if (S.cells[pi] !== EMPTY && !paintedPad) {
       S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
@@ -2879,7 +2910,7 @@ function placeTurretAt(sx, sy) {
   }
   S.turrets.push(mkTurret(cx, cy, BLUE, type));
   if (!S.weapons[type]) {
-    S.weapons[type] = { stats: initWeaponStats(type), rateMult: 1, dmgBonus: 0, critChance: 0, proj: 0, evo: false };
+    S.weapons[type] = { stats: initWeaponStats(type), rateMult: 1, dmgBonus: 0, critChance: 0, proj: 0, evo: false, evoPaint: false };
   }
   spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[BLUE]);
   if (type === 'lantern') computeFog(); // the outpost pushes back the dark
@@ -3325,20 +3356,25 @@ function update(dt) {
   }
 
   // Harvest: each territory cell (blue or red) lightens over
-  // HARVEST_EVERY seconds, then has a BLOOM_HARVEST_CHANCE to produce —
+  // HARVEST_EVERY seconds, then has a chance to produce —
   // a map pickup for blue (80% XP, 20% gold), banked gold for red (it
   // has no collector, so the product goes straight to its bank).
+  // Field-grown / flipped / laser-painted blue pays at BLOOM_HARVEST_CHANCE
+  // (30%); cannon-painted blue (noHarvest === 1) pays weaker at
+  // PAINTED_HARVEST_CHANCE (10%, v114 middle option) — Field still
+  // clearly owns resources, but painting now has an incentive.
   // Otherwise the glow just resets: a surprise, not a salary.
   for (let i = 0; i < S.cells.length; i++) {
     if (S.cells[i] !== BLUE && S.cells[i] !== RED) continue;
     if (S.cells[i] === RED && SURVIVAL) continue; // Flood: no harvest, no HP — just a uniform color to paint (harvT stays 0).
-    if (S.cells[i] === BLUE && S.noHarvest && S.noHarvest[i] === 1) continue; // Cannon-painted (v113): color only, no resources — Field still owns harvest.
+    const painted = S.cells[i] === BLUE && S.noHarvest && S.noHarvest[i] === 1;
     S.harvT[i] += dt;
     if (S.harvT[i] >= HARVEST_EVERY) {
       S.harvT[i] = 0;
       const cx = i % cfg.cols, cy = (i / cfg.cols) | 0;
       if (S.cells[i] === BLUE && (coinAt(cx, cy) || S.coins.length >= 800)) continue;
-      if (Math.random() >= BLOOM_HARVEST_CHANCE) continue; // no product this cycle
+      const chance = painted ? PAINTED_HARVEST_CHANCE : BLOOM_HARVEST_CHANCE;
+      if (Math.random() >= chance) continue; // no product this cycle
       if (S.cells[i] === BLUE) {
         const kind = Math.random() < 0.2 ? 'gold' : 'xp';
         S.coins.push({ x: cx + 0.5, y: cy + 0.5, state: 'idle', kind,
@@ -3905,7 +3941,7 @@ function render() {
   // A stat with no picks yet (level 0) hides its row entirely — the
   // corner only shows stats you've actually invested in, and a stat
   // card shows New! on its first pick (see offerCards).
-  const STAT_LABEL = { dmg: 'DAMG', proj: 'PROJ', rate: 'RATE', crit: 'CRIT', pen: 'PENE', growth: 'GROW', count: 'CNTS', dig: 'DIGS' };
+  const STAT_LABEL = { dmg: 'DAMG', proj: 'PROJ', rate: 'RATE', pen: 'PENE', growth: 'GROW', count: 'CNTS', dig: 'DIGS' };
   for (const type of ['cannon', 'bloom', 'gather', 'mole']) {
     const w = S.weapons[type];
     if (!w || !w.stats) continue;
@@ -4263,8 +4299,8 @@ function renderPerma() {
   // shown as little circles (filled = level). Reset clears all perma
   // levels (not item toggles) — the VS-style sell-all.
   const defs = [
-    { id: 'perma-dmg', key: 'dmg', title: 'Damage', sub: '+1 base damage per level' },
-    { id: 'perma-rate', key: 'rate', title: 'Fire Rate', sub: '+15% base fire rate per level' },
+    { id: 'perma-dmg', key: 'dmg', title: 'Damage', sub: '+1 base damage, +5% crit per level' },
+    { id: 'perma-rate', key: 'rate', title: 'Fire Rate', sub: '+25% base fire rate per level' },
   ];
   for (const d of defs) {
     const b = document.getElementById(d.id);
