@@ -192,7 +192,7 @@
     padding: 6px 8px;
   }
   #debug input:focus { outline: 1px solid var(--accent); }
-  #d-restart, #d-copylink {
+  #d-restart, #d-copylink, #d-jumpflood {
     width: 100%;
     margin-top: 12px;
     padding: 8px;
@@ -204,9 +204,9 @@
     font-weight: 700;
     cursor: pointer;
   }
-  #d-restart:hover, #d-copylink:hover { background: #3b82f6; }
-  #d-copylink { margin-top: 8px; background: #26314d; }
-  #d-copylink:hover { background: #314063; }
+  #d-restart:hover, #d-copylink:hover, #d-jumpflood:hover { background: #3b82f6; }
+  #d-copylink, #d-jumpflood { margin-top: 8px; background: #26314d; }
+  #d-copylink:hover, #d-jumpflood:hover { background: #314063; }
   #d-stats {
     margin-top: 12px;
     font-size: 12px;
@@ -505,6 +505,7 @@
       <input id="d-fogdist" type="number" min="0" max="20" step="1" value="6">
     </label>
     <button id="d-restart">Restart game</button>
+    <button id="d-jumpflood">Jump to flood (5:00)</button>
     <button id="d-copylink">Copy share link</button>
     <div id="d-stats"></div>
   </aside>
@@ -578,6 +579,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=110"></script>
+<script src="game.js?v=111"></script>
 </body>
 </html>

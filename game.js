@@ -1657,6 +1657,26 @@ function floodTick(dt) {
   }
 }
 
+// Debug only: jump the run clock to the end of grace (5:00) and start
+// a storm immediately, mirroring the lull -> storm transition (fire
+// immediately, toast hidden, storm counted once). Run time only moves
+// forward, never backwards, so clicking mid-storm restarts that storm
+// without inflating the storm count. Paused/placing/teleport state is
+// left untouched: time is frozen while paused anyway, so the storm
+// fires once play resumes. No-op if there is no flood or the run is
+// over (the debug panel sits under the run-over overlay anyway).
+function debugJumpToFlood() {
+  const f = S.flood;
+  if (!f || S.runOver) return;
+  if (S.time < FLOOD_GRACE_DUR) S.time = FLOOD_GRACE_DUR;
+  if (f.phase !== 'storm') f.storms++;
+  f.phase = 'storm';
+  f.timer = FLOOD_STORM_DUR;
+  f.sweep = 0; f.ringT = 0; f.sweepT = 0;
+  wavebanner.classList.add('hidden');
+  updateHud();
+}
+
 // ---- Firing ----
 // Fires ONE cannon shot along the current sweep angle. Multishot is a
 // staggered burst (see the cannon update: shoot, brief pause, shoot),
@@ -3566,6 +3586,7 @@ function frame(now) {
   el.addEventListener('change', newGame);
 });
 document.getElementById('d-restart').addEventListener('click', newGame);
+document.getElementById('d-jumpflood').addEventListener('click', debugJumpToFlood);
 
 // ---- Camera controls: 1-finger drag pans, 2-finger pinch zooms, tap hits coins ----
 // touch-action:none on the canvas stops the page scrolling/zooming underneath.
