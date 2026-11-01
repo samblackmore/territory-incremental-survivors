@@ -296,8 +296,9 @@ function drawMinimap() {
       if (f === 0) {
         const ci = y * cols + x;
         mmctx.fillStyle = S.cells[ci] === GREY ? '#6b7280' :
+          (S.ocean && S.ocean[ci] && S.cells[ci] === EMPTY ? OCEAN_MINIMAP :
           (S.beach && S.beach[ci] && S.cells[ci] === EMPTY ? BEACH_MINIMAP :
-          (S.grass && S.grass[ci] && S.cells[ci] === EMPTY ? GRASS_MINIMAP : '#9ca3af'));
+          (S.grass && S.grass[ci] && S.cells[ci] === EMPTY ? GRASS_MINIMAP : '#9ca3af')));
         mmctx.fillRect(x * px, y * px, px, px);
       }
       else if (f === 1) { mmctx.fillStyle = '#4b5563'; mmctx.fillRect(x * px, y * px, px, px); }
@@ -465,21 +466,18 @@ function resetCamera(zoomMult = 1, cx = null, cy = null) {
   // New games (v119) pass zoomMult = START_ZOOM_MULT with the starter's
   // world center, so the run starts zoomed in on the starting unit
   // instead of the full-map overview. clampCamera pins the center to
-  // the map plus 6 cells of ocean slack (v121, tripled from v120's 2), so an edge starter
-  // gets an ocean strip beyond it instead of sitting hard on the edge.
+  // the map edge (v122: slack reverted to 0 — the starter now sits
+  // inland on sand, behind the ocean ring, so it centres without slack).
   cam.zoom = minZoom() * zoomMult;
   cam.x = cx !== null ? cx : (cfg.cols * CELL_PX) / 2;
   cam.y = cy !== null ? cy : (cfg.rows * CELL_PX) / 2;
   clampCamera();
 }
 const START_ZOOM_MULT = 3; // v119: start zoom = 3x the full-map zoom (tunable; max is 8x)
-// Ocean (v120, survival): the world is an island, so outside the map
-// is ocean, not black void. A deep blue, distinct from the player's
-// brighter blue, so player territory at the edge never blends into it.
-const OCEAN_COLOR = '#1d4ed8';
-// World border (v120): a subtle translucent white line around the
-// map's edge, so you can tell exactly where the game world stops and
-// the ocean starts, even through fog.
+// World border (v120, kept in v122): a subtle translucent white line
+// around the map's edge, so you can tell exactly where the game world
+// stops, even through fog. In v122 the ocean is inside the map, so
+// the border outlines the whole map including its ocean ring.
 const WORLD_BORDER = 'rgba(255,255,255,0.35)';
 function clampCamera() {
   if (!cfg.cols) return;
@@ -487,16 +485,14 @@ function clampCamera() {
   cam.zoom = Math.min(Math.max(cam.zoom, mz), mz * 8);
   const hw = view.w / cam.zoom / 2, hh = view.h / cam.zoom / 2;
   const W = cfg.cols * CELL_PX, H = cfg.rows * CELL_PX;
-  // Slack (v120, restored from the pre-Oct-24 clamp; v121 tripled to 6):
-  // the camera may scroll CAM_SLACK_CELLS past the map edge, so an edge starter is
-  // not hard against the screen edge — you see a strip of ocean
-  // beyond the sand, instead of the map ending at the screen edge.
+  // No slack (v122, reverted from v120/v121): the view's edge stops
+  // exactly at the map's edge. This is fine now because the starter
+  // is no longer on the map edge — it sits on sand, inland of the
+  // ocean ring, so centring on it does not squash it against the edge.
   // When the view is wider/taller than the map, pin to center instead of sliding.
-  const pad = CAM_SLACK_CELLS * CELL_PX;
-  cam.x = hw * 2 >= W ? W / 2 : Math.min(Math.max(cam.x, hw - pad), W - hw + pad);
-  cam.y = hh * 2 >= H ? H / 2 : Math.min(Math.max(cam.y, hh - pad), H - hh + pad);
+  cam.x = hw * 2 >= W ? W / 2 : Math.min(Math.max(cam.x, hw), W - hw);
+  cam.y = hh * 2 >= H ? H / 2 : Math.min(Math.max(cam.y, hh), H - hh);
 }
-const CAM_SLACK_CELLS = 6; // v121: how far past the map edge the camera may scroll (cells, each side; was 2 in v120)
 function screenToWorld(sx, sy) {
   return { x: (sx - view.w / 2) / cam.zoom + cam.x,
            y: (sy - view.h / 2) / cam.zoom + cam.y };
@@ -669,27 +665,42 @@ const GREY_MIN_DIST = 12;      // cells from the starter: no grey near the openi
 const GREY_HP_MIN = 30, GREY_HP_MAX = 100;
 const GREY_GOLD_CHANCE = 0.8;  // grey drops: mostly gold (XP is easy mid-game)
 const BROWN_GOLD_CHANCE = 0.1; // regular brown rock: 10% gold on break (BLUE only, non-nugget, non-grey) — you don't have to rely on nuggets alone; independent of the XP roll, so a break can drop both
-// Beach (v117, survival only) + grass (v119): two rings of open ground
-// around the island, up to 10% of the board on all sides in total,
-// with a smooth wavy coastline (not a straight line). Sand is the outer
-// layer, grass the inner layer — total depth unchanged from v117,
-// divided into 2 layers, so it reads sand, grass, regular terrain.
-// Beach and grass cells are still EMPTY for all gameplay (placement,
-// fog, flood spread, harvest, meteors) — S.beach / S.grass are only
-// geographic flags: a sand cell renders yellow when it is EMPTY, a
-// grass cell renders grass green when it is EMPTY, and both render
-// normally (rock/territory) when something covers them, so a meteor
-// boulder on the sand/grass, once cleared, reveals sand/grass again.
-// The flags never clear, so coast geography persists.
-// Coastline: per-edge depths from smooth 1D noise, normalized per edge
-// so the full 40–100% of max range actually shows (raw fbm clusters in
-// the middle, which would look almost straight). Min 40% guarantees the
-// rings are never broken: at least ~2 cells wide in total everywhere on
-// the default map, so the sand+grass ring is one connected component
-// (the starter's home component for pickRescueSites).
-const BEACH_MAX_FRAC = 0.10; // max coast depth = 10% of the dimension (width for left/right, height for top/bottom)
-const BEACH_MIN_FRAC = 0.40; // min depth = 40% of max, so the ring never pinches shut
-const BEACH_SEED_OFFSET = 77777; // own RNG stream: island generation (caves/noise/grey/nuggets) is untouched for a given seed
+// Coast (v117 beach, v119 grass, v122 ocean): three rings of open ground
+// around the island, from the edge inward: ocean, sand, grass, then
+// regular terrain. NOT percentage-based (v122): the total border is a
+// fixed 10–20 cells per edge, varying smoothly along the edge, so a
+// bigger map gets more island interior, not a bigger beach. Sand and
+// grass are fixed thin (2 cells each); the ocean takes the remainder
+// (6–16 cells), so you see a good bit of ocean, and the flood storm —
+// whose shots enter at the map edge and paint open ground as they fly
+// — visibly advances through the ocean first, then sand, then grass.
+// Ocean, sand and grass cells are still EMPTY for all gameplay
+// (placement, fog, flood spread, harvest, meteors) — S.ocean / S.beach
+// / S.grass are only geographic flags: an ocean cell renders blue when
+// it is EMPTY, sand yellow, grass green, and all three render normally
+// (rock/territory) when something covers them, so a meteor boulder on
+// the coast, once cleared, reveals coast again. The flags never clear,
+// so coast geography persists. Because the coast is now inside the
+// grid, fog applies to it (distance discs around units) and placement
+// rules apply to it — units can technically stand on ocean (it is open
+// ground, same as sand), which is a v122 simplification to flag, not a
+// separate water-physics system.
+// Coastline: per-edge total depths from smooth 1D noise, normalized
+// per edge so the full 10–20 range actually shows (raw fbm clusters in
+// the middle, which would look almost straight). Min 10 guarantees the
+// rings are never broken: the ocean ring is a continuous edge loop,
+// so the whole coast is one connected component (the starter's home
+// component for pickRescueSites).
+const COAST_MIN_DEPTH = 10; // fixed border: min total coast depth per edge, in cells
+const COAST_MAX_DEPTH = 20; // fixed border: max total coast depth per edge, in cells
+const COAST_SAND_CELLS = 2; // sand layer thickness, fixed (thin)
+const COAST_GRASS_CELLS = 2; // grass layer thickness, fixed (thin)
+const COAST_SEED_OFFSET = 77777; // own RNG stream: island generation (caves/noise/grey/nuggets) is untouched for a given seed
+const OCEAN_SHADES = [ // fixed ocean blue, light -> dark (deep blue, distinct from the player's brighter blue)
+  [29, 78, 216], [27, 73, 202], [25, 68, 188], [23, 63, 174],
+  [22, 58, 161], [20, 53, 147], [18, 48, 133], [16, 43, 119],
+];
+const OCEAN_MINIMAP = '#1944bc'; // middle ocean shade, for the minimap
 const BEACH_SHADES = [ // fixed sand yellow, light -> dark (not tied to the empty-color debug picker)
   [232, 213, 124], [226, 205, 110], [217, 196, 106], [205, 183, 94],
   [190, 168, 82], [172, 151, 70], [150, 131, 58], [128, 111, 48],
@@ -700,9 +711,10 @@ const GRASS_SHADES = [ // fixed grass green, light -> dark (distinct from cave g
   [103, 145, 55], [94, 132, 51], [85, 120, 46], [76, 107, 41],
 ];
 const GRASS_MINIMAP = '#79aa41'; // middle grass shade, for the minimap
-function beachDepths(n, maxDepth, noise, u0) {
+function coastDepths(n, noise, u0) {
   // Raw noise along one edge (~2.5 undulations), normalized to 0–1,
-  // then mapped to [MIN_FRAC, 1] * maxDepth. Returns depths in cells (float).
+  // then mapped to [COAST_MIN_DEPTH, COAST_MAX_DEPTH]. Returns total
+  // coast depths in cells (float).
   const raw = new Float32Array(n);
   let mn = Infinity, mx = -Infinity;
   for (let k = 0; k < n; k++) {
@@ -713,38 +725,42 @@ function beachDepths(n, maxDepth, noise, u0) {
   const out = new Float32Array(n);
   for (let k = 0; k < n; k++) {
     const norm = (raw[k] - mn) / span;
-    out[k] = (BEACH_MIN_FRAC + (1 - BEACH_MIN_FRAC) * norm) * maxDepth;
+    out[k] = COAST_MIN_DEPTH + (COAST_MAX_DEPTH - COAST_MIN_DEPTH) * norm;
   }
   return out;
 }
-function beachMask(cols, rows, seed) {
-  // Returns { beach: sand mask, grass: grass mask }. Total coast depth
-  // per edge is the v117 beach depth; sand is the outer half of it,
-  // grass the inner half, so sand, grass, island reads in order from
-  // any edge inward, and total % is unchanged.
+function coastMask(cols, rows, seed) {
+  // Returns { ocean, beach, grass } masks. Per edge, total depth T is
+  // the coast depth for that edge position; ocean = T - 4, sand ends
+  // at T - 2, grass ends at T. Layer priority is outermost first:
+  // ocean beats sand beats grass, so a corner cell that is ocean via
+  // one edge and sand via another reads as ocean. Bottom/right use
+  // distance = (dim-1) - coord, so counts match top/left.
+  const ocean = new Uint8Array(cols * rows);
   const beach = new Uint8Array(cols * rows);
   const grass = new Uint8Array(cols * rows);
-  const noise = makeNoise2D(mulberry32(seed + BEACH_SEED_OFFSET));
-  const maxX = cols * BEACH_MAX_FRAC, maxY = rows * BEACH_MAX_FRAC;
-  const top = beachDepths(cols, maxY, noise, 0.13);
-  const bottom = beachDepths(cols, maxY, noise, 0.71);
-  const left = beachDepths(rows, maxX, noise, 0.29);
-  const right = beachDepths(rows, maxX, noise, 0.87);
+  const noise = makeNoise2D(mulberry32(seed + COAST_SEED_OFFSET));
+  const top = coastDepths(cols, noise, 0.13);
+  const bottom = coastDepths(cols, noise, 0.71);
+  const left = coastDepths(rows, noise, 0.29);
+  const right = coastDepths(rows, noise, 0.87);
   for (let y = 0; y < rows; y++) {
     for (let x = 0; x < cols; x++) {
-      // Distance to the edge < that edge's depth (float) = coast ring.
-      // Bottom/right use distance = (dim-1) - coord, so counts match top/left.
-      // Sand = distance < depth/2 on any edge; grass = in the ring but not sand.
       const i = y * cols + x;
-      const sand = y < top[x] / 2 || y > rows - 1 - bottom[x] / 2 ||
-                   x < left[y] / 2 || x > cols - 1 - right[y] / 2;
-      if (sand) { beach[i] = 1; continue; }
-      const ring = y < top[x] || y > rows - 1 - bottom[x] ||
-                   x < left[y] || x > cols - 1 - right[y];
-      if (ring) grass[i] = 1;
+      const oceanD = (d, t) => d < t - COAST_SAND_CELLS - COAST_GRASS_CELLS;
+      const sandD = (d, t) => d < t - COAST_GRASS_CELLS;
+      const ringD = (d, t) => d < t;
+      // Distances to each edge, as (distance, total) pairs.
+      const edges = [
+        [y, top[x]], [rows - 1 - y, bottom[x]],
+        [x, left[y]], [cols - 1 - x, right[y]],
+      ];
+      if (edges.some(([d, t]) => oceanD(d, t))) { ocean[i] = 1; continue; }
+      if (edges.some(([d, t]) => sandD(d, t))) { beach[i] = 1; continue; }
+      if (edges.some(([d, t]) => ringD(d, t))) grass[i] = 1;
     }
   }
-  return { beach, grass };
+  return { ocean, beach, grass };
 }
 const MOVE_DUR = 0.25; // seconds to glide from one cell to the next (moles)
 const HARVESTER_STEP_DUR = 1.0; // seconds per harvester step — slow on purpose, so speed (not range) limits collection
@@ -781,6 +797,7 @@ function cellRGB(x, y) {
   if (st === BLUE) return BLUE_RGB;
   if (st === RED) return RED_RGB;
   if (st === EMPTY) {
+    if (S.ocean && S.ocean[i]) return OCEAN_SHADES[S.shade[i] || 0];
     if (S.beach && S.beach[i]) return BEACH_SHADES[S.shade[i] || 0];
     if (S.grass && S.grass[i]) return GRASS_SHADES[S.shade[i] || 0];
     return CAVE_SHADES[S.shade[i] || 0];
@@ -852,8 +869,8 @@ function clampNum(v, lo, hi, fallback) {
 }
 
 function readDebug() {
-  const cols = Math.round(clampNum(inCols.value, 8, 120, 48));
-  const rows = Math.round(clampNum(inRows.value, 8, 120, 36));
+  const cols = Math.round(clampNum(inCols.value, 8, 120, 75));
+  const rows = Math.round(clampNum(inRows.value, 8, 120, 50));
   cfg = {
     cols, rows,
     projSpeed: clampNum(inSpeed.value, 40, 2000, 200),   // px/s
@@ -1565,26 +1582,30 @@ function newGame() {
         noHarvest: new Uint8Array(n),
         // fog of war: 0 = clear, 1 = half, 2 = full (black)
         fog: new Uint8Array(n).fill(2),
-        // beach (v117, survival only): 1 = sand-ring cell (see beachMask).
+        // ocean (v122, survival only): 1 = ocean-ring cell (see coastMask).
+        // Geographic only — gameplay still sees EMPTY; rendering/minimap
+        // use it to show blue ocean when the cell is open.
+        ocean: new Uint8Array(n),
+        // beach (v117, survival only): 1 = sand-ring cell (see coastMask).
         // Geographic only — gameplay still sees EMPTY; rendering/minimap
         // use it to show yellow sand when the cell is open.
         beach: new Uint8Array(n),
         // grass (v119, survival only): 1 = grass-ring cell, the inner
-        // half of the coast ring (sand outer, grass inner). Same rules
-        // as beach: EMPTY gameplay, green rendering when open.
+        // layer of the coast ring (ocean outer, sand middle, grass inner).
+        // Same rules as beach: EMPTY gameplay, green rendering when open.
         grass: new Uint8Array(n) };
   // Survival: the flood controller (random edge, wave timer). Its own
   // RNG stream, so the map below is identical to main for the same seed.
   S.flood = floodInit(seed);
 
-  // Beach/grass mask early (v117/v119, survival only): it must exist
+  // Coast mask early (v117/v119/v122, survival only): it must exist
   // before the HP normalization below, so coast cells' noise values
   // don't set the island's HP range — otherwise an HP extreme that only
   // occurs on the coast would vanish from island rock (HP 3 did on
   // seed 1234, beach-only, before the exclusion).
   if (SURVIVAL) {
-    const coast = beachMask(cfg.cols, cfg.rows, seed);
-    S.beach = coast.beach; S.grass = coast.grass;
+    const coast = coastMask(cfg.cols, cfg.rows, seed);
+    S.ocean = coast.ocean; S.beach = coast.beach; S.grass = coast.grass;
   }
 
   // Caves first (cellular-automata blobs), then HP from a smooth noise gradient:
@@ -1596,14 +1617,14 @@ function newGame() {
   // the observed range to 0–1, so all 8 HP levels show up every seed.
   // Same field, just wider values — blob edges get steeper HP ramps while
   // blob centers stay smooth. Grey reuses this field (see below).
-  // Beach/grass cells are excluded: only island rock sets the range.
+  // Coast cells are excluded: only island rock sets the range.
   const raw = new Float32Array(cfg.cols * cfg.rows);
   let vmin = 1, vmax = 0;
   for (let y = 0; y < cfg.rows; y++) {
     for (let x = 0; x < cfg.cols; x++) {
       const i = y * cfg.cols + x;
       raw[i] = noise((x / cfg.cols) * 3.5, (y / cfg.rows) * 3.5);
-      if (!cave[i] && !S.beach[i] && !S.grass[i]) {
+      if (!cave[i] && !S.ocean[i] && !S.beach[i] && !S.grass[i]) {
         if (raw[i] < vmin) vmin = raw[i];
         if (raw[i] > vmax) vmax = raw[i];
       }
@@ -1623,21 +1644,21 @@ function newGame() {
     }
   }
 
-  // Beach + grass (v117/v119, survival only): override the coast rings
-  // to open ground, after terrain but before starter/grey/nuggets, so
-  // grey and nuggets (both WHITE-only) never land on the coast, and the
-  // starter can spawn on sand. Island interior is untouched for a given
-  // seed (coast uses its own RNG stream; the mask was computed before
-  // terrain so island HP normalization excludes coast cells). Fog note
-  // (v118): fog is distance-only, so the coast rings are NOT fully
-  // revealed at start — only the starter's disc is, and the rest of
-  // the coast stays dark until a unit gets near it. Rescue note: the
-  // coast ring is the starter's home component, so pickRescueSites puts
-  // civilians in separate island pockets, not on the coast — rescue
-  // still means digging into the island.
+  // Ocean + sand + grass (v117/v119/v122, survival only): override the
+  // coast rings to open ground, after terrain but before starter/grey/
+  // nuggets, so grey and nuggets (both WHITE-only) never land on the
+  // coast, and the starter can spawn on sand. Island interior is
+  // untouched for a given seed (coast uses its own RNG stream; the mask
+  // was computed before terrain so island HP normalization excludes
+  // coast cells). Fog note (v118): fog is distance-only, so the coast
+  // rings are NOT fully revealed at start — only the starter's disc
+  // is, and the rest of the coast stays dark until a unit gets near
+  // it. Rescue note: the coast ring is the starter's home component,
+  // so pickRescueSites puts civilians in separate island pockets, not
+  // on the coast — rescue still means digging into the island.
   if (SURVIVAL) {
     for (let i = 0; i < n; i++) {
-      if (!S.beach[i] && !S.grass[i]) continue;
+      if (!S.ocean[i] && !S.beach[i] && !S.grass[i]) continue;
       cells[i] = EMPTY; hp[i] = 0; maxhp[i] = 0; goldNug[i] = 0;
     }
   }
@@ -1759,8 +1780,8 @@ function newGame() {
   resize();       // backing store = viewport x devicePixelRatio
   // v119: start zoomed in on the starting unit, not fully zoomed out.
   // pc is the starter (sand on survival, cave on main) — clampCamera
-  // inside resetCamera pins an edge starter to the nearest in-map
-  // center plus 6 cells of ocean slack (v121).
+  // inside resetCamera pins to the map edge (v122: no slack, but the
+  // starter is inland of the ocean ring, so it still centres well).
   resetCamera(START_ZOOM_MULT, (pc.x + 0.5) * CELL_PX, (pc.y + 0.5) * CELL_PX);
 
   overlay.classList.add('hidden');
@@ -2175,7 +2196,8 @@ function meteorNextInterval() {
   return METEOR_INTERVAL_MIN + Math.random() * (METEOR_INTERVAL_MAX - METEOR_INTERVAL_MIN);
 }
 function meteorTargets() {
-  // Count scales with map area: 7–10 on the default 48x36 (1728 cells),
+  // Count scales with map area: 7–10 per 1728 cells, so 15–22 on the
+  // default 75x50 (3750 cells),
   // fewer on tiny maps, more on huge ones. Positions are uniform —
   // anywhere, including fog, starter area, and flood territory.
   const area = cfg.cols * cfg.rows;
@@ -3927,7 +3949,7 @@ function drawRockCell(x, y) {
 // ---- Render ----
 function render() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // draw in CSS px: crisp on hidpi
-  ctx.fillStyle = OCEAN_COLOR; // v120: outside the map is ocean, not black void
+  ctx.fillStyle = '#000'; // v122: black again, so it blends with fog — the ocean is now inside the map, not outside it
   ctx.fillRect(0, 0, view.w, view.h);
   // ---- world pass: everything through the camera ----
   ctx.save();
@@ -3975,7 +3997,8 @@ function render() {
         ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX);
       }
       else if (st === EMPTY) {
-        const sh = (S.beach && S.beach[i]) ? BEACH_SHADES[S.shade[i] || 0] :
+        const sh = (S.ocean && S.ocean[i]) ? OCEAN_SHADES[S.shade[i] || 0] :
+          (S.beach && S.beach[i]) ? BEACH_SHADES[S.shade[i] || 0] :
           (S.grass && S.grass[i]) ? GRASS_SHADES[S.shade[i] || 0] : CAVE_SHADES[S.shade[i] || 0];
         ctx.fillStyle = `rgb(${sh[0]},${sh[1]},${sh[2]})`;
         ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX);
