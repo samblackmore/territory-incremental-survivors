@@ -163,8 +163,10 @@ const ICONS_ORIG = {
   waypoint: '<svg viewBox="0 0 24 24" width="36" height="36"><circle cx="12" cy="12" r="8" fill="none" stroke="#ef4444" stroke-width="2"/><circle cx="12" cy="12" r="2.5" fill="#ef4444"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4" stroke="#ef4444" stroke-width="2"/></svg>',
   // Evo icons (v115): same flat SVG style, player color via buildIcons.
   // Sprayer = spray fan (origin dot + 3 fanning lines); Painter =
-  // paint splash (filled starburst blob + droplets). No names on Evo
-  // cards — just these icons + the word EVO.
+  // paint splash (filled starburst blob + droplets). Used on the Evo
+  // cards themselves (with the name) and on the Damage/Rate stat cards'
+  // little Evo line (icon + EVO, no name — v115/v116: the name appears
+  // only when you reach the Evo, not on the base stat card).
   evoSpray: '<svg viewBox="0 0 24 24" width="36" height="36"><circle cx="6" cy="12" r="2.5" fill="#ef4444"/><path d="M9 10 L19 5 M9 12 L20 12 M9 14 L19 19" stroke="#ef4444" stroke-width="2.5" stroke-linecap="round" fill="none"/></svg>',
   evoPaint: '<svg viewBox="0 0 24 24" width="36" height="36"><path d="M12 3 L14 7 L19 6 L17 11 L21 13 L16 15 L18 20 L12 17 L6 20 L8 15 L3 13 L7 11 L5 6 L10 7 Z" fill="#ef4444"/><circle cx="20" cy="4" r="1.5" fill="#ef4444"/><circle cx="4" cy="19" r="1.2" fill="#ef4444"/></svg>',
 };
@@ -358,6 +360,23 @@ function drawMinimap() {
     else if (S.flood.dir === 1) mmctx.fillRect(0, H - T, W, T); // from bottom
     else if (S.flood.dir === 2) mmctx.fillRect(0, 0, T, H); // from left
     else mmctx.fillRect(W - T, 0, T, H); // from right
+  }
+  // Meteor warning (v116): yellow circles on the minimap for every
+  // target that has not impacted yet — all of them during the 10s
+  // warning, then the remaining ones as the shower progresses (each
+  // circle disappears as its meteor lands). Shines through fog, like
+  // the rescue ?, so fogged targets still warn. Stroke only, so the
+  // underlying terrain cell stays readable.
+  if (SURVIVAL && S.meteor && (S.meteor.phase === 'warn' || S.meteor.phase === 'shower')) {
+    const a = 0.55 + 0.25 * Math.sin(S.time * Math.PI * 2 / 2.2);
+    mmctx.strokeStyle = `rgba(255, 215, 94, ${a})`;
+    mmctx.lineWidth = 1.5;
+    for (const t of S.meteor.targets) {
+      if (t.state === 'done') continue;
+      mmctx.beginPath();
+      mmctx.arc(t.x * px + 1, t.y * px + 1, 4, 0, Math.PI * 2);
+      mmctx.stroke();
+    }
   }
   const total = cols * rows;
   // Dots match the RENDERED colors, not the internal team ids. When the
@@ -1426,6 +1445,13 @@ function newGame() {
         // waypoints (survival shop only): gold aim markers, not turrets —
         // cannons orient to the nearest one (see cannon update).
         waypoints: [],
+        // meteor shower (v116): idle -> warn (10s toast + minimap rings)
+        // -> shower (staggered shrinking shadows -> impact) -> idle.
+        // First warning starts 2–4 minutes in, so the first 2 minutes
+        // stay quiet for levelling, then the shower breaks the quiet.
+        meteor: { phase: 'idle',
+                  timer: METEOR_INTERVAL_MIN + Math.random() * (METEOR_INTERVAL_MAX - METEOR_INTERVAL_MIN),
+                  targets: [], idx: 0, stagger: 0 },
         dmgBonus: 0, steerMult: 1,
         // territory (Tiberium fields): per-cell growth progress
         growN: new Uint8Array(n), growBy: new Uint8Array(n), growT: new Float32Array(n),
@@ -1765,6 +1791,43 @@ const CIV_MAX = 5;
 const CIV_STEP_DUR = 1.0; // seconds per civilian step — slow on purpose, like Harvester
 const CIV_PINK = '#f472b6'; // civilian blob + minimap ? + rescue burst, one pink everywhere
 const CIV_SETTLE_RADIUS = 2; // Manhattan distance from a base a civilian may settle (v113: congregate, not vanish)
+// Meteor shower (v116): a periodic reshuffling event to liven up the
+// quiet first 5 minutes — and every 2–4 minutes after, even during a
+// flood storm. Sequence: 10s warning (toast countdown + yellow circles
+// on the minimap for every target), then shadows appear one by one,
+// staggered, each shrinking from large to small, then impact.
+// Impact, per cell in a circular cluster (radius 2, 13 cells):
+//   EMPTY (no turret/civilian/idle coin) -> strong grey rock (80 HP,
+//     shade 5, consistent with the grey HP/shade curve) — a boulder in
+//     a cleared cave, clearable later for grey rewards (guaranteed
+//     pickup, 80% gold / 20% XP, same as any grey rock).
+//   WHITE/GREY terrain -> 10 damage (brown, HP <= 10, is wiped out to a
+//     hole; grey, HP 30–100, is only chipped). No drops, no nugget
+//     release — like flood destruction, the meteor does not pay.
+//   BLUE/RED territory -> bombed to EMPTY (a hole in the base/flood).
+//   Living turret on the cell -> 3 damage, cell unchanged (turret
+//     protects its pad; full-HP units all survive: min unit HP is 4
+//     (Field/Outpost), so 3 never one-shots a healthy unit — a unit
+//     already at <= 3 HP can still be finished off, like any damage).
+//   Civilian cell -> skipped entirely (civilians never die, never buried).
+//   EMPTY cell with an idle coin -> skipped (coin would be buried and
+//     uncollectible; it stays, the cluster just has a gap there).
+// Toast shares wavebanner with the flood toast: meteorTick runs after
+// floodTick in update(), so during the 10s warning the meteor countdown
+// wins, and the flood toast returns the next frame after the warning
+// ends (meteorTick never hides wavebanner outside the warning phase).
+const METEOR_WARN_DUR = 10; // seconds of toast + minimap markers before the shower
+const METEOR_INTERVAL_MIN = 120; // 2 minutes, random up to:
+const METEOR_INTERVAL_MAX = 240; // 4 minutes between showers (warning start to warning start)
+const METEOR_STAGGER = 0.7; // seconds between shadow appearances, one by one
+const METEOR_SHADOW_DUR = 1.2; // seconds a shadow shrinks from large to impact
+const METEOR_SHADOW_R0 = 2.5; // cells, initial shadow radius
+const METEOR_SHADOW_R1 = 0.4; // cells, final shadow radius at impact
+const METEOR_CLUSTER_R2 = 4; // squared radius: dx*dx + dy*dy <= 4 (radius 2, 13 cells)
+const METEOR_TERRAIN_DMG = 10;
+const METEOR_UNIT_DMG = 3;
+const METEOR_ROCK_HP = 80;
+const METEOR_ROCK_SHADE = 5;
 // dir: 0 = from top, 1 = from bottom, 2 = from left, 3 = from right.
 // The emitter is a single point just outside the map on that edge —
 // never seen, only its effects creeping in. Each storm picks a new
@@ -1951,6 +2014,162 @@ function floodTick(dt) {
     floodPickDir(f, Math.random);
     wavebanner.classList.add('hidden');
   }
+}
+
+// Meteor shower (v116): periodic terrain reshuffle, even during flood.
+// Runs after floodTick in update(), so the 10s warning countdown wins
+// over the flood toast while it lasts, then the flood toast returns.
+// Paused/finished runs freeze it (update() only runs when playing).
+function meteorNextInterval() {
+  return METEOR_INTERVAL_MIN + Math.random() * (METEOR_INTERVAL_MAX - METEOR_INTERVAL_MIN);
+}
+function meteorTargets() {
+  // Count scales with map area: 7–10 on the default 48x36 (1728 cells),
+  // fewer on tiny maps, more on huge ones. Positions are uniform —
+  // anywhere, including fog, starter area, and flood territory.
+  const area = cfg.cols * cfg.rows;
+  const base = 7 + Math.floor(Math.random() * 4); // 7, 8, 9, or 10
+  const n = Math.max(1, Math.round(area / 1728 * base));
+  const out = [];
+  for (let k = 0; k < n; k++) {
+    out.push({ x: Math.floor(Math.random() * cfg.cols),
+               y: Math.floor(Math.random() * cfg.rows),
+               state: 'pending', shadowT: 0 });
+  }
+  return out;
+}
+function meteorTick(dt) {
+  const m = S.meteor;
+  if (!m || S.runOver) return;
+  if (m.phase === 'idle') {
+    m.timer -= dt;
+    if (m.timer <= 0) {
+      m.phase = 'warn';
+      m.timer = METEOR_WARN_DUR;
+      m.targets = meteorTargets();
+      m.idx = 0; m.stagger = 0;
+    }
+    return;
+  }
+  if (m.phase === 'warn') {
+    m.timer -= dt;
+    wavebanner.textContent = 'METEOR SHOWER IN ' + Math.max(1, Math.ceil(m.timer)) + 's';
+    wavebanner.classList.remove('hidden');
+    if (m.timer <= 0) {
+      m.phase = 'shower';
+      m.idx = 0; m.stagger = 0;
+      // Do NOT hide wavebanner here: floodTick already set it this
+      // frame (flood toast or hidden), and meteorTick only writes it
+      // during the warning phase, so the flood state returns cleanly.
+    }
+    return;
+  }
+  // Shower: shadows appear one by one, staggered, each shrinking to impact.
+  m.stagger -= dt;
+  if (m.stagger <= 0 && m.idx < m.targets.length) {
+    m.targets[m.idx].state = 'shadow';
+    m.targets[m.idx].shadowT = 0;
+    m.idx++;
+    m.stagger = METEOR_STAGGER;
+  }
+  let done = true;
+  for (const t of m.targets) {
+    if (t.state === 'shadow') {
+      t.shadowT += dt;
+      if (t.shadowT >= METEOR_SHADOW_DUR) {
+        t.state = 'done';
+        meteorImpact(t.x, t.y);
+      } else {
+        done = false;
+      }
+    } else if (t.state !== 'done') {
+      done = false;
+    }
+  }
+  if (done && m.idx >= m.targets.length) {
+    m.phase = 'idle';
+    m.timer = meteorNextInterval();
+    m.targets = [];
+    m.idx = 0; m.stagger = 0;
+  }
+}
+// One meteor impact: process the circular cluster around (tx, ty).
+// See the METEOR_* constants for the per-cell rules (EMPTY -> grey,
+// terrain -> 10 damage, territory -> EMPTY, turret -> 3 damage,
+// civilian/idle-coin cells skipped). Fog is recomputed once, after
+// all cells, not per cell.
+function meteorImpact(tx, ty) {
+  let changed = false;
+  for (let dy = -2; dy <= 2; dy++) {
+    for (let dx = -2; dx <= 2; dx++) {
+      if (dx * dx + dy * dy > METEOR_CLUSTER_R2) continue;
+      const x = tx + dx, y = ty + dy;
+      if (x < 0 || y < 0 || x >= cfg.cols || y >= cfg.rows) continue;
+      const idx = y * cfg.cols + x;
+      // Civilians never die and never get buried: skip their cell whole.
+      if (S.rescue && (S.rescue.civilians || []).some(c => c.x === x && c.y === y)) continue;
+      // Living turret on the cell: damage the unit, leave its ground alone
+      // (burying a turret pad in rock would break fog flood-fill from it).
+      const tur = S.turrets.find(t => !t.dead && t.x === x && t.y === y);
+      if (tur) {
+        damageTurret(tur, METEOR_UNIT_DMG, RED);
+        spawnBurst(x + 0.5, y + 0.5, '#ffd75e'); // meteor flash on the unit
+        continue;
+      }
+      const cell = S.cells[idx];
+      if (cell === EMPTY) {
+        // Idle coin on this cell would be buried and uncollectible
+        // (Harvester can't stand on rock): leave the cell empty, the
+        // cluster just has a gap where the coin sits.
+        if ((S.coins || []).some(c => c.state === 'idle' && Math.floor(c.x) === x && Math.floor(c.y) === y)) continue;
+        S.cells[idx] = GREY;
+        S.hp[idx] = METEOR_ROCK_HP; S.maxhp[idx] = METEOR_ROCK_HP;
+        S.shade[idx] = METEOR_ROCK_SHADE;
+        S.hitBy[idx] = 0; S.goldNug[idx] = 0;
+        S.growN[idx] = 0; S.growBy[idx] = 0;
+        if (S.noHarvest) S.noHarvest[idx] = 0;
+        spawnBurst(x + 0.5, y + 0.5, CELL_COLORS[GREY]); // grey dust per new rock
+        changed = true;
+        continue;
+      }
+      if (cell === WHITE || cell === GREY) {
+        // Terrain damage, by hand (not damageBlock): no drops, no nugget
+        // release — the meteor does not pay, like flood destruction.
+        // Pop + chip + damage number read like any rock hit; a kill
+        // also bursts, clears to EMPTY, and loses any nugget on the cell.
+        S.hp[idx] = Math.max(0, S.hp[idx] - METEOR_TERRAIN_DMG);
+        S.hitBy[idx] = RED; // threat tint, like flood damage (cellRGB is RED-or-player)
+        S.popT[idx] = 0; S.popAmp[idx] = 1; S.popCol[idx] = RED;
+        S.popDX[idx] = 0; S.popDY[idx] = 0;
+        spawnChip(x + 0.5, y + 0.5, CELL_COLORS[GREY], 0, -1);
+        spawnDmgNum(x + 0.5, y + 0.2, METEOR_TERRAIN_DMG, false);
+        if (S.hp[idx] <= 0) {
+          const wasCell = cell;
+          S.cells[idx] = EMPTY;
+          S.hp[idx] = 0; S.maxhp[idx] = 0;
+          S.goldNug[idx] = 0; // nugget lost with the rock, no free coin
+          S.growN[idx] = 0; S.growBy[idx] = 0;
+          if (S.noHarvest) S.noHarvest[idx] = 0;
+          S.destroyed++;
+          spawnBurst(x + 0.5, y + 0.5, CELL_COLORS[wasCell]);
+        }
+        changed = true;
+        continue;
+      }
+      if (cell === BLUE || cell === RED) {
+        // Territory bombed to a hole. No drops (territory pays only on
+        // harvest, not on destruction), growth cleared, fog recomputed below.
+        S.cells[idx] = EMPTY;
+        S.hp[idx] = 0; S.maxhp[idx] = 0;
+        S.growN[idx] = 0; S.growBy[idx] = 0;
+        if (S.noHarvest) S.noHarvest[idx] = 0;
+        spawnBurst(x + 0.5, y + 0.5, CELL_COLORS[cell]);
+        changed = true;
+        continue;
+      }
+    }
+  }
+  if (changed) computeFog();
 }
 
 // Debug only: jump the run clock to the end of grace (5:00) and start
@@ -2430,10 +2649,10 @@ function availableCards() {
     return (!c.needs || hasTurretTypes(c.needs));
   });
   if (cannonRateMaxed()) {
-    pool.push({ kind: 'evo', title: 'EVO', icon: ICONS.evoSpray, sub: 'Blazing-fast sweep spray' });
+    pool.push({ kind: 'evo', title: 'Sprayer', icon: ICONS.evoSpray, sub: 'Blazing-fast sweep spray' });
   }
   if (cannonDmgMaxed()) {
-    pool.push({ kind: 'evoPaint', title: 'EVO', icon: ICONS.evoPaint, sub: 'Cannon paints ground as it fires — painted ground pays, weaker than Field' });
+    pool.push({ kind: 'evoPaint', title: 'Painter', icon: ICONS.evoPaint, sub: 'Cannon paints ground as it fires — painted ground pays, weaker than Field' });
   }
   if (SURVIVAL) {
     // Projectiles hybrid (survival only): back in the XP row as a
@@ -2547,11 +2766,11 @@ function offerCards() {
       if (p.weapon === 'cannon' && p.stat === 'rate') evoLine = `<span class="evoline">${ICONS.evoSpray} EVO</span>`;
     }
     else if (p.kind === 'evo') {
-      title = `EVO`;
+      title = `Sprayer <span class="lv">EVO</span>`;
       sub = p.sub;
     }
     else if (p.kind === 'evoPaint') {
-      title = `EVO`;
+      title = `Painter <span class="lv">EVO</span>`;
       sub = p.sub;
     }
     else if (p.kind === 'gold') {
@@ -3063,6 +3282,7 @@ function update(dt) {
   // fields starves its army).
   if (SURVIVAL) {
     floodTick(dt);
+    meteorTick(dt); // after floodTick: meteor warning wins the shared toast for 10s
   } else if (!S.runOver) {
     const redMoles = S.turrets.filter(t => !t.dead && t.color === RED && t.type === 'mole').length;
     if (redMoles < RED_MOLE_MAX) {
@@ -3680,6 +3900,22 @@ function render() {
     ctx.arc(r.x * CELL_PX, r.y * CELL_PX, 4 + k * CELL_PX * 1.4, 0, Math.PI * 2);
     ctx.stroke();
     ctx.globalAlpha = 1;
+  }
+  // Meteor shadows (v116): one dark circle per falling meteor, large
+  // then shrinking (and darkening) as it nears the ground. Drawn under
+  // turrets/damage numbers so units stay readable through the shadow.
+  if (S.meteor && S.meteor.phase === 'shower') {
+    for (const t of S.meteor.targets) {
+      if (t.state !== 'shadow') continue;
+      const k = Math.min(1, t.shadowT / METEOR_SHADOW_DUR);
+      const rad = (METEOR_SHADOW_R0 + (METEOR_SHADOW_R1 - METEOR_SHADOW_R0) * k) * CELL_PX;
+      ctx.globalAlpha = 0.25 + 0.25 * k; // faint large -> dark small
+      ctx.fillStyle = '#000';
+      ctx.beginPath();
+      ctx.arc((t.x + 0.5) * CELL_PX, (t.y + 0.5) * CELL_PX, rad, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
   }
   // Damage numbers: bold retro white text with a dark outline, drifting up.
   // Crits render gold and slightly larger.
