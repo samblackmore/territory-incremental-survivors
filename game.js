@@ -294,7 +294,9 @@ function drawMinimap() {
     for (let x = 0; x < cols; x++) {
       const f = fogHidden ? 0 : S.fog[y * cols + x];
       if (f === 0) {
-        mmctx.fillStyle = S.cells[y * cols + x] === GREY ? '#6b7280' : '#9ca3af';
+        const ci = y * cols + x;
+        mmctx.fillStyle = S.cells[ci] === GREY ? '#6b7280' :
+          (S.beach && S.beach[ci] && S.cells[ci] === EMPTY ? BEACH_MINIMAP : '#9ca3af');
         mmctx.fillRect(x * px, y * px, px, px);
       }
       else if (f === 1) { mmctx.fillStyle = '#4b5563'; mmctx.fillRect(x * px, y * px, px, px); }
@@ -648,6 +650,63 @@ const GREY_MIN_DIST = 12;      // cells from the starter: no grey near the openi
 const GREY_HP_MIN = 30, GREY_HP_MAX = 100;
 const GREY_GOLD_CHANCE = 0.8;  // grey drops: mostly gold (XP is easy mid-game)
 const BROWN_GOLD_CHANCE = 0.1; // regular brown rock: 10% gold on break (BLUE only, non-nugget, non-grey) — you don't have to rely on nuggets alone; independent of the XP roll, so a break can drop both
+// Beach (v117, survival only): a ring of open yellow grass around the
+// island, up to 10% of the board on all sides, with a smooth wavy
+// coastline (not a straight line). Beach cells are still EMPTY for all
+// gameplay (placement, fog, flood spread, harvest, meteors) — S.beach
+// is only a geographic flag: a beach cell renders yellow when it is
+// EMPTY, and renders normally (rock/territory) when something covers
+// it, so a meteor boulder on the beach, once cleared, reveals sand
+// again. The flag never clears, so beach geography persists.
+// Coastline: per-edge depths from smooth 1D noise, normalized per edge
+// so the full 40–100% of max range actually shows (raw fbm clusters in
+// the middle, which would look almost straight). Min 40% guarantees the
+// ring is never broken: at least ~2 cells wide everywhere on the
+// default map, so the beach is one connected component (the starter's
+// home component — see computeFog and pickRescueSites).
+const BEACH_MAX_FRAC = 0.10; // max beach depth = 10% of the dimension (width for left/right, height for top/bottom)
+const BEACH_MIN_FRAC = 0.40; // min depth = 40% of max, so the ring never pinches shut
+const BEACH_SEED_OFFSET = 77777; // own RNG stream: island generation (caves/noise/grey/nuggets) is untouched for a given seed
+const BEACH_SHADES = [ // fixed sand yellow, light -> dark (not tied to the empty-color debug picker)
+  [232, 213, 124], [226, 205, 110], [217, 196, 106], [205, 183, 94],
+  [190, 168, 82], [172, 151, 70], [150, 131, 58], [128, 111, 48],
+];
+const BEACH_MINIMAP = '#d9c46a'; // middle beach shade, for the minimap
+function beachDepths(n, maxDepth, noise, u0) {
+  // Raw noise along one edge (~2.5 undulations), normalized to 0–1,
+  // then mapped to [MIN_FRAC, 1] * maxDepth. Returns depths in cells (float).
+  const raw = new Float32Array(n);
+  let mn = Infinity, mx = -Infinity;
+  for (let k = 0; k < n; k++) {
+    const v = noise((k / n) * 2.5, u0);
+    raw[k] = v; if (v < mn) mn = v; if (v > mx) mx = v;
+  }
+  const span = (mx - mn) || 1;
+  const out = new Float32Array(n);
+  for (let k = 0; k < n; k++) {
+    const norm = (raw[k] - mn) / span;
+    out[k] = (BEACH_MIN_FRAC + (1 - BEACH_MIN_FRAC) * norm) * maxDepth;
+  }
+  return out;
+}
+function beachMask(cols, rows, seed) {
+  const mask = new Uint8Array(cols * rows);
+  const noise = makeNoise2D(mulberry32(seed + BEACH_SEED_OFFSET));
+  const maxX = cols * BEACH_MAX_FRAC, maxY = rows * BEACH_MAX_FRAC;
+  const top = beachDepths(cols, maxY, noise, 0.13);
+  const bottom = beachDepths(cols, maxY, noise, 0.71);
+  const left = beachDepths(rows, maxX, noise, 0.29);
+  const right = beachDepths(rows, maxX, noise, 0.87);
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      // Distance to the edge < that edge's depth (float) = beach.
+      // Bottom/right use distance = (dim-1) - coord, so counts match top/left.
+      if (y < top[x] || y > rows - 1 - bottom[x] ||
+          x < left[y] || x > cols - 1 - right[y]) mask[y * cols + x] = 1;
+    }
+  }
+  return mask;
+}
 const MOVE_DUR = 0.25; // seconds to glide from one cell to the next (moles)
 const HARVESTER_STEP_DUR = 1.0; // seconds per harvester step — slow on purpose, so speed (not range) limits collection
 const MOLE_NUGGET_BIAS = 0.7; // blue mole: 70% toward nearest nugget, 30% random wander
@@ -682,7 +741,7 @@ function cellRGB(x, y) {
   const st = S.cells[i];
   if (st === BLUE) return BLUE_RGB;
   if (st === RED) return RED_RGB;
-  if (st === EMPTY) return CAVE_SHADES[S.shade[i] || 0];
+  if (st === EMPTY) return (S.beach && S.beach[i]) ? BEACH_SHADES[S.shade[i] || 0] : CAVE_SHADES[S.shade[i] || 0];
   const max = S.maxhp[i] || 3, hpv = S.hp[i];
   const base = st === GREY ? GREY_SHADES[S.shade[i] || 0] : TERRAIN[max];
   let r = base[0], g = base[1], b = base[2];
@@ -1462,10 +1521,20 @@ function newGame() {
         // cells — only harvest (and placement, see placeTurretAt) cares.
         noHarvest: new Uint8Array(n),
         // fog of war: 0 = clear, 1 = half, 2 = full (black)
-        fog: new Uint8Array(n).fill(2) };
+        fog: new Uint8Array(n).fill(2),
+        // beach (v117, survival only): 1 = beach-ring cell (see beachMask).
+        // Geographic only — gameplay still sees EMPTY; rendering/minimap
+        // use it to show yellow sand when the cell is open.
+        beach: new Uint8Array(n) };
   // Survival: the flood controller (random edge, wave timer). Its own
   // RNG stream, so the map below is identical to main for the same seed.
   S.flood = floodInit(seed);
+
+  // Beach mask early (v117, survival only): it must exist before the
+  // HP normalization below, so beach cells' noise values don't set the
+  // island's HP range — otherwise an HP extreme that only occurs on
+  // the beach would vanish from island rock (HP 3 did on seed 1234).
+  if (SURVIVAL) S.beach = beachMask(cfg.cols, cfg.rows, seed);
 
   // Caves first (cellular-automata blobs), then HP from a smooth noise gradient:
   // white ~3 hits ... dark grey ~10 hits
@@ -1476,13 +1545,14 @@ function newGame() {
   // the observed range to 0–1, so all 8 HP levels show up every seed.
   // Same field, just wider values — blob edges get steeper HP ramps while
   // blob centers stay smooth. Grey reuses this field (see below).
+  // Beach cells are excluded: only island rock sets the range.
   const raw = new Float32Array(cfg.cols * cfg.rows);
   let vmin = 1, vmax = 0;
   for (let y = 0; y < cfg.rows; y++) {
     for (let x = 0; x < cfg.cols; x++) {
       const i = y * cfg.cols + x;
       raw[i] = noise((x / cfg.cols) * 3.5, (y / cfg.rows) * 3.5);
-      if (!cave[i]) {
+      if (!cave[i] && !S.beach[i]) {
         if (raw[i] < vmin) vmin = raw[i];
         if (raw[i] > vmax) vmax = raw[i];
       }
@@ -1502,12 +1572,49 @@ function newGame() {
     }
   }
 
-  // The player's Cannon spawns inside a cave near the bottom-left anchor —
-  // chipping away at cave walls feels better than painting open ground.
-  // Red comes in waves after that (see startWave).
-  const pA = { x: cfg.cols * 0.15, y: cfg.rows * 0.85 };
-  const pi = nearestCave(pA.x, pA.y, -1);
-  const pc = pi >= 0 ? { x: pi % cfg.cols, y: Math.floor(pi / cfg.cols) } : snapAnchor(pA);
+  // Beach (v117, survival only): override the ring to open sand, after
+  // terrain but before starter/grey/nuggets, so grey and nuggets (both
+  // WHITE-only) never land on the beach, and the starter can spawn on
+  // it. Island interior is untouched for a given seed (beach uses its
+  // own RNG stream; the mask was computed before terrain so island HP
+  // normalization excludes beach cells). Fog note: the beach ring is
+  // one connected EMPTY component, so computeFog reveals the whole ring
+  // + a fogDist fringe into the island at start, while deep island
+  // caves stay fogged. Rescue note: the beach ring is the starter's
+  // home component, so pickRescueSites puts civilians in separate
+  // island pockets, not on the beach — rescue still means digging
+  // into the island.
+  if (SURVIVAL) {
+    for (let i = 0; i < n; i++) {
+      if (!S.beach[i]) continue;
+      cells[i] = EMPTY; hp[i] = 0; maxhp[i] = 0; goldNug[i] = 0;
+    }
+  }
+
+  // The player's Cannon spawns: survival = anywhere on the beach
+  // (random beach cell, own RNG stream so the island RNG is untouched
+  // — same seed still builds the same island, and the same beach
+  // starter). Main (frozen) = inside a cave near the bottom-left
+  // anchor, as before — chipping away at cave walls feels better than
+  // painting open ground. Red comes in waves after that (see startWave).
+  let pc;
+  if (SURVIVAL) {
+    const beachCells = [];
+    for (let i = 0; i < n; i++) if (S.beach[i]) beachCells.push(i);
+    if (beachCells.length) {
+      const starterRng = mulberry32(seed + 88888);
+      const bi = beachCells[Math.floor(starterRng() * beachCells.length)];
+      pc = { x: bi % cfg.cols, y: Math.floor(bi / cfg.cols) };
+    } else {
+      const pA = { x: cfg.cols * 0.15, y: cfg.rows * 0.85 };
+      const pi = nearestCave(pA.x, pA.y, -1);
+      pc = pi >= 0 ? { x: pi % cfg.cols, y: Math.floor(pi / cfg.cols) } : snapAnchor(pA);
+    }
+  } else {
+    const pA = { x: cfg.cols * 0.15, y: cfg.rows * 0.85 };
+    const pi = nearestCave(pA.x, pA.y, -1);
+    pc = pi >= 0 ? { x: pi % cfg.cols, y: Math.floor(pi / cfg.cols) } : snapAnchor(pA);
+  }
   const pci = pc.y * cfg.cols + pc.x;
   if (S.cells[pci] !== EMPTY) {
     // The starter always gets open ground: clear its cell (the snapAnchor
@@ -3824,7 +3931,7 @@ function render() {
         ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX);
       }
       else if (st === EMPTY) {
-        const sh = CAVE_SHADES[S.shade[i] || 0];
+        const sh = (S.beach && S.beach[i]) ? BEACH_SHADES[S.shade[i] || 0] : CAVE_SHADES[S.shade[i] || 0];
         ctx.fillStyle = `rgb(${sh[0]},${sh[1]},${sh[2]})`;
         ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX);
       }
