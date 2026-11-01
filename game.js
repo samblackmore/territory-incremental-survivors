@@ -663,7 +663,7 @@ const BROWN_GOLD_CHANCE = 0.1; // regular brown rock: 10% gold on break (BLUE on
 // the middle, which would look almost straight). Min 40% guarantees the
 // ring is never broken: at least ~2 cells wide everywhere on the
 // default map, so the beach is one connected component (the starter's
-// home component — see computeFog and pickRescueSites).
+// home component for pickRescueSites).
 const BEACH_MAX_FRAC = 0.10; // max beach depth = 10% of the dimension (width for left/right, height for top/bottom)
 const BEACH_MIN_FRAC = 0.40; // min depth = 40% of max, so the ring never pinches shut
 const BEACH_SEED_OFFSET = 77777; // own RNG stream: island generation (caves/noise/grey/nuggets) is untouched for a given seed
@@ -1151,9 +1151,9 @@ function pickRescueSites(rng) {
   if (!SURVIVAL || !S || !S.cells) return;
   const W = cfg.cols, H = cfg.rows, n = W * H;
   const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-  // Components over EMPTY (4-dir, turret cells count as EMPTY for
-  // connectivity — same definition as computeFog's home region, so a
-  // "separate pocket" really is disconnected until you dig to it).
+  // Components over EMPTY (4-dir) — a "separate pocket" really is
+  // disconnected until you dig to it. (Fog no longer uses this
+  // definition since v118; rescue still does.)
   const comp = new Int32Array(n).fill(-1);
   let compCount = 0;
   for (let i = 0; i < n; i++) {
@@ -1577,13 +1577,13 @@ function newGame() {
   // WHITE-only) never land on the beach, and the starter can spawn on
   // it. Island interior is untouched for a given seed (beach uses its
   // own RNG stream; the mask was computed before terrain so island HP
-  // normalization excludes beach cells). Fog note: the beach ring is
-  // one connected EMPTY component, so computeFog reveals the whole ring
-  // + a fogDist fringe into the island at start, while deep island
-  // caves stay fogged. Rescue note: the beach ring is the starter's
-  // home component, so pickRescueSites puts civilians in separate
-  // island pockets, not on the beach — rescue still means digging
-  // into the island.
+  // normalization excludes beach cells). Fog note (v118): fog is
+  // distance-only, so the beach ring is NOT fully revealed at start —
+  // only the starter's disc is, and the rest of the beach stays dark
+  // until a unit gets near it. Rescue note: the beach ring is the
+  // starter's home component, so pickRescueSites puts civilians in
+  // separate island pockets, not on the beach — rescue still means
+  // digging into the island.
   if (SURVIVAL) {
     for (let i = 0; i < n; i++) {
       if (!S.beach[i]) continue;
@@ -1703,7 +1703,7 @@ function newGame() {
   }
   if (SURVIVAL) pickRescueSites(rng); // 3 cave pockets, 1-5 civilians each (see pickRescueSites)
   startWave(1);
-  computeFog();   // fog of war: only the home cave + fogDist is visible
+  computeFog();   // fog of war: only fogDist around player units is visible
 
   resize();       // backing store = viewport x devicePixelRatio
   resetCamera();  // fully zoomed out
@@ -1717,10 +1717,11 @@ function newGame() {
 
 // ---- Fog of war --------------------------------------------------------
 // 0 = clear, 1 = half (smooth transition), 2 = full (black).
-// Reveal sources: every cave containing a blue turret (flood-filled through
-// EMPTY, plus fogDist beyond the boundary) and a fogDist radius around each
-// outpost. Recomputed whenever the cave changes (a block is excavated) or an
-// outpost is placed. Fog only ever clears, never closes back in.
+// Reveal source (v118): a fogDist disc around each living BLUE unit,
+// nothing else. No cave flood-fill — a connected cave or beach ring
+// no longer reveals itself. Recomputed when a block is excavated, a
+// unit is placed or teleported, or the game starts. Fog only ever
+// clears, never closes back in.
 function computeFog() {
   const W = cfg.cols, H = cfg.rows, n = W * H;
   const nf = new Uint8Array(n).fill(2);
@@ -1738,29 +1739,17 @@ function computeFog() {
       }
     }
   };
-  // Home caves: flood-fill EMPTY from each living blue turret.
-  const home = new Uint8Array(n);
-  const stack = [];
+  // Fog is distance-only (v118): a disc around each living BLUE unit,
+  // whatever ground it sits on (EMPTY, rock, territory — Outposts on
+  // terrain included). No cave flood-fill: being in the same cave, or
+  // on the connected beach ring, no longer reveals the whole component.
+  // That matters on the beach (v117): the starter used to reveal the
+  // entire beach ring + fringe, because the ring is one connected
+  // EMPTY component. Now only the starter's own disc is visible at
+  // start, and fog expands as units are placed, teleported, or move
+  // (via the next computeFog call — damage, growth, teleport, placement).
   for (const t of S.turrets) {
     if (t.dead || t.color !== BLUE) continue;
-    const i = t.y * W + t.x;
-    if (S.cells[i] === EMPTY && !home[i]) { home[i] = 1; stack.push(i); }
-  }
-  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-  while (stack.length) {
-    const i = stack.pop();
-    revealDisc(i % W, (i / W) | 0);
-    const x = i % W, y = (i / W) | 0;
-    for (const [dx, dy] of DIRS) {
-      const nx = x + dx, ny = y + dy;
-      if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
-      const ni = ny * W + nx;
-      if (S.cells[ni] === EMPTY && !home[ni]) { home[ni] = 1; stack.push(ni); }
-    }
-  }
-  // Outposts push back the dark in a radius.
-  for (const t of S.turrets) {
-    if (t.dead || t.type !== 'lantern') continue;
     revealDisc(t.x, t.y);
   }
   // Merge: fog only ever clears.
@@ -2624,7 +2613,7 @@ function damageBlock(idx, dmg, color, sx, sy, vx, vy, crit) {
   if (S.noHarvest) S.noHarvest[idx] = 0;
   S.destroyed++;
   if (color === BLUE) S.destroyedBlue++;
-  computeFog(); // the cave grew: push the fog boundary out
+  computeFog(); // excavation recomputes unit discs (fog only clears, so this is a no-op unless a unit moved since the last call)
   spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[color]); // the block cracks: debris + ring
   if (S.goldNug[idx] && (color === BLUE || !SURVIVAL)) {
     // Gold nugget released: locked until the rock was broken.
@@ -3251,7 +3240,7 @@ function placeTurretAt(sx, sy) {
     S.weapons[type] = { stats: initWeaponStats(type), rateMult: 1, dmgBonus: 0, critChance: 0, proj: 0, evo: false, evoPaint: false };
   }
   spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[BLUE]);
-  if (type === 'lantern') computeFog(); // the outpost pushes back the dark
+  computeFog(); // distance fog (v118): the new unit's disc reveals immediately, not on the next rock break
   S.placing = null;
   placebanner.classList.add('hidden');
   if (!S.runOver) {
@@ -3333,7 +3322,7 @@ function completeTeleport(t, cx, cy) {
   t.base = Math.atan2(cfg.rows / 2 - cy, cfg.cols / 2 - cx);
   t.angle = t.base;
   spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[BLUE]); // arrive: burst at destination
-  computeFog(); // new home cave (if any) reveals, like placement
+  computeFog(); // unit moved, so its disc reveals at the new spot, like placement
   S.teleporting = null;
   placebanner.classList.add('hidden');
   if (!S.runOver) {
