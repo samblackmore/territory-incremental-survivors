@@ -465,27 +465,38 @@ function resetCamera(zoomMult = 1, cx = null, cy = null) {
   // New games (v119) pass zoomMult = START_ZOOM_MULT with the starter's
   // world center, so the run starts zoomed in on the starting unit
   // instead of the full-map overview. clampCamera pins the center to
-  // the map, so an edge starter lands as close to center as the map
-  // allows without showing void past the edge.
+  // the map plus 2 cells of ocean slack (v120), so an edge starter
+  // gets an ocean strip beyond it instead of sitting hard on the edge.
   cam.zoom = minZoom() * zoomMult;
   cam.x = cx !== null ? cx : (cfg.cols * CELL_PX) / 2;
   cam.y = cy !== null ? cy : (cfg.rows * CELL_PX) / 2;
   clampCamera();
 }
 const START_ZOOM_MULT = 3; // v119: start zoom = 3x the full-map zoom (tunable; max is 8x)
+// Ocean (v120, survival): the world is an island, so outside the map
+// is ocean, not black void. A deep blue, distinct from the player's
+// brighter blue, so player territory at the edge never blends into it.
+const OCEAN_COLOR = '#1d4ed8';
+// World border (v120): a subtle translucent white line around the
+// map's edge, so you can tell exactly where the game world stops and
+// the ocean starts, even through fog.
+const WORLD_BORDER = 'rgba(255,255,255,0.35)';
 function clampCamera() {
   if (!cfg.cols) return;
   const mz = minZoom();
   cam.zoom = Math.min(Math.max(cam.zoom, mz), mz * 8);
   const hw = view.w / cam.zoom / 2, hh = view.h / cam.zoom / 2;
   const W = cfg.cols * CELL_PX, H = cfg.rows * CELL_PX;
-  // No slack: the view's edge stops exactly at the map's edge, so you
-  // never see void past the world (bars top/bottom on portrait are the
-  // map itself being shorter than the screen, not overshoot).
-  // When the view is wider/taller than the map, pin to center instead of sliding
-  cam.x = hw * 2 >= W ? W / 2 : Math.min(Math.max(cam.x, hw), W - hw);
-  cam.y = hh * 2 >= H ? H / 2 : Math.min(Math.max(cam.y, hh), H - hh);
+  // Slack (v120, restored from the pre-Oct-24 clamp): the camera may
+  // scroll CAM_SLACK_CELLS past the map edge, so an edge starter is
+  // not hard against the screen edge — you see a strip of ocean
+  // beyond the sand, instead of the map ending at the screen edge.
+  // When the view is wider/taller than the map, pin to center instead of sliding.
+  const pad = CAM_SLACK_CELLS * CELL_PX;
+  cam.x = hw * 2 >= W ? W / 2 : Math.min(Math.max(cam.x, hw - pad), W - hw + pad);
+  cam.y = hh * 2 >= H ? H / 2 : Math.min(Math.max(cam.y, hh - pad), H - hh + pad);
 }
+const CAM_SLACK_CELLS = 2; // v120: how far past the map edge the camera may scroll (cells, each side)
 function screenToWorld(sx, sy) {
   return { x: (sx - view.w / 2) / cam.zoom + cam.x,
            y: (sy - view.h / 2) / cam.zoom + cam.y };
@@ -1748,7 +1759,8 @@ function newGame() {
   resize();       // backing store = viewport x devicePixelRatio
   // v119: start zoomed in on the starting unit, not fully zoomed out.
   // pc is the starter (sand on survival, cave on main) — clampCamera
-  // inside resetCamera pins an edge starter to the nearest in-map center.
+  // inside resetCamera pins an edge starter to the nearest in-map
+  // center plus 2 cells of ocean slack (v120).
   resetCamera(START_ZOOM_MULT, (pc.x + 0.5) * CELL_PX, (pc.y + 0.5) * CELL_PX);
 
   overlay.classList.add('hidden');
@@ -3915,7 +3927,7 @@ function drawRockCell(x, y) {
 // ---- Render ----
 function render() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // draw in CSS px: crisp on hidpi
-  ctx.fillStyle = '#000'; // void beyond the map matches the fog (no seam)
+  ctx.fillStyle = OCEAN_COLOR; // v120: outside the map is ocean, not black void
   ctx.fillRect(0, 0, view.w, view.h);
   // ---- world pass: everything through the camera ----
   ctx.save();
@@ -4265,6 +4277,11 @@ function render() {
       else if (f === 1) { ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX); }
     }
   }
+  // World border (v120): after the fog, so it stays visible even where
+  // the map is dark — the line itself says where the world stops.
+  ctx.strokeStyle = WORLD_BORDER;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(0, 0, cfg.cols * CELL_PX, cfg.rows * CELL_PX);
   // Pickups (XP orbs + gold coins) shine through the fog — idle ones pulse
   // gently so they beg to be tapped.
   for (const c of S.coins) {
