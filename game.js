@@ -465,7 +465,7 @@ function resetCamera(zoomMult = 1, cx = null, cy = null) {
   // New games (v119) pass zoomMult = START_ZOOM_MULT with the starter's
   // world center, so the run starts zoomed in on the starting unit
   // instead of the full-map overview. clampCamera pins the center to
-  // the map plus 2 cells of ocean slack (v120), so an edge starter
+  // the map plus 6 cells of ocean slack (v121, tripled from v120's 2), so an edge starter
   // gets an ocean strip beyond it instead of sitting hard on the edge.
   cam.zoom = minZoom() * zoomMult;
   cam.x = cx !== null ? cx : (cfg.cols * CELL_PX) / 2;
@@ -487,8 +487,8 @@ function clampCamera() {
   cam.zoom = Math.min(Math.max(cam.zoom, mz), mz * 8);
   const hw = view.w / cam.zoom / 2, hh = view.h / cam.zoom / 2;
   const W = cfg.cols * CELL_PX, H = cfg.rows * CELL_PX;
-  // Slack (v120, restored from the pre-Oct-24 clamp): the camera may
-  // scroll CAM_SLACK_CELLS past the map edge, so an edge starter is
+  // Slack (v120, restored from the pre-Oct-24 clamp; v121 tripled to 6):
+  // the camera may scroll CAM_SLACK_CELLS past the map edge, so an edge starter is
   // not hard against the screen edge — you see a strip of ocean
   // beyond the sand, instead of the map ending at the screen edge.
   // When the view is wider/taller than the map, pin to center instead of sliding.
@@ -496,7 +496,7 @@ function clampCamera() {
   cam.x = hw * 2 >= W ? W / 2 : Math.min(Math.max(cam.x, hw - pad), W - hw + pad);
   cam.y = hh * 2 >= H ? H / 2 : Math.min(Math.max(cam.y, hh - pad), H - hh + pad);
 }
-const CAM_SLACK_CELLS = 2; // v120: how far past the map edge the camera may scroll (cells, each side)
+const CAM_SLACK_CELLS = 6; // v121: how far past the map edge the camera may scroll (cells, each side; was 2 in v120)
 function screenToWorld(sx, sy) {
   return { x: (sx - view.w / 2) / cam.zoom + cam.x,
            y: (sy - view.h / 2) / cam.zoom + cam.y };
@@ -1760,7 +1760,7 @@ function newGame() {
   // v119: start zoomed in on the starting unit, not fully zoomed out.
   // pc is the starter (sand on survival, cave on main) — clampCamera
   // inside resetCamera pins an edge starter to the nearest in-map
-  // center plus 2 cells of ocean slack (v120).
+  // center plus 6 cells of ocean slack (v121).
   resetCamera(START_ZOOM_MULT, (pc.x + 0.5) * CELL_PX, (pc.y + 0.5) * CELL_PX);
 
   overlay.classList.add('hidden');
