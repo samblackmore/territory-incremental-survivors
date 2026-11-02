@@ -72,7 +72,9 @@ const STAT_DEFS = {
     // ~2 cells even at high levels, but long rare pierces stay possible.
     // Cap 5 (v114, down from 8): max depth 6, average pierce ~1.97 vs
     // ~2.00 at depth 9, so the cap cut costs almost nothing in practice.
-    { key: 'pen', name: 'Penetration', cap: 5, effect: '+1 pierce depth (chance of continuing)' },
+    // v133: gold-gated like Projectiles (shopOnly, XP hybrid, 10+5/lv)
+    // — as a free starter pick it was too strong.
+    { key: 'pen', name: 'Penetration', cap: 5, effect: '+1 pierce depth (chance of continuing)', shopOnly: true },
   ],
   bloom: [
     { key: 'growth', name: 'Growth', cap: 8, effect: '+20% growth speed' },
@@ -2904,15 +2906,22 @@ function availableCards() {
     pool.push({ kind: 'evoPaint', title: 'Painter', icon: ICONS.evoPaint, sub: 'Cannon paints ground as it fires — painted ground pays, weaker than Field' });
   }
   if (SURVIVAL) {
-    // Projectiles hybrid (survival only): back in the XP row as a
-    // randomized draft card, but it costs gold (like a shop card).
-    // If you see it and can afford it, it's a strong pick — but it
+    // Gold-gated stat hybrids (survival only): back in the XP row as
+    // randomized draft cards, but they cost gold (like shop cards).
+    // If you see one and can afford it, it's a strong pick — but it
     // still consumes the level-up (pick-one holds). Main keeps proj
     // in the shop (v75, unchanged).
+    // v133: XP hybrids are HIDDEN when unaffordable (not greyed) —
+    // they never occupy a dealt slot you can't take. The shop row
+    // below still shows unaffordable placements greyed, for planning.
     const cw = S.weapons.cannon;
-    if (cw && cw.stats && (cw.stats.proj || 0) < 5) {
+    if (cw && cw.stats && (cw.stats.proj || 0) < 5 && S.gold >= projCost()) {
       pool.push({ kind: 'proj', weapon: 'cannon', stat: 'proj',
         title: 'Projectiles', icon: ICONS.cannon, cost: projCost() });
+    }
+    if (cw && cw.stats && (cw.stats.pen || 0) < 5 && S.gold >= penCost()) {
+      pool.push({ kind: 'pen', weapon: 'cannon', stat: 'pen',
+        title: 'Penetration', icon: ICONS.cannon, cost: penCost() });
     }
   }
   return pool;
@@ -2922,7 +2931,7 @@ function availableCards() {
 // Unaffordable ones still show (greyed) so you can see what to save for.
 function availableShopCards() {
   if (SURVIVAL) {
-    // Full shop (no proj — it's an XP hybrid now): all 8 placements,
+    // Full shop (no proj/pen — they're XP hybrids now): all 8 placements,
     // cost order (cheapest first) so you can plan ahead. No draw.
     // Laser is the pricey late-game anti-flood unit (20, last).
     // Start-screen toggles filter it: only enabled items appear
@@ -2952,6 +2961,13 @@ function availableShopCards() {
 function projCost() {
   const w = S.weapons.cannon;
   const lv = w && w.stats ? (w.stats.proj || 0) : 0;
+  return 10 + lv * UNIT_COST_STEP;
+}
+// Penetration upgrade price (v133, same as projectiles): starts at
+// 10 gold, +5 per level already owned — 10, 15, 20, 25, 30.
+function penCost() {
+  const w = S.weapons.cannon;
+  const lv = w && w.stats ? (w.stats.pen || 0) : 0;
   return 10 + lv * UNIT_COST_STEP;
 }
 function offerCards() {
@@ -3031,8 +3047,9 @@ function offerCards() {
     }
     else if (p.kind === 'proj') {
       // Hybrid (survival): XP-row draft card with a gold cost. Shows
-      // the price like a shop card; greyed + untappable if you can't
-      // afford it (click handler's cost guard covers the rest).
+      // the price like a shop card. v133: availableCards already
+      // hides it when unaffordable, so the unaffordable class below
+      // is only a safety net (click handler's cost guard covers rest).
       // First projectile pick gets New! like any other first stat.
       const w = S.weapons.cannon;
       const lv = w && w.stats ? (w.stats.proj || 0) : 0;
@@ -3040,6 +3057,20 @@ function offerCards() {
       sub = `+1 projectile`;
       el.dataset.weapon = 'cannon';
       el.dataset.stat = 'proj';
+      el.dataset.cost = String(p.cost);
+      priceHtml = `<div class="price">${p.cost}<span class="coin"></span></div>`;
+      if (S.gold < p.cost) el.classList.add('unaffordable');
+      if (lv === 0) newTag = '<span class="newtag">New!</span>';
+    }
+    else if (p.kind === 'pen') {
+      // Hybrid (survival, v133): Penetration, gold-gated like
+      // Projectiles. Same hiding rule as proj above.
+      const w = S.weapons.cannon;
+      const lv = w && w.stats ? (w.stats.pen || 0) : 0;
+      title = `Penetration <span class="lv">Lv${lv + 1}</span>`;
+      sub = `+1 pierce depth (chance of continuing)`;
+      el.dataset.weapon = 'cannon';
+      el.dataset.stat = 'pen';
       el.dataset.cost = String(p.cost);
       priceHtml = `<div class="price">${p.cost}<span class="coin"></span></div>`;
       if (S.gold < p.cost) el.classList.add('unaffordable');
@@ -3127,11 +3158,11 @@ document.querySelectorAll('#levelup .card').forEach(card => {
   card.addEventListener('click', () => {
     const kind = card.dataset.kind || 'freq';
     // Affordability guard: only gold-costing cards (shop placements +
-    // proj hybrid) can be blocked. Free XP cards never carry a cost
+    // proj/pen hybrids) can be blocked. Free XP cards never carry a cost
     // (offerCards clears it), so a stale cost on a reused slot can't
     // block a free pick. (CSS blocks real taps too; this covers
     // programmatic clicks.)
-    if ((kind === 'turret' || kind === 'proj') && parseInt(card.dataset.cost || '0', 10) > S.gold) return;
+    if ((kind === 'turret' || kind === 'proj' || kind === 'pen') && parseInt(card.dataset.cost || '0', 10) > S.gold) return;
     // Choosing an upgrade resets the XP bar to zero (it stayed full
     // while the cards were showing).
     S.xp = 0; S.xpShown = 0; S.levelUpNeed = 0;
@@ -3195,6 +3226,16 @@ document.querySelectorAll('#levelup .card').forEach(card => {
         S.gold -= cost;
         w.stats.proj++;
         applyStat(w, 'cannon', 'proj');
+      }
+    } else if (kind === 'pen') {
+      // Gold-gated stat upgrade (v133, same as proj): pay, fill one
+      // Penetration chip, no placement follows.
+      const w = S.weapons.cannon;
+      const cost = parseInt(card.dataset.cost || '0', 10);
+      if (w && w.stats && (w.stats.pen || 0) < 5) {
+        S.gold -= cost;
+        w.stats.pen++;
+        applyStat(w, 'cannon', 'pen');
       }
     } else if (kind === 'passive') {
       const p = card.dataset.passive;
