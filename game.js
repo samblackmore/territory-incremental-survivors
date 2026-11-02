@@ -1551,9 +1551,9 @@ function newGame() {
         // earn its first mole.
         redGold: 0,
         particles: [], particlesSpawned: 0, rings: [], dmgNums: [],
-        // Sparkles (v123, v124 ocean ripples, v125 dash shimmer):
-        // purely visual glints on ocean water, no gameplay effect.
-        // See updateSparkles / render.
+        // Sparkles (v123, v124 ocean ripples, v125 dash shimmer,
+        // v126 both): purely visual glints on ocean water, no gameplay
+        // effect. See updateSparkles / render.
         sparkles: [], sparkleT: 0.8,
         destroyed: 0, destroyedBlue: 0,
         // passives (VS-style): none currently — Bounce removed v106,
@@ -1572,8 +1572,8 @@ function newGame() {
         waypoints: [],
         // meteor shower (v116): idle -> warn (10s toast + minimap rings)
         // -> shower (staggered shrinking shadows -> impact) -> idle.
-        // First warning starts 2–4 minutes in, so the first 2 minutes
-        // stay quiet for levelling, then the shower breaks the quiet.
+        // First warning starts 1–2 minutes in (v126: was 2–4), so the
+        // first minute stays quiet for levelling, then showers break in.
         meteor: { phase: 'idle',
                   timer: METEOR_INTERVAL_MIN + Math.random() * (METEOR_INTERVAL_MAX - METEOR_INTERVAL_MIN),
                   targets: [], idx: 0, stagger: 0 },
@@ -1931,7 +1931,7 @@ function checkRunOver() {
 // No classes in this codebase (plain functions + S state), so the
 // flood is a controller object on S plus these functions.
 const SURVIVAL = true; // survival branch: player renders red, flood is blue, enemy base off
-const FLOOD_GRACE_DUR = 300;  // 5 min grace before the first storm: prepare your base (commander dialog gives the ETA)
+const FLOOD_GRACE_DUR = 300;  // 5 min grace before the first storm: prepare your base (XP-bar threat countdown gives the ETA; commander dialog disabled v126)
 const FLOOD_TOAST_AT = 30;    // seconds before a storm when the old toast countdown returns (earlier in the lull: minimap pulse only)
 const FLOOD_FIRST_STORM = 30; // seconds of lull after grace before the first storm (toast shows the whole time: 30 <= 30)
 const FLOOD_STORM_DUR = 20;   // seconds a storm barrages, then it passes
@@ -1969,8 +1969,8 @@ const CIV_MAX = 5;
 const CIV_STEP_DUR = 1.0; // seconds per civilian step — slow on purpose, like Harvester
 const CIV_PINK = '#f472b6'; // civilian blob + minimap ? + rescue burst, one pink everywhere
 const CIV_SETTLE_RADIUS = 2; // Manhattan distance from a base a civilian may settle (v113: congregate, not vanish)
-// Meteor shower (v116): a periodic reshuffling event to liven up the
-// quiet first 5 minutes — and every 2–4 minutes after, even during a
+// Meteor shower (v116, v126 interval doubled in frequency): a periodic reshuffling event to liven up the
+// quiet first 5 minutes — and every 1–2 minutes after, even during a
 // flood storm. Sequence: 10s warning (toast countdown + yellow circles
 // on the minimap for every target), then shadows appear one by one,
 // staggered, each shrinking from large to small, then impact.
@@ -1995,8 +1995,8 @@ const CIV_SETTLE_RADIUS = 2; // Manhattan distance from a base a civilian may se
 // wins, and the flood toast returns the next frame after the warning
 // ends (meteorTick never hides wavebanner outside the warning phase).
 const METEOR_WARN_DUR = 10; // seconds of toast + minimap markers before the shower
-const METEOR_INTERVAL_MIN = 120; // 2 minutes, random up to:
-const METEOR_INTERVAL_MAX = 240; // 4 minutes between showers (warning start to warning start)
+const METEOR_INTERVAL_MIN = 60; // 1 minute, random up to (v126: was 2 min — Sam wanted showers more frequent)
+const METEOR_INTERVAL_MAX = 120; // 2 minutes between showers (warning start to warning start)
 const METEOR_STAGGER = 0.7; // seconds between shadow appearances, one by one
 const METEOR_SHADOW_DUR = 1.2; // seconds a shadow shrinks from large to impact
 const METEOR_SHADOW_R0 = 2.5; // cells, initial shadow radius
@@ -3432,21 +3432,24 @@ function weaponDmgBonus(t) {
 // XP needed to go from the current level to the next: linear, +1 per level
 // (3, 4, 5...). XP resets to zero on every level-up.
 function xpNeed() { return S.level + 2; }
-// ---- Sparkles (v123, v124 ocean ripples, v125 dash shimmer) ----
+// ---- Sparkles (v123, v124 ocean ripples, v125 dash shimmer, v126 both) ----
 // Pure polish, no gameplay: every ~0.7–1.6s a shimmer event appears on
 // a random fog-clear EMPTY ocean cell currently in view (so you
 // actually see it — a random map cell would usually be off-screen at
-// 3x zoom), as a small patch of 1–3 elongated diamond glints in nearby
-// ocean cells, like sun glitter on water. Each glint lives 1.2s,
-// fading in and out, with a random length (5–11 world px, about a
-// third as tall) and a random vertical offset inside its cell, so
-// they don't all line up. At most 9 glints at once (3 events of 3),
-// so it reads as glitter, not fireworks. Ocean only, fog-clear only
-// (never leaks fogged ground); turret, civilian and coin cells are
-// skipped. If no ocean is in view, no shimmer spawns.
-const SPARKLE_MAX = 9; // max glints on screen (up to 3 clusters of 3)
-const SPARKLE_LIFE = 1.2; // seconds per glint
+// 3x zoom). Two looks, kept together (v126, Sam: rings feel like
+// raindrops, diamonds like sun glitter): usually a single expanding
+// ring pair (v124), and much less often — 20% of spawns, so about
+// once every 5–6 seconds — a small patch of 1–3 elongated diamond
+// glints in nearby ocean cells (v125), warm white, length 5–11 world
+// px and about a third as tall, random vertical offset in the cell.
+// Each effect lives 1.2s. At most 9 effects at once, so it reads as
+// weather, not fireworks. Ocean only, fog-clear only (never leaks
+// fogged ground); turret, civilian and coin cells are skipped. If no
+// ocean is in view, no shimmer spawns.
+const SPARKLE_MAX = 9; // max effects on screen
+const SPARKLE_LIFE = 1.2; // seconds per effect
 const SPARKLE_SPAWN_MIN = 0.7, SPARKLE_SPAWN_MAX = 1.6; // seconds between events
+const SPARKLE_DASH_CHANCE = 0.2; // v126: diamond patches are rare — 1 in 5 spawns, rings the rest
 function spawnSparkle() {
   if (!S || !cfg.cols) return;
   const hw = view.w / cam.zoom / 2, hh = view.h / cam.zoom / 2;
@@ -3469,8 +3472,13 @@ function spawnSparkle() {
   for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (okCell(x, y)) eligible.push([x, y]);
   if (!eligible.length) return;
   const [x, y] = eligible[Math.floor(Math.random() * eligible.length)];
+  // v126: usually a ring (raindrop), rarely a diamond patch (sun glitter).
+  if (Math.random() >= SPARKLE_DASH_CHANCE) {
+    S.sparkles.push({ x, y, t: 0, life: SPARKLE_LIFE, kind: 'ring' });
+    return;
+  }
   const pushGlint = (gx, gy) => {
-    S.sparkles.push({ x: gx, y: gy, t: 0, life: SPARKLE_LIFE,
+    S.sparkles.push({ x: gx, y: gy, t: 0, life: SPARKLE_LIFE, kind: 'dash',
                       len: 5 + Math.random() * 6, dy: (Math.random() - 0.5) * 8 });
   };
   pushGlint(x, y);
@@ -3865,7 +3873,7 @@ function update(dt) {
   // Tapped pickups zip to their HUD target (accelerating = satisfying).
   // Targets live in screen space, so re-project every frame.
   S.time += dt;
-  updateSparkles(dt); // v123, v124 ocean-only, v125 dash shimmer: occasional glitter on visible water
+  updateSparkles(dt); // v123, v124 ocean-only, v125 dashes, v126 both: occasional glitter/ripples on visible water
   const tgt = screenToWorld(CHIP_CX, CHIP_CY);
   const TX = tgt.x / CELL_PX, TY = tgt.y / CELL_PX;
   const xtgt = screenToWorld(view.w / 2, 18); // XP bar, top-center
@@ -4398,23 +4406,41 @@ function render() {
     ctx.beginPath(); ctx.arc(px - r * 0.3, py - r * 0.3, r * 0.28, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fill(); // shine
   }
-  // Sparkles (v123, v124 ripples, v125 dash shimmer): elongated
-  // diamond glints, warm white, fading in and out over their life
-  // (alpha peaks mid-life), each with its own length and vertical
-  // offset inside its cell, so a patch reads as scattered glitter.
+  // Sparkles (v123, v124 rings, v125 dashes, v126 both): rings read as
+  // raindrops, diamonds as sun glitter. Rings are two expanding white
+  // circles, the second trailing the first by 35%; diamonds are
+  // elongated warm-white glints fading in and out over their life.
   for (const s of (S.sparkles || [])) {
-    const k = Math.min(1, s.t / s.life), a = Math.sin(Math.PI * k);
-    if (a <= 0) continue;
-    const px = (s.x + 0.5) * CELL_PX, py = (s.y + 0.5) * CELL_PX + (s.dy || 0);
-    const len = s.len || 8, h = len * 0.3;
-    ctx.globalAlpha = 0.95 * a;
-    ctx.fillStyle = '#fef3c7'; // warm white, like sun glitter
-    ctx.beginPath();
-    ctx.moveTo(px - len / 2, py);
-    ctx.lineTo(px, py - h);
-    ctx.lineTo(px + len / 2, py);
-    ctx.lineTo(px, py + h);
-    ctx.closePath(); ctx.fill();
+    const k = Math.min(1, s.t / s.life);
+    if (k >= 1) continue;
+    const px = (s.x + 0.5) * CELL_PX, py = (s.y + 0.5) * CELL_PX;
+    if (s.kind === 'dash') {
+      const a = Math.sin(Math.PI * k);
+      if (a <= 0) continue;
+      const cy = py + (s.dy || 0), len = s.len || 8, h = len * 0.3;
+      ctx.globalAlpha = 0.95 * a;
+      ctx.fillStyle = '#fef3c7'; // warm white, like sun glitter
+      ctx.beginPath();
+      ctx.moveTo(px - len / 2, cy);
+      ctx.lineTo(px, cy - h);
+      ctx.lineTo(px + len / 2, cy);
+      ctx.lineTo(px, cy + h);
+      ctx.closePath(); ctx.fill();
+      ctx.globalAlpha = 1;
+      continue;
+    }
+    // Ring (default, also for old sparkle objects without a kind).
+    const ring = (kk, a) => {
+      if (kk < 0 || kk > 1) return;
+      ctx.globalAlpha = a * (1 - kk);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(px, py, 2 + kk * CELL_PX * 0.75, 0, Math.PI * 2);
+      ctx.stroke();
+    };
+    ring(k, 0.8);
+    ring((k - 0.35) / 0.65, 0.5); // trailing ring, 35% behind
     ctx.globalAlpha = 1;
   }
   // Digger flags: each blue digger's target cell gets a little flag
@@ -4931,7 +4957,13 @@ function renderShop() {
 // at the start of a run, with the grace ETA filled in from the
 // constant so the text can never go stale. Prepare starts the run —
 // the game stays paused while reading, so grace runs from there.
+// DISABLED 2026-11-01 (v126, Sam: tapping Prepare every run is
+// annoying) — showCommander is now a no-op, so Start Run and Dive
+// Again go straight into play. The dialog code and markup are kept
+// intact so it can come back by flipping this flag.
+const COMMANDER_INTRO_ENABLED = false;
 function showCommander() {
+  if (!COMMANDER_INTRO_ENABLED) return;
   const ct = document.getElementById('commander-text');
   if (ct) ct.textContent = 'Commander, the storm is approaching. ETA ' + (FLOOD_GRACE_DUR / 60) + ' minutes till impact.';
   S.paused = true; // newGame unpaused; re-pause while reading
