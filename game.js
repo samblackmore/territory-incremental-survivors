@@ -1551,8 +1551,8 @@ function newGame() {
         // earn its first mole.
         redGold: 0,
         particles: [], particlesSpawned: 0, rings: [], dmgNums: [],
-        // Sparkles (v123): purely visual glints on open ground, no
-        // gameplay effect. See updateSparkles / render.
+        // Sparkles (v123, v124 ocean ripples): purely visual glints on
+        // ocean water, no gameplay effect. See updateSparkles / render.
         sparkles: [], sparkleT: 0.8,
         destroyed: 0, destroyedBlue: 0,
         // passives (VS-style): none currently — Bounce removed v106,
@@ -3431,16 +3431,19 @@ function weaponDmgBonus(t) {
 // XP needed to go from the current level to the next: linear, +1 per level
 // (3, 4, 5...). XP resets to zero on every level-up.
 function xpNeed() { return S.level + 2; }
-// ---- Sparkles (v123): a little glint, occasionally, on different cells ----
-// Pure polish, no gameplay: every ~0.7–1.6s a sparkle appears on a
-// random fog-clear EMPTY cell currently in view (so you actually see
-// it — a random map cell would usually be off-screen at 3x zoom),
-// lives 1.2s, fades in and out as a white 4-point star, then is gone.
+// ---- Sparkles (v123, corrected v124): water ripples on the ocean only ----
+// Pure polish, no gameplay: every ~0.7–1.6s a ripple appears on a
+// random fog-clear EMPTY ocean cell currently in view (so you actually
+// see it — a random map cell would usually be off-screen at 3x zoom),
+// lives 1.2s as expanding white rings fading out, then is gone.
 // At most 3 at once, so it reads as a glint, not a fireworks show.
-// Fog-clear only, so a sparkle never leaks fogged ground; turret,
+// Ocean only (v124 correction: v123 wrongly sparkled any open ground).
+// Fog-clear only, so a ripple never leaks fogged ground; turret,
 // civilian and coin cells are skipped, so it never hides under a unit.
+// If no ocean is in view (zoomed into the island interior), no ripple
+// spawns — that is correct, ripples only happen where water is visible.
 const SPARKLE_MAX = 3;
-const SPARKLE_LIFE = 1.2; // seconds per sparkle
+const SPARKLE_LIFE = 1.2; // seconds per ripple
 const SPARKLE_SPAWN_MIN = 0.7, SPARKLE_SPAWN_MAX = 1.6; // seconds between spawns
 function spawnSparkle() {
   if (!S || !cfg.cols) return;
@@ -3451,7 +3454,7 @@ function spawnSparkle() {
     const x = x0 + Math.floor(Math.random() * (x1 - x0 + 1));
     const y = y0 + Math.floor(Math.random() * (y1 - y0 + 1));
     const i = y * cfg.cols + x;
-    if (S.cells[i] !== EMPTY || S.fog[i] !== 0) continue;
+    if (!S.ocean[i] || S.cells[i] !== EMPTY || S.fog[i] !== 0) continue;
     if (turretAt(x, y) || civilianAt(x, y) || coinAt(x, y)) continue;
     S.sparkles.push({ x, y, t: 0, life: SPARKLE_LIFE });
     return;
@@ -3836,7 +3839,7 @@ function update(dt) {
   // Tapped pickups zip to their HUD target (accelerating = satisfying).
   // Targets live in screen space, so re-project every frame.
   S.time += dt;
-  updateSparkles(dt); // v123: occasional glint on visible open ground
+  updateSparkles(dt); // v123, v124 ocean-only: occasional ripple on visible water
   const tgt = screenToWorld(CHIP_CX, CHIP_CY);
   const TX = tgt.x / CELL_PX, TY = tgt.y / CELL_PX;
   const xtgt = screenToWorld(view.w / 2, 18); // XP bar, top-center
@@ -4369,25 +4372,24 @@ function render() {
     ctx.beginPath(); ctx.arc(px - r * 0.3, py - r * 0.3, r * 0.28, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fill(); // shine
   }
-  // Sparkles (v123): white 4-point stars, fading in and out over their
-  // life (size and alpha both peak mid-life), on top of the cell.
+  // Sparkles (v123, v124 ocean ripples): expanding white rings on the
+  // water, fading out over their life. Two rings, the second trailing
+  // the first, so it reads as a ripple, not a star or a dot.
   for (const s of (S.sparkles || [])) {
-    const k = Math.min(1, s.t / s.life), a = Math.sin(Math.PI * k);
-    if (a <= 0) continue;
+    const k = Math.min(1, s.t / s.life);
+    if (k >= 1) continue;
     const px = (s.x + 0.5) * CELL_PX, py = (s.y + 0.5) * CELL_PX;
-    const r = 2 + 5 * a;
-    ctx.globalAlpha = 0.9 * a;
-    ctx.fillStyle = '#ffffff';
-    ctx.beginPath();
-    ctx.moveTo(px, py - r);
-    ctx.lineTo(px + r * 0.3, py - r * 0.3);
-    ctx.lineTo(px + r, py);
-    ctx.lineTo(px + r * 0.3, py + r * 0.3);
-    ctx.lineTo(px, py + r);
-    ctx.lineTo(px - r * 0.3, py + r * 0.3);
-    ctx.lineTo(px - r, py);
-    ctx.lineTo(px - r * 0.3, py - r * 0.3);
-    ctx.closePath(); ctx.fill();
+    const ring = (kk, a) => {
+      if (kk < 0 || kk > 1) return;
+      ctx.globalAlpha = a * (1 - kk);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(px, py, 2 + kk * CELL_PX * 0.75, 0, Math.PI * 2);
+      ctx.stroke();
+    };
+    ring(k, 0.8);
+    ring((k - 0.35) / 0.65, 0.5); // trailing ring, 35% behind
     ctx.globalAlpha = 1;
   }
   // Digger flags: each blue digger's target cell gets a little flag
