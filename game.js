@@ -2375,34 +2375,60 @@ function floodFireAt(angle, ex, ey) {
   return true;
 }
 // Border wave (v140, replaces the radial rings of v137): the whole
-// border spawns at once, one projectile per border cell, travelling
-// straight inward — north edge south, south edge north, west edge
-// east, east edge west — like a wave coming in from the ocean.
-// Corners spawn twice (once per edge direction), so a corner cell
-// sends one shot south and one east, etc. Spawned just inside the
-// edge (projectiles can't spawn outside: stepProjectile kills
-// out-of-bounds shots on the first step). Speed is randomised ±15%
-// per projectile, so the line breaks up as faster shots outrun
-// slower ones instead of staying perfect. What it does on the way
-// in is the existing flood-shot behaviour: it paints EMPTY ground
-// as flood and keeps flying, then dies on the first rock, blue
-// territory, or turret it hits — so each wave paints the shoreline
-// and chips one layer of shoreline rock, and the next wave goes a
-// little further inland once that rock breaks.
+// Does a straight inward ray from a border cell reach actual land?
+// Step cell by cell inward: land is a cell that is none of
+// ocean/beach/grass (the interior: rock, cave, territory, etc.), or
+// a cell with a living turret (a coastal turret is still a target).
+// A ray that only ever crosses ocean/beach/grass — e.g. the west
+// edge at the top-left corner shooting right across the top ocean
+// band to the right side, or a ray sliding along a coast band —
+// never reaches land, so it is culled (v141, Sam). Without coast
+// flags (synthetic tests), assume it reaches land rather than
+// culling everything.
+function floodWaveReachesLand(cx, cy, dx, dy) {
+  if (!S.ocean || !S.beach || !S.grass) return true;
+  let x = cx, y = cy;
+  while (x >= 0 && y >= 0 && x < cfg.cols && y < cfg.rows) {
+    if (turretAt(x, y)) return true;
+    const i = y * cfg.cols + x;
+    if (!S.ocean[i] && !S.beach[i] && !S.grass[i]) return true;
+    x += dx; y += dy;
+  }
+  return false;
+}
+// Border wave (v140, v141 culling + attack-only): the whole border
+// spawns at once, one projectile per border cell that reaches land,
+// travelling straight inward — north edge south, south edge north,
+// west edge east, east edge west — like a wave coming in from the
+// ocean. Corners spawn twice (once per edge direction), so a corner
+// cell sends one shot south and one east, etc., unless that ray is
+// culled. Spawned just inside the edge (projectiles can't spawn
+// outside: stepProjectile kills out-of-bounds shots on the first
+// step). Speed is randomised ±15% per projectile, so the line breaks
+// up as faster shots outrun slower ones instead of staying perfect.
+// v141: wave shots are attack-only, NOT flood shots (flood: false):
+// they leave no flood paint trail on EMPTY ground, they bomb blue
+// territory to EMPTY instead of claiming it as flood, and a broken
+// rock stays EMPTY instead of becoming flood. They still damage
+// rock (1, dies on the first rock it hits), damage turrets, and
+// pass through existing flood territory — so each wave erodes the
+// shoreline without painting it flood. The sweep, by contrast, is
+// still a flood shot and still paints/claims.
 function floodFireWave() {
   const W = cfg.cols, H = cfg.rows;
-  const fire = (x, y, vx, vy) => {
+  const fire = (cx, cy, x, y, vx, vy) => {
+    if (!floodWaveReachesLand(cx, cy, vx, vy)) return;
     const speed = FLOOD_SPEED * (1 + (Math.random() * 2 - 1) * FLOOD_WAVE_SPEED_JITTER);
     S.projs.push({ x, y, vx: vx * speed, vy: vy * speed,
-                   color: RED, dmg: FLOOD_DMG, flood: true, crit: false, dead: false });
+                   color: RED, dmg: FLOOD_DMG, flood: false, crit: false, dead: false });
   };
   for (let x = 0; x < W; x++) {
-    fire(x + 0.5, 0.05, 0, 1);   // north edge -> south
-    fire(x + 0.5, H - 0.05, 0, -1); // south edge -> north
+    fire(x, 0, x + 0.5, 0.05, 0, 1);   // north edge -> south
+    fire(x, H - 1, x + 0.5, H - 0.05, 0, -1); // south edge -> north
   }
   for (let y = 0; y < H; y++) {
-    fire(0.05, y + 0.5, 1, 0);   // west edge -> east
-    fire(W - 0.05, y + 0.5, -1, 0); // east edge -> west
+    fire(0, y, 0.05, y + 0.5, 1, 0);   // west edge -> east
+    fire(W - 1, y, W - 0.05, y + 0.5, -1, 0); // east edge -> west
   }
 }
 function floodTick(dt) {
