@@ -1050,6 +1050,27 @@ function collectAtGather(t) {
   }
   return take.length;
 }
+// Digger pickup (v135): a blue Digger collects every idle coin within
+// 1 cell (Chebyshev: the 3x3 around it, own cell included) on each dig
+// step, so it mines and banks gold/XP as it goes, without needing a
+// Harvester or Outpost to chase those coins. Red moles don't collect
+// (they have no player economy; stealing player coins would be a
+// different mechanic). Coins fly to the XP bar / gold chip exactly like
+// Harvester pickups, so gold and XP grant on arrival, not instantly.
+const MOLE_PICKUP_RANGE = 1;
+function collectAtMole(t) {
+  if (t.color !== BLUE) return 0;
+  let n = 0;
+  for (const c of S.coins) {
+    if (c.state !== 'idle') continue;
+    if (Math.abs(Math.floor(c.x) - t.x) <= MOLE_PICKUP_RANGE &&
+        Math.abs(Math.floor(c.y) - t.y) <= MOLE_PICKUP_RANGE) {
+      c.state = 'fly'; c.sx = c.x; c.sy = c.y; c.t = 0;
+      n++;
+    }
+  }
+  return n;
+}
 // Turret occupying a cell, if any (skips the dead).
 function turretAt(cx, cy) {
   for (const t of S.turrets) {
@@ -3825,6 +3846,9 @@ function update(dt) {
               t.rx = t.x; t.ry = t.y; t.moveT = 0;
               t.x = nx; t.y = ny;
               t.dug++;
+              // Collect before the lifetime death check, so a Digger
+              // that dies on this step still banks the coin it just mined.
+              if (t.color === BLUE) collectAtMole(t);
               if (t.dug >= t.lifetime) { t.dead = true; continue; }
               if (!flagged && t.dug % MOLE_TURN_EVERY === 0) turn();
             }
@@ -3841,6 +3865,9 @@ function update(dt) {
             if (!flagged) turn();
           }
         }
+        // After each dig step (moved, walked, or waited): a blue
+        // Digger picks up idle coins within 1 cell (v135).
+        if (!t.dead) collectAtMole(t);
       }
     }
   }
@@ -4525,6 +4552,32 @@ function render() {
   ctx.strokeStyle = WORLD_BORDER;
   ctx.lineWidth = 2;
   ctx.strokeRect(0, 0, cfg.cols * CELL_PX, cfg.rows * CELL_PX);
+  // Meteor warning rings on the main map (v135): the same flashing
+  // yellow circles as the minimap, but on the map itself, so you don't
+  // have to look at the minimap to see where they will land. Drawn
+  // after the fog, like pickups and flags, so fogged targets still
+  // warn. Ring radius = 2 cells, the actual impact cluster radius, so
+  // the ring shows the danger zone, not just the centre point; a dot
+  // marks the centre. Shown during the 10s warning and for targets
+  // not yet impacted during the shower, disappearing as each lands.
+  if (SURVIVAL && S.meteor && (S.meteor.phase === 'warn' || S.meteor.phase === 'shower')) {
+    const a = 0.55 + 0.25 * Math.sin(S.time * Math.PI * 2 / 2.2);
+    ctx.strokeStyle = `rgba(255, 215, 94, ${a})`;
+    ctx.fillStyle = `rgba(255, 215, 94, ${a})`;
+    ctx.lineWidth = 2;
+    for (const t of S.meteor.targets) {
+      if (t.state === 'done') continue;
+      const px = (t.x + 0.5) * CELL_PX, py = (t.y + 0.5) * CELL_PX;
+      if (px < (vx0 - 2) * CELL_PX || px > (vx1 + 3) * CELL_PX ||
+          py < (vy0 - 2) * CELL_PX || py > (vy1 + 3) * CELL_PX) continue;
+      ctx.beginPath();
+      ctx.arc(px, py, 2 * CELL_PX, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(px, py, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
   // Pickups (XP orbs + gold coins) shine through the fog — idle ones pulse
   // gently so they beg to be tapped.
   for (const c of S.coins) {
