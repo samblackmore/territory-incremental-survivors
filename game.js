@@ -1804,17 +1804,17 @@ function newGame() {
 // (EMPTY, territory — ocean, sand, grass, cave floor) reveals out
 // to fogDist (default 12, was 6), but only via an open path —
 // rocky terrain (WHITE brown, GREY rock/walls) blocks the light,
-// which only penetrates FOG_ROCK_PENETRATION (3) cells into rock
+// which only penetrates FOG_ROCK_PENETRATION (2) cells into rock
 // and never leads on to open ground beyond the rock. So a beach
 // and ocean around a unit actually show, while an island's interior
-// stays dark behind its rock face, except for the 3-cell face
+// stays dark behind its rock face, except for the 2-cell face
 // itself. Half-fog is the 1-cell edge beyond whatever is clear.
 // Recomputed when a block is excavated, a unit is placed or
 // teleported, or the game starts. Fog only ever clears, never
 // closes back in. No cave flood-fill: being in the same cave, or
 // on the connected beach ring, no longer reveals the whole component
 // — only the open ground within fogDist, via an open path, does.
-const FOG_ROCK_PENETRATION = 3; // cells deep into rock light goes (v128)
+const FOG_ROCK_PENETRATION = 2; // cells deep into rock light goes (v128, cut to 2 in v131)
 function computeFog() {
   const W = cfg.cols, H = cfg.rows, n = W * H;
   const nf = new Uint8Array(n).fill(2);
