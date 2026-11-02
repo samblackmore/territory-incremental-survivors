@@ -696,11 +696,13 @@ const COAST_MAX_DEPTH = 20; // fixed border: max total coast depth per edge, in 
 const COAST_SAND_CELLS = 2; // sand layer thickness, fixed (thin)
 const COAST_GRASS_CELLS = 2; // grass layer thickness, fixed (thin)
 const COAST_SEED_OFFSET = 77777; // own RNG stream: island generation (caves/noise/grey/nuggets) is untouched for a given seed
-const OCEAN_SHADES = [ // fixed ocean blue, light -> dark (deep blue, distinct from the player's brighter blue)
-  [29, 78, 216], [27, 73, 202], [25, 68, 188], [23, 63, 174],
-  [22, 58, 161], [20, 53, 147], [18, 48, 133], [16, 43, 119],
+const OCEAN_SHADES = [ // v123: lighter sky blue, centred on the XP orb
+  // color (#7dd3fc, shade 2) — light -> dark, so water reads as water,
+  // not as the player's deeper blue or the flood's blue
+  [224, 242, 254], [186, 230, 253], [125, 211, 252], [56, 189, 248],
+  [14, 165, 233], [2, 132, 199], [3, 105, 161], [12, 74, 110],
 ];
-const OCEAN_MINIMAP = '#1944bc'; // middle ocean shade, for the minimap
+const OCEAN_MINIMAP = '#7dd3fc'; // middle ocean shade = XP orb color, for the minimap
 const BEACH_SHADES = [ // fixed sand yellow, light -> dark (not tied to the empty-color debug picker)
   [232, 213, 124], [226, 205, 110], [217, 196, 106], [205, 183, 94],
   [190, 168, 82], [172, 151, 70], [150, 131, 58], [128, 111, 48],
@@ -1549,6 +1551,9 @@ function newGame() {
         // earn its first mole.
         redGold: 0,
         particles: [], particlesSpawned: 0, rings: [], dmgNums: [],
+        // Sparkles (v123): purely visual glints on open ground, no
+        // gameplay effect. See updateSparkles / render.
+        sparkles: [], sparkleT: 0.8,
         destroyed: 0, destroyedBlue: 0,
         // passives (VS-style): none currently — Bounce removed v106,
         // replaced by Penetration (forward, not random ricochet).
@@ -3426,6 +3431,44 @@ function weaponDmgBonus(t) {
 // XP needed to go from the current level to the next: linear, +1 per level
 // (3, 4, 5...). XP resets to zero on every level-up.
 function xpNeed() { return S.level + 2; }
+// ---- Sparkles (v123): a little glint, occasionally, on different cells ----
+// Pure polish, no gameplay: every ~0.7–1.6s a sparkle appears on a
+// random fog-clear EMPTY cell currently in view (so you actually see
+// it — a random map cell would usually be off-screen at 3x zoom),
+// lives 1.2s, fades in and out as a white 4-point star, then is gone.
+// At most 3 at once, so it reads as a glint, not a fireworks show.
+// Fog-clear only, so a sparkle never leaks fogged ground; turret,
+// civilian and coin cells are skipped, so it never hides under a unit.
+const SPARKLE_MAX = 3;
+const SPARKLE_LIFE = 1.2; // seconds per sparkle
+const SPARKLE_SPAWN_MIN = 0.7, SPARKLE_SPAWN_MAX = 1.6; // seconds between spawns
+function spawnSparkle() {
+  if (!S || !cfg.cols) return;
+  const hw = view.w / cam.zoom / 2, hh = view.h / cam.zoom / 2;
+  const x0 = Math.max(0, Math.floor((cam.x - hw) / CELL_PX)), x1 = Math.min(cfg.cols - 1, Math.ceil((cam.x + hw) / CELL_PX));
+  const y0 = Math.max(0, Math.floor((cam.y - hh) / CELL_PX)), y1 = Math.min(cfg.rows - 1, Math.ceil((cam.y + hh) / CELL_PX));
+  for (let tries = 0; tries < 30; tries++) {
+    const x = x0 + Math.floor(Math.random() * (x1 - x0 + 1));
+    const y = y0 + Math.floor(Math.random() * (y1 - y0 + 1));
+    const i = y * cfg.cols + x;
+    if (S.cells[i] !== EMPTY || S.fog[i] !== 0) continue;
+    if (turretAt(x, y) || civilianAt(x, y) || coinAt(x, y)) continue;
+    S.sparkles.push({ x, y, t: 0, life: SPARKLE_LIFE });
+    return;
+  }
+}
+function updateSparkles(dt) {
+  if (!S) return;
+  if (!S.sparkles) S.sparkles = [];
+  if (S.sparkleT === undefined) S.sparkleT = 0.8;
+  S.sparkleT -= dt;
+  if (S.sparkleT <= 0) {
+    S.sparkleT = SPARKLE_SPAWN_MIN + Math.random() * (SPARKLE_SPAWN_MAX - SPARKLE_SPAWN_MIN);
+    if (S.sparkles.length < SPARKLE_MAX) spawnSparkle();
+  }
+  for (const s of S.sparkles) s.t += dt;
+  S.sparkles = S.sparkles.filter(s => s.t < s.life);
+}
 function update(dt) {
   const arcRad = (cfg.arc * Math.PI) / 180;
   const turnRate = (cfg.turnRate * Math.PI) / 180; // rad/s
@@ -3793,6 +3836,7 @@ function update(dt) {
   // Tapped pickups zip to their HUD target (accelerating = satisfying).
   // Targets live in screen space, so re-project every frame.
   S.time += dt;
+  updateSparkles(dt); // v123: occasional glint on visible open ground
   const tgt = screenToWorld(CHIP_CX, CHIP_CY);
   const TX = tgt.x / CELL_PX, TY = tgt.y / CELL_PX;
   const xtgt = screenToWorld(view.w / 2, 18); // XP bar, top-center
@@ -4324,6 +4368,27 @@ function render() {
     ctx.stroke();
     ctx.beginPath(); ctx.arc(px - r * 0.3, py - r * 0.3, r * 0.28, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fill(); // shine
+  }
+  // Sparkles (v123): white 4-point stars, fading in and out over their
+  // life (size and alpha both peak mid-life), on top of the cell.
+  for (const s of (S.sparkles || [])) {
+    const k = Math.min(1, s.t / s.life), a = Math.sin(Math.PI * k);
+    if (a <= 0) continue;
+    const px = (s.x + 0.5) * CELL_PX, py = (s.y + 0.5) * CELL_PX;
+    const r = 2 + 5 * a;
+    ctx.globalAlpha = 0.9 * a;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.moveTo(px, py - r);
+    ctx.lineTo(px + r * 0.3, py - r * 0.3);
+    ctx.lineTo(px + r, py);
+    ctx.lineTo(px + r * 0.3, py + r * 0.3);
+    ctx.lineTo(px, py + r);
+    ctx.lineTo(px - r * 0.3, py + r * 0.3);
+    ctx.lineTo(px - r, py);
+    ctx.lineTo(px - r * 0.3, py - r * 0.3);
+    ctx.closePath(); ctx.fill();
+    ctx.globalAlpha = 1;
   }
   // Digger flags: each blue digger's target cell gets a little flag
   // (gold for gold, white for a cave) so you can see where it's headed.
