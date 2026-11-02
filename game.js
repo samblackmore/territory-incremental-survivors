@@ -887,7 +887,7 @@ function readDebug() {
     rippleAmp: clampNum(inRipple.value, 0, 1, 0.1),          // neighbor shockwave strength
     trailT: clampNum(inTrail.value, 0, 1, 0.1),               // projectile trail (s)
     gravity: clampNum(inGravity.value, 0, 40, 9),            // particle gravity (cells/s^2)
-    fogDist: clampNum(inFogDist.value, 0, 20, 6),              // fog reveal distance (cells)
+    fogDist: clampNum(inFogDist.value, 0, 20, 12),              // fog reveal distance on open ground (cells; v128: was 6)
   };
   // reflect clamped values back into the panel
   inCols.value = cols; inRows.value = rows;
@@ -1781,7 +1781,7 @@ function newGame() {
   }
   if (SURVIVAL) pickRescueSites(rng); // 3 cave pockets, 1-5 civilians each (see pickRescueSites)
   startWave(1);
-  computeFog();   // fog of war: only fogDist around player units is visible
+  computeFog();   // fog of war: fogDist on open ground, 3 into rock, around player units
 
   resize();       // backing store = viewport x devicePixelRatio
   // v119: start zoomed in on the starting unit, not fully zoomed out.
@@ -1799,41 +1799,77 @@ function newGame() {
 
 // ---- Fog of war --------------------------------------------------------
 // 0 = clear, 1 = half (smooth transition), 2 = full (black).
-// Reveal source (v118): a fogDist disc around each living BLUE unit,
-// nothing else. No cave flood-fill — a connected cave or beach ring
-// no longer reveals itself. Recomputed when a block is excavated, a
-// unit is placed or teleported, or the game starts. Fog only ever
-// clears, never closes back in.
+// Reveal source (v128, Sam: open ground should show much further
+// than terrain): light from each living BLUE unit. Open ground
+// (EMPTY, territory — ocean, sand, grass, cave floor) reveals out
+// to fogDist (default 12, was 6), but only via an open path —
+// rocky terrain (WHITE brown, GREY rock/walls) blocks the light,
+// which only penetrates FOG_ROCK_PENETRATION (3) cells into rock
+// and never leads on to open ground beyond the rock. So a beach
+// and ocean around a unit actually show, while an island's interior
+// stays dark behind its rock face, except for the 3-cell face
+// itself. Half-fog is the 1-cell edge beyond whatever is clear.
+// Recomputed when a block is excavated, a unit is placed or
+// teleported, or the game starts. Fog only ever clears, never
+// closes back in. No cave flood-fill: being in the same cave, or
+// on the connected beach ring, no longer reveals the whole component
+// — only the open ground within fogDist, via an open path, does.
+const FOG_ROCK_PENETRATION = 3; // cells deep into rock light goes (v128)
 function computeFog() {
   const W = cfg.cols, H = cfg.rows, n = W * H;
   const nf = new Uint8Array(n).fill(2);
-  const R = cfg.fogDist, R2 = R * R, R12 = (R + 1) * (R + 1);
-  const revealDisc = (cx, cy) => {
-    for (let dy = -(R + 1); dy <= R + 1; dy++) {
-      for (let dx = -(R + 1); dx <= R + 1; dx++) {
-        const d2 = dx * dx + dy * dy;
-        if (d2 > R12) continue;
+  const R = cfg.fogDist, R2 = R * R;
+  const isRock = (i) => S.cells[i] === WHITE || S.cells[i] === GREY;
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+  for (const t of S.turrets) {
+    if (t.dead || t.color !== BLUE) continue;
+    // BFS per unit. best[i] = smallest rock depth seen reaching i
+    // (255 = unreached; open cells are depth 0). A rock cell reached
+    // via a shallower rock path re-queues, because it can then
+    // penetrate further — a cell reached first via 3 rock steps
+    // could still be reached via 1 rock step around the other side.
+    const best = new Uint8Array(n).fill(255);
+    const start = t.y * W + t.x;
+    const q = [start];
+    let head = 0;
+    best[start] = 0; nf[start] = 0;
+    while (head < q.length) {
+      const cur = q[head++];
+      const cx = cur % W, cy = Math.floor(cur / W);
+      const curIsRock = cur !== start && isRock(cur);
+      const curDepth = best[cur];
+      if (curIsRock && curDepth >= FOG_ROCK_PENETRATION) continue; // rock face ends here
+      for (const [dx, dy] of DIRS) {
         const nx = cx + dx, ny = cy + dy;
         if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
         const ni = ny * W + nx;
-        if (d2 <= R2) nf[ni] = 0;
-        else if (nf[ni] === 2) nf[ni] = 1;
+        if (isRock(ni)) {
+          const nd = curIsRock ? curDepth + 1 : 1;
+          if (nd > FOG_ROCK_PENETRATION || best[ni] <= nd) continue;
+          best[ni] = nd; nf[ni] = 0; q.push(ni);
+        } else {
+          if (curIsRock) continue; // rock blocks: no open ground beyond it, via this path
+          const ddx = nx - t.x, ddy = ny - t.y;
+          if (ddx * ddx + ddy * ddy > R2) continue; // open ground only to fogDist
+          if (best[ni] !== 255) continue;
+          best[ni] = 0; nf[ni] = 0; q.push(ni);
+        }
       }
     }
-  };
-  // Fog is distance-only (v118): a disc around each living BLUE unit,
-  // whatever ground it sits on (EMPTY, rock, territory — Outposts on
-  // terrain included). No cave flood-fill: being in the same cave, or
-  // on the connected beach ring, no longer reveals the whole component.
-  // That matters on the beach (v117): the starter used to reveal the
-  // entire beach ring + fringe, because the ring is one connected
-  // EMPTY component. Now only the starter's own disc is visible at
-  // start, and fog expands as units are placed, teleported, or move
-  // (via the next computeFog call — damage, growth, teleport, placement).
-  for (const t of S.turrets) {
-    if (t.dead || t.color !== BLUE) continue;
-    revealDisc(t.x, t.y);
   }
+  // Half-fog: 1 cell beyond clear, collected first so it cannot
+  // cascade into a second, third, … half ring.
+  const half = [];
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y * W + x;
+    if (nf[i] !== 2) continue;
+    for (const [dx, dy] of DIRS) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+      if (nf[ny * W + nx] === 0) { half.push(i); break; }
+    }
+  }
+  for (const i of half) nf[i] = 1;
   // Merge: fog only ever clears.
   for (let i = 0; i < n; i++) if (nf[i] < S.fog[i]) S.fog[i] = nf[i];
 }
@@ -2701,7 +2737,7 @@ function damageBlock(idx, dmg, color, sx, sy, vx, vy, crit) {
   if (S.noHarvest) S.noHarvest[idx] = 0;
   S.destroyed++;
   if (color === BLUE) S.destroyedBlue++;
-  computeFog(); // excavation recomputes unit discs (fog only clears, so this is a no-op unless a unit moved since the last call)
+  computeFog(); // excavation recomputes unit light (fog only clears, so this is a no-op unless a unit moved since the last call)
   spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[color]); // the block cracks: debris + ring
   if (S.goldNug[idx] && (color === BLUE || !SURVIVAL)) {
     // Gold nugget released: locked until the rock was broken.
@@ -3328,7 +3364,7 @@ function placeTurretAt(sx, sy) {
     S.weapons[type] = { stats: initWeaponStats(type), rateMult: 1, dmgBonus: 0, critChance: 0, proj: 0, evo: false, evoPaint: false };
   }
   spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[BLUE]);
-  computeFog(); // distance fog (v118): the new unit's disc reveals immediately, not on the next rock break
+  computeFog(); // light fog (v128): the new unit reveals immediately, not on the next rock break
   S.placing = null;
   placebanner.classList.add('hidden');
   if (!S.runOver) {
@@ -4993,9 +5029,11 @@ document.getElementById('startbtn').addEventListener('click', () => {
   if (SURVIVAL) showCommander();
 });
 
-// Random map size (v127, Sam: more map, every refresh different):
-// on page load, width and height each roll 100–200 cells, so every
-// refresh is a new, much bigger world than the old fixed 75x50.
+// Random map size (v127, v128 range: Sam: 100–200 was really big,
+// then 50–100, then max 150 after a 140 map felt about the large
+// limit — so now 50–150): on page load, width and height each roll
+// 50–150 cells, so every refresh is a new world, bigger than the
+// old fixed 75x50 but not as huge as v127's 100–200.
 // Explicit URL sizes (share links, ?cols=&rows=) are respected —
 // randomize only the dimensions the URL didn't set. Start Run and
 // Dive Again keep the session's size (readDebug reads the panel),
@@ -5009,8 +5047,8 @@ function randomizeMapSize() {
       qCols = q.has('cols'); qRows = q.has('rows');
     }
   } catch (e) { /* no URL API (harness): randomize both */ }
-  if (!qCols) inCols.value = 100 + Math.floor(Math.random() * 101);
-  if (!qRows) inRows.value = 100 + Math.floor(Math.random() * 101);
+  if (!qCols) inCols.value = 50 + Math.floor(Math.random() * 101);
+  if (!qRows) inRows.value = 50 + Math.floor(Math.random() * 101);
 }
 
 applyUrlParams();
