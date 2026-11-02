@@ -48,11 +48,18 @@ const OUTPOST_PULL_COUNT = 3;        // pickups per pull (nearest first)
 const OUTPOST_PULL_EVERY = 4;        // seconds between pulls
 const OUTPOST_FLASH_DUR = 1.5;       // range ring flash duration on pull (s, same as original Gather)
 // Field pull (v136, revived from the old Gather vacuum, now on Field):
-// every 4s, pull up to pullCount nearest idle pickups within pullRadius
-// cells toward the Field itself, so it banks its own harvest. Base
-// radius 3 (including its own cell) and count 1, upgraded by the
-// combined Field track (see STAT_DEFS bloom): radius 3 -> 6, count 1 -> 4.
-const FIELD_PULL_EVERY = 4;          // seconds between Field pulls
+// pull up to pullCount nearest idle pickups within pullRadius cells
+// toward the Field itself, so it banks its own harvest. Base radius 3
+// (including its own cell) and count 1, upgraded by the combined Field
+// track (see STAT_DEFS bloom): radius 3 -> 6, count 1 -> 4.
+// v138 (Sam: pull was OP): pull interval starts 5x slower — 20s, not
+// 4s — and interval joins the track as its fourth rotating stat, so
+// picks can speed it back up but never to the old 4s: interval
+// 20 -> 16 -> 12 -> 8s at max, i.e. maxed throughput 4 per 8s (0.5/s)
+// vs the old 4 per 4s (1/s), and base throughput 1 per 20s (0.05/s)
+// vs the old 1 per 4s (0.25/s).
+const FIELD_PULL_EVERY = 20;         // seconds between Field pulls at level 0 (was 4, v138: 5x slower)
+const FIELD_PULL_INTERVAL_STEP = 4;  // seconds shaved per interval pick (20 -> 16 -> 12 -> 8)
 const FIELD_PULL_RADIUS_BASE = 3;    // pull radius at Field level 0, in cells (Euclidean, own cell included)
 const FIELD_PULL_COUNT_BASE = 1;     // pickups per pull at Field level 0
 // Cannon split stat tracks (v114): each weapon stat levels independently
@@ -91,7 +98,13 @@ const STAT_DEFS = {
     // growth, Lv8 radius, Lv9 count. Max: growth 1.2^3 = 1.73x,
     // pull radius 3 -> 6, pull count 1 -> 4. The card shows the next
     // level's specific effect (see offerCards), so the rotation reads.
-    { key: 'field', name: 'Field', cap: 9, effect: 'Growth, pull radius and pull count, in rotation' },
+    // v138: interval joins as a fourth rotating stat, cap 12:
+    // Lv1 growth, Lv2 radius, Lv3 count, Lv4 interval, repeat.
+    // Max unchanged for growth/radius/count (1.73x, 6, 4), plus
+    // interval 20 -> 16 -> 12 -> 8s. Red Field level (below) moves
+    // 7 -> 9 so its growth head start stays 1.73x (growth picks at
+    // levels 1, 5, 9 under the 4-stat rotation).
+    { key: 'field', name: 'Field', cap: 12, effect: 'Growth, pull radius, pull count and pull interval, in rotation' },
   ],
   gather: [
     { key: 'count', name: 'Count', cap: 8, effect: '+1 pickup per pull' },
@@ -117,12 +130,14 @@ function applyStat(w, weapon, st) {
     else if (st === 'pen') w.penDepth = 1 + n; // max penetration depth: base 1 + 1 per level (rock hits + flood paints, each step 50% chance v106)
   } else if (weapon === 'bloom') {
     if (st === 'field') {
-      // Combined Field track (v136): growth on levels 1,4,7; pull
-      // radius on 2,5,8; pull count on 3,6,9.
+      // Combined Field track (v136, v138 4-stat rotation): growth on
+      // levels 1,5,9; pull radius on 2,6,10; pull count on 3,7,11;
+      // pull interval on 4,8,12.
       const n = w.stats.field || 0;
-      w.rateMult = Math.pow(1.2, Math.ceil(n / 3));
-      w.pullRadius = FIELD_PULL_RADIUS_BASE + Math.floor((n + 1) / 3);
-      w.pullCount = FIELD_PULL_COUNT_BASE + Math.floor(n / 3);
+      w.rateMult = Math.pow(1.2, Math.floor((n + 3) / 4));
+      w.pullRadius = FIELD_PULL_RADIUS_BASE + Math.floor((n + 2) / 4);
+      w.pullCount = FIELD_PULL_COUNT_BASE + Math.floor((n + 1) / 4);
+      w.pullInterval = FIELD_PULL_EVERY - FIELD_PULL_INTERVAL_STEP * Math.floor(n / 4);
     }
   }
   // gather count derives from stats (gatherCount); mole
@@ -797,11 +812,11 @@ const MOLE_NUGGET_BIAS = 0.7; // blue mole: 70% toward nearest nugget, 30% rando
 // mole). Up to RED_MOLE_MAX alive — the cost, not a timer, is the
 // limiter, so the enemy has to earn its army from its own fields.
 const RED_MOLE_MAX = 3;
-// Enemy bloom head start: Field level 7 (growth at levels 1,4,7 =
+// Enemy bloom head start: Field level 9 (growth at levels 1,5,9 =
 // 1.2^3 = 1.73x) vs the player's fresh Field at level 0 — the early
-// overwhelmed feeling, same rules. (v136: was Growth 3 on the old
-// single-purpose track.)
-const RED_BLOOM_FIELD = 7;
+// overwhelmed feeling, same rules. (v136: was level 7 on the 3-stat
+// track; v138 4-stat rotation moves the third growth pick to 9.)
+const RED_BLOOM_FIELD = 9;
 // Territory harvest: a cell glows over HARVEST_EVERY seconds, then has
 // this chance to produce (same as the rock XP surprise, not a salary).
 const BLOOM_HARVEST_CHANCE = 0.3;
@@ -1011,24 +1026,30 @@ function gatherCount() {
   const w = S.weapons.gather;
   return 1 + (w && w.stats ? (w.stats.count || 0) : 0);
 }
-// Field pull radius / count, derived from the combined Field track
-// (v136) so level 0 works without any pick, and test objects that set
-// stats manually still read correctly. w is a weapons entry (blue or
-// red); red Fields don't pull (pull code checks BLUE), but their
-// radius/count still derive the same way for completeness.
+// Field pull radius / count / interval, derived from the combined
+// Field track (v136, v138 4-stat rotation) so level 0 works without
+// any pick, and test objects that set stats manually still read
+// correctly. w is a weapons entry (blue or red); red Fields don't
+// pull (pull code checks BLUE), but their values still derive the
+// same way for completeness.
 function bloomPullRadius(w) {
   const n = (w && w.stats ? (w.stats.field || 0) : 0);
-  return FIELD_PULL_RADIUS_BASE + Math.floor((n + 1) / 3);
+  return FIELD_PULL_RADIUS_BASE + Math.floor((n + 2) / 4);
 }
 function bloomPullCount(w) {
   const n = (w && w.stats ? (w.stats.field || 0) : 0);
-  return FIELD_PULL_COUNT_BASE + Math.floor(n / 3);
+  return FIELD_PULL_COUNT_BASE + Math.floor((n + 1) / 4);
+}
+function bloomPullInterval(w) {
+  const n = (w && w.stats ? (w.stats.field || 0) : 0);
+  return FIELD_PULL_EVERY - FIELD_PULL_INTERVAL_STEP * Math.floor(n / 4);
 }
 function bloomFieldNextEffect(n) {
   // What the NEXT Field pick (level n+1) does, for the card sub.
-  if (n % 3 === 0) return '+20% growth speed';
-  if (n % 3 === 1) return '+1 pull radius';
-  return '+1 pull count';
+  if (n % 4 === 0) return '+20% growth speed';
+  if (n % 4 === 1) return '+1 pull radius';
+  if (n % 4 === 2) return '+1 pull count';
+  return '-4s pull interval';
 }
 // Harvester pathing: BFS (not A* — we just need the nearest reachable
 // pickup, and BFS guarantees it avoids walls). From the Harvester's cell,
@@ -1867,9 +1888,9 @@ function newGame() {
   // Enemy head start: red bloom at Growth 3 (same stat, same formula as
   // blue's Growth picks — just pre-applied, so red spreads faster early).
   S.redWeapons.bloom = { stats: initWeaponStats('bloom'), rateMult: 1, dmgBonus: 0, critChance: 0, proj: 0, evo: false };
-  // v136: red Field level 7 gives growth at levels 1,4,7 = 1.2^3 = 1.73x,
-  // the old Growth 3 head start; its pull radius/count are irrelevant
-  // (red Fields don't pull), so only the growth part matters.
+  // v138: red Field level 9 gives growth at levels 1,5,9 = 1.2^3 = 1.73x,
+  // the old Growth 3 head start; its pull radius/count/interval are
+  // irrelevant (red Fields don't pull), so only the growth part matters.
   S.redWeapons.bloom.stats.field = RED_BLOOM_FIELD;
   applyStat(S.redWeapons.bloom, 'bloom', 'field');
   // Grey rock: hard mid-map chunks, same CA blobs as caves but only where
@@ -3935,14 +3956,16 @@ function update(dt) {
     } else if (t.type === 'bloom') {
       t.cd -= dt;
       if (t.cd <= 0) { t.cd = TURRET.bloom.interval / rateMult * S.bloomMult; bloomGrowth(t); }
-      // Field pull (v136, blue only): every 4s, pull up to pullCount
-      // nearest idle pickups within pullRadius cells toward itself,
-      // so a Field banks its own harvest. Same 'gather' coin state as
+      // Field pull (v136, blue only): pull up to pullCount nearest
+      // idle pickups within pullRadius cells toward itself, so a
+      // Field banks its own harvest. Same 'gather' coin state as
       // the Outpost vacuum, grant on arrival. Red Fields grow only.
+      // v138: interval is bloomPullInterval(w) — 20s at level 0,
+      // -4s per interval pick, down to 8s at level 12.
       if (t.color === BLUE) {
         if (t.showRange > 0) t.showRange -= dt;
         t.pullT = (t.pullT || 0) + dt;
-        if (t.pullT >= FIELD_PULL_EVERY) {
+        if (t.pullT >= bloomPullInterval(S.weapons.bloom)) {
           t.pullT = 0;
           t.showRange = OUTPOST_FLASH_DUR; // flash pull range on every pull, like Outpost
           const w = S.weapons.bloom;
@@ -4943,9 +4966,10 @@ function render() {
       ctx.fillText(STAT_LABEL[d.key] || d.key.toUpperCase(), 30, iy + 1);
       for (let i = 0; i < d.cap; i++) {
         ctx.beginPath();
-        // Cap 9 (Field, v136) squeezes chips to 7px spacing so the row
-        // still fits its 122px box; other tracks keep 7.5px.
-        ctx.arc(60 + i * (d.cap > 8 ? 7 : 7.5), iy, 2.5, 0, Math.PI * 2);
+        // Field (v136 cap 9, v138 cap 12) squeezes chips so the row
+        // still fits its 122px box: 7px at cap 9, 5px at cap 12;
+        // other tracks keep 7.5px.
+        ctx.arc(60 + i * (d.cap > 10 ? 5 : d.cap > 8 ? 7 : 7.5), iy, 2.5, 0, Math.PI * 2);
         ctx.fillStyle = i < lvl ? '#ffd75e' : '#2a3145';
         ctx.fill();
       }
