@@ -2238,12 +2238,13 @@ function meteorNextInterval() {
   return METEOR_INTERVAL_MIN + Math.random() * (METEOR_INTERVAL_MAX - METEOR_INTERVAL_MIN);
 }
 function meteorTargets() {
-  // Count scales with map area: 7–10 per 1728 cells, so 15–22 on the
-  // default 75x50 (3750 cells),
+  // Count scales with map area: 3–5 per 1728 cells (v129: halved
+  // from 7–10, Sam: reduce density, keep shower frequency), so
+  // 7–11 on the default 75x50 (3750 cells),
   // fewer on tiny maps, more on huge ones. Positions are uniform —
   // anywhere, including fog, starter area, and flood territory.
   const area = cfg.cols * cfg.rows;
-  const base = 7 + Math.floor(Math.random() * 4); // 7, 8, 9, or 10
+  const base = 3 + Math.floor(Math.random() * 3); // 3, 4, or 5
   const n = Math.max(1, Math.round(area / 1728 * base));
   const out = [];
   for (let k = 0; k < n; k++) {
