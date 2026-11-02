@@ -374,8 +374,10 @@ function drawMinimap() {
     }
   }
   // Incoming-storm warning (survival, early lull only): a gently
-  // pulsing yellow line on the minimap edge the next storm comes
-  // FROM. This is the quiet warning; the final 30s before the storm
+  // pulsing yellow line on the minimap edges. v137: waves come from
+  // all sides, so all four edges pulse, not just the sweep's side —
+  // the sweep side is named in the toast once it joins, not in the
+  // pulse. This is the quiet warning; the final 30s before the storm
   // use the old toast countdown instead (see floodTick). During the
   // storm itself there's no pulse: the flood is visible on the
   // minimap as blue territory. No pulse during grace either.
@@ -383,10 +385,10 @@ function drawMinimap() {
     const W = minimap.width, H = minimap.height, T = 3; // line thickness px
     const a = 0.42 + 0.18 * Math.sin(S.time * Math.PI * 2 / 2.2); // gentle 2.2s pulse, alpha 0.24–0.60
     mmctx.fillStyle = `rgba(255, 215, 94, ${a})`; // gold #ffd75e
-    if (S.flood.dir === 0) mmctx.fillRect(0, 0, W, T); // from top
-    else if (S.flood.dir === 1) mmctx.fillRect(0, H - T, W, T); // from bottom
-    else if (S.flood.dir === 2) mmctx.fillRect(0, 0, T, H); // from left
-    else mmctx.fillRect(W - T, 0, T, H); // from right
+    mmctx.fillRect(0, 0, W, T); // top
+    mmctx.fillRect(0, H - T, W, T); // bottom
+    mmctx.fillRect(0, 0, T, H); // left
+    mmctx.fillRect(W - T, 0, T, H); // right
   }
   // Meteor warning (v116): yellow circles on the minimap for every
   // target that has not impacted yet — all of them during the 10s
@@ -2114,16 +2116,22 @@ function checkRunOver() {
 // The asymmetric enemy: not a base, but damage from a direction.
 // A flood controller picks a random edge for the first storm, then
 // cycles clockwise or anticlockwise (decided once per run, v132)
-// round the map, then fires waves of
-// projectiles in patterns (a sweeping line, or scattered rain/hail)
-// from that edge. Flood shots damage rock and player territory, and
-// claim what they destroy as flood territory (RED internally, blue
-// on screen after the palette flip) — so the flood visibly advances
-// as a front the player must push back, not a transient event.
+// round the map for the sweeping cannon. The waves (radial rings)
+// come from all sides at once (v137). Flood shots damage rock and
+// player territory, and claim what they destroy as flood territory
+// (RED internally, blue on screen after the palette flip) — so the
+// flood visibly advances as a front the player must push back, not
+// a transient event.
 // No classes in this codebase (plain functions + S state), so the
 // flood is a controller object on S plus these functions.
 const SURVIVAL = true; // survival branch: player renders red, flood is blue, enemy base off
 const FLOOD_GRACE_DUR = 300;  // 5 min grace before the first storm: prepare your base (XP-bar threat countdown gives the ETA; commander dialog disabled v126)
+const FLOOD_SWEEP_START = 600; // 10 min run time: the sweeping cannon joins the waves (v137, see floodTick)
+// Phases (v137, Sam): 0–5 min grace, no storms; 5–10 min waves only
+// (radial ring bursts, from all sides); 10+ min waves + sweep (the
+// sweeping cannon, from one cycling side, as before). Run time is
+// S.time, so a storm that starts before 10:00 gains its sweep mid-storm
+// the moment the clock crosses 10:00.
 const FLOOD_TOAST_AT = 30;    // seconds before a storm when the old toast countdown returns (earlier in the lull: minimap pulse only)
 const FLOOD_FIRST_STORM = 30; // seconds of lull after grace before the first storm (toast shows the whole time: 30 <= 30)
 const FLOOD_STORM_DUR = 20;   // seconds a storm barrages, then it passes
@@ -2231,7 +2239,7 @@ function floodCycleDir(f, rng) {
 }
 function floodInit(seed) {
   const f = { dir: 0, ex: 0, ey: 0, phase: 'grace', timer: FLOOD_GRACE_DUR,
-              sweep: 0, ringT: 0, sweepT: 0, storms: 0, spreadT: FLOOD_SPREAD_EVERY, cycle: 1 };
+              sweep: 0, ringT: 0, sweepT: 0, storms: 0, spreadT: FLOOD_SPREAD_EVERY, cycle: 1, wave: null };
   const rng = mulberry32(seed + 99991);
   floodPickDir(f, rng);
   // Third call on the seeded stream, so the first storm's dir +
@@ -2332,19 +2340,41 @@ function floodEntry(ex, ey, dx, dy) {
   const t = Math.max(tmin, 0) + 0.05; // just inside the first cell
   return { x: ex + dx * t, y: ey + dy * t };
 }
-// One flood shot at angle (radians) from the emitter — culled if its
+// One flood shot at angle (radians) from an emitter — culled if its
 // ray never reaches the map. Returns true when a shot was spawned.
-function floodFireAt(angle) {
+// Emitter defaults to the single-side sweep emitter (f.ex/f.ey);
+// ring waves pass their own all-sides emitter in.
+function floodFireAt(angle, ex, ey) {
   const f = S.flood;
+  const sx = ex === undefined ? f.ex : ex, sy = ey === undefined ? f.ey : ey;
   const dx = Math.cos(angle), dy = Math.sin(angle);
-  const e = floodEntry(f.ex, f.ey, dx, dy);
+  const e = floodEntry(sx, sy, dx, dy);
   if (!e) return false;
   S.projs.push({ x: e.x, y: e.y, vx: dx * FLOOD_SPEED, vy: dy * FLOOD_SPEED,
                  color: RED, dmg: FLOOD_DMG, flood: true, crit: false, dead: false });
   return true;
 }
-function floodFireRing() {
-  for (let k = 0; k < FLOOD_RING_DIRS; k++) floodFireAt(k * 2 * Math.PI / FLOOD_RING_DIRS);
+function floodFireRing(emitter) {
+  const ex = emitter ? emitter.ex : S.flood.ex, ey = emitter ? emitter.ey : S.flood.ey;
+  for (let k = 0; k < FLOOD_RING_DIRS; k++) floodFireAt(k * 2 * Math.PI / FLOOD_RING_DIRS, ex, ey);
+}
+// Wave emitters (v137): one per edge, random position along each edge,
+// picked fresh each storm. The waves attack fires a ring from every
+// emitter at once, so flood enters from all sides simultaneously —
+// unlike the sweep, which keeps the single cycling side (f.dir/ex/ey).
+function floodPickWaveEmitters(f, rng) {
+  const W = cfg.cols, H = cfg.rows;
+  f.wave = [
+    { ex: rng() * W, ey: -FLOOD_OFF },
+    { ex: rng() * W, ey: H + FLOOD_OFF },
+    { ex: -FLOOD_OFF, ey: rng() * H },
+    { ex: W + FLOOD_OFF, ey: rng() * H },
+  ];
+}
+function floodFireRingAllSides() {
+  const f = S.flood;
+  if (!f.wave || f.wave.length !== 4) floodPickWaveEmitters(f, Math.random);
+  for (const emitter of f.wave) floodFireRing(emitter);
 }
 function floodTick(dt) {
   const f = S.flood;
@@ -2373,6 +2403,7 @@ function floodTick(dt) {
       f.phase = 'storm';
       f.timer = FLOOD_STORM_DUR;
       f.sweep = 0; f.ringT = 0; f.sweepT = 0; // fire immediately
+      floodPickWaveEmitters(f, Math.random); // waves: fresh all-sides emitters for this storm
       f.storms++;
       wavebanner.classList.add('hidden'); // storm: no toast (flood visible)
       return;
@@ -2380,22 +2411,36 @@ function floodTick(dt) {
     // Final 30s before the storm: the old toast countdown returns
     // (explicit, urgent). Earlier in the lull the minimap pulse
     // carries the warning quietly (see drawMinimap).
+    // v137 toast: waves come from all sides, so before the sweep joins
+    // the toast names no side; once the sweep will be active at storm
+    // start (run time + remaining lull >= 10:00), it names the sweep's
+    // cycling side as well as the waves.
     if (f.timer <= FLOOD_TOAST_AT) {
-      wavebanner.textContent = 'FLOOD STORM FROM THE ' + FLOOD_DIRS[f.dir].toUpperCase() + ' IN ' + Math.max(1, Math.ceil(f.timer)) + 's';
+      const sweepAtStorm = (S.time + f.timer >= FLOOD_SWEEP_START);
+      wavebanner.textContent = sweepAtStorm
+        ? 'FLOOD WAVES + SWEEP FROM THE ' + FLOOD_DIRS[f.dir].toUpperCase() + ' IN ' + Math.max(1, Math.ceil(f.timer)) + 's'
+        : 'FLOOD WAVES FROM ALL SIDES IN ' + Math.max(1, Math.ceil(f.timer)) + 's';
       wavebanner.classList.remove('hidden');
     } else {
       wavebanner.classList.add('hidden'); // early lull: pulse only
     }
     return;
   }
-  // Storm: constant barrage — a sweeping cannon plus radial rings.
-  // No banner and no pulse while it runs: the flood is visible on
-  // the minimap as blue territory creeping in from the side.
-  f.sweepT -= dt;
-  if (f.sweepT <= 0) { f.sweepT += FLOOD_SWEEP_EVERY; floodFireAt(f.sweep); }
-  f.sweep += FLOOD_SWEEP_RATE * dt;
+  // Storm (v137, split): constant barrage — radial ring waves from
+  // all sides, plus, from 10:00 run time, the sweeping cannon from
+  // its single cycling side. No banner and no pulse while it runs:
+  // the flood is visible on the minimap as blue territory creeping in.
+  // Sweep is gated on run time, not storm start, so a storm that
+  // starts before 10:00 gains its sweep mid-storm at 10:00 exactly;
+  // while gated off, the sweep angle and timer are left alone, so the
+  // first sweep shot fires as soon as the gate opens.
+  if (S.time >= FLOOD_SWEEP_START) {
+    f.sweepT -= dt;
+    if (f.sweepT <= 0) { f.sweepT += FLOOD_SWEEP_EVERY; floodFireAt(f.sweep); }
+    f.sweep += FLOOD_SWEEP_RATE * dt;
+  }
   f.ringT -= dt;
-  if (f.ringT <= 0) { f.ringT += FLOOD_RING_EVERY; floodFireRing(); }
+  if (f.ringT <= 0) { f.ringT += FLOOD_RING_EVERY; floodFireRingAllSides(); }
   if (f.timer <= 0) {
     // Storm passes: lull, and cycle to the NEXT storm's direction
     // now (v132: not a fresh random pick) so the minimap pulse can
@@ -2587,6 +2632,7 @@ function debugJumpToFlood() {
   f.phase = 'storm';
   f.timer = FLOOD_STORM_DUR;
   f.sweep = 0; f.ringT = 0; f.sweepT = 0;
+  floodPickWaveEmitters(f, Math.random); // waves: all-sides emitters, even when jumping straight to a storm
   wavebanner.classList.add('hidden');
   updateHud();
 }
