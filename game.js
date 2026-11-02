@@ -3308,8 +3308,11 @@ function placeTurretAt(sx, sy) {
   cy = Math.max(0, Math.min(cfg.rows - 1, cy));
   if (type === 'wall') {
     // 2x2 wall: anchor + right + down + diagonal must all be in bounds,
-    // unoccupied, and EMPTY or BLUE (you can wall your own territory,
-    // but walling it stops its harvest — wall on open ground when you can).
+    // unoccupied, and EMPTY or a color cell (BLUE or RED, v134: you
+    // can wall your own territory — walling it stops its harvest —
+    // and you can wall flood, destroying that color and cutting the
+    // flood off. Rock/grey still refuse, so a wall into flood needs
+    // a 2x2 patch of flood/empty/own, not rock).
     if (cx + 1 >= cfg.cols || cy + 1 >= cfg.rows) {
       S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
       return;
@@ -3317,7 +3320,7 @@ function placeTurretAt(sx, sy) {
     const cells2x2 = [[cx, cy], [cx + 1, cy], [cx, cy + 1], [cx + 1, cy + 1]];
     for (const [wx, wy] of cells2x2) {
       const wi = wy * cfg.cols + wx;
-      if (turretAt(wx, wy) || civilianAt(wx, wy) || (S.cells[wi] !== EMPTY && S.cells[wi] !== BLUE)) {
+      if (turretAt(wx, wy) || civilianAt(wx, wy) || (S.cells[wi] !== EMPTY && S.cells[wi] !== BLUE && S.cells[wi] !== RED)) {
         S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
         return;
       }
@@ -3331,6 +3334,9 @@ function placeTurretAt(sx, sy) {
       S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
       return;
     }
+    // Convert all 4 cells to GREY wall: this destroys any color
+    // there (own or flood) and clears any growth in progress, so
+    // flood growing on an EMPTY cell is removed, not just completed flood.
     for (const [wx, wy] of cells2x2) {
       const wi = wy * cfg.cols + wx;
       S.cells[wi] = GREY;
@@ -3413,8 +3419,22 @@ function placeTurretAt(sx, sy) {
     // Outposts sit on any visible ground near base (main: any ground;
     // survival far outposts already checked EMPTY + clear above).
     // No pad clearing.
+  } else if (type === 'bloom') {
+    // Field (v134, same as Wall): can be placed on a color cell
+    // (BLUE or RED), destroying that color — so you can plant a Field
+    // into flood and cut it off — or on open ground. Rock/grey still
+    // refuse. Clearing the pad also removes any growth in progress
+    // there (flood growing on an EMPTY cell is removed, not frozen
+    // under the Field).
+    if (S.cells[pi] !== EMPTY && S.cells[pi] !== BLUE && S.cells[pi] !== RED) {
+      S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
+      return;
+    }
+    S.cells[pi] = EMPTY; // clear a pad (destroys color, if any)
+    S.growN[pi] = 0; S.growBy[pi] = 0; S.harvT[pi] = 0;
+    if (S.noHarvest) S.noHarvest[pi] = 0;
   } else {
-    // Combat units and Blooms need open ground — or cannon-painted
+    // Combat units need open ground — or cannon-painted
     // ground (v113: painted territory is just color, weaker harvest
     // since v114, so building on it is fine; it clears the paint at
     // that cell. Field-grown / flipped territory still refuses, to
