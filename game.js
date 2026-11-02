@@ -1551,8 +1551,9 @@ function newGame() {
         // earn its first mole.
         redGold: 0,
         particles: [], particlesSpawned: 0, rings: [], dmgNums: [],
-        // Sparkles (v123, v124 ocean ripples): purely visual glints on
-        // ocean water, no gameplay effect. See updateSparkles / render.
+        // Sparkles (v123, v124 ocean ripples, v125 dash shimmer):
+        // purely visual glints on ocean water, no gameplay effect.
+        // See updateSparkles / render.
         sparkles: [], sparkleT: 0.8,
         destroyed: 0, destroyedBlue: 0,
         // passives (VS-style): none currently — Bounce removed v106,
@@ -3431,33 +3432,58 @@ function weaponDmgBonus(t) {
 // XP needed to go from the current level to the next: linear, +1 per level
 // (3, 4, 5...). XP resets to zero on every level-up.
 function xpNeed() { return S.level + 2; }
-// ---- Sparkles (v123, corrected v124): water ripples on the ocean only ----
-// Pure polish, no gameplay: every ~0.7–1.6s a ripple appears on a
-// random fog-clear EMPTY ocean cell currently in view (so you actually
-// see it — a random map cell would usually be off-screen at 3x zoom),
-// lives 1.2s as expanding white rings fading out, then is gone.
-// At most 3 at once, so it reads as a glint, not a fireworks show.
-// Ocean only (v124 correction: v123 wrongly sparkled any open ground).
-// Fog-clear only, so a ripple never leaks fogged ground; turret,
-// civilian and coin cells are skipped, so it never hides under a unit.
-// If no ocean is in view (zoomed into the island interior), no ripple
-// spawns — that is correct, ripples only happen where water is visible.
-const SPARKLE_MAX = 3;
-const SPARKLE_LIFE = 1.2; // seconds per ripple
-const SPARKLE_SPAWN_MIN = 0.7, SPARKLE_SPAWN_MAX = 1.6; // seconds between spawns
+// ---- Sparkles (v123, v124 ocean ripples, v125 dash shimmer) ----
+// Pure polish, no gameplay: every ~0.7–1.6s a shimmer event appears on
+// a random fog-clear EMPTY ocean cell currently in view (so you
+// actually see it — a random map cell would usually be off-screen at
+// 3x zoom), as a small patch of 1–3 elongated diamond glints in nearby
+// ocean cells, like sun glitter on water. Each glint lives 1.2s,
+// fading in and out, with a random length (5–11 world px, about a
+// third as tall) and a random vertical offset inside its cell, so
+// they don't all line up. At most 9 glints at once (3 events of 3),
+// so it reads as glitter, not fireworks. Ocean only, fog-clear only
+// (never leaks fogged ground); turret, civilian and coin cells are
+// skipped. If no ocean is in view, no shimmer spawns.
+const SPARKLE_MAX = 9; // max glints on screen (up to 3 clusters of 3)
+const SPARKLE_LIFE = 1.2; // seconds per glint
+const SPARKLE_SPAWN_MIN = 0.7, SPARKLE_SPAWN_MAX = 1.6; // seconds between events
 function spawnSparkle() {
   if (!S || !cfg.cols) return;
   const hw = view.w / cam.zoom / 2, hh = view.h / cam.zoom / 2;
   const x0 = Math.max(0, Math.floor((cam.x - hw) / CELL_PX)), x1 = Math.min(cfg.cols - 1, Math.ceil((cam.x + hw) / CELL_PX));
   const y0 = Math.max(0, Math.floor((cam.y - hh) / CELL_PX)), y1 = Math.min(cfg.rows - 1, Math.ceil((cam.y + hh) / CELL_PX));
-  for (let tries = 0; tries < 30; tries++) {
-    const x = x0 + Math.floor(Math.random() * (x1 - x0 + 1));
-    const y = y0 + Math.floor(Math.random() * (y1 - y0 + 1));
+  const okCell = (x, y) => {
+    if (x < 0 || y < 0 || x >= cfg.cols || y >= cfg.rows) return false;
     const i = y * cfg.cols + x;
-    if (!S.ocean[i] || S.cells[i] !== EMPTY || S.fog[i] !== 0) continue;
-    if (turretAt(x, y) || civilianAt(x, y) || coinAt(x, y)) continue;
-    S.sparkles.push({ x, y, t: 0, life: SPARKLE_LIFE });
-    return;
+    if (!S.ocean[i] || S.cells[i] !== EMPTY || S.fog[i] !== 0) return false;
+    if (turretAt(x, y) || civilianAt(x, y) || coinAt(x, y)) return false;
+    if (S.sparkles.some(s => s.x === x && s.y === y)) return false;
+    return true;
+  };
+  // Collect eligible cells in view first, then pick one — random
+  // tries alone flake when eligible ocean is sparse (e.g. only the
+  // starter's fog disc, ~39 of ~520 view cells, failed ~10% of the
+  // time on 30 tries). Collecting guarantees a shimmer whenever any
+  // eligible ocean cell is visible, and keeps the pick uniform.
+  const eligible = [];
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (okCell(x, y)) eligible.push([x, y]);
+  if (!eligible.length) return;
+  const [x, y] = eligible[Math.floor(Math.random() * eligible.length)];
+  const pushGlint = (gx, gy) => {
+    S.sparkles.push({ x: gx, y: gy, t: 0, life: SPARKLE_LIFE,
+                      len: 5 + Math.random() * 6, dy: (Math.random() - 0.5) * 8 });
+  };
+  pushGlint(x, y);
+  // A scattered patch, like the photo: up to 2 more glints in nearby
+  // ocean cells, wider horizontally than vertically, still in view.
+  for (let extra = 0; extra < 2 && S.sparkles.length < SPARKLE_MAX; extra++) {
+    let placed = false;
+    for (let t2 = 0; t2 < 10 && !placed; t2++) {
+      const nx = x + Math.floor(Math.random() * 5) - 2;
+      const ny = y + Math.floor(Math.random() * 3) - 1;
+      if (nx < x0 || nx > x1 || ny < y0 || ny > y1 || !okCell(nx, ny)) continue;
+      pushGlint(nx, ny); placed = true;
+    }
   }
 }
 function updateSparkles(dt) {
@@ -3839,7 +3865,7 @@ function update(dt) {
   // Tapped pickups zip to their HUD target (accelerating = satisfying).
   // Targets live in screen space, so re-project every frame.
   S.time += dt;
-  updateSparkles(dt); // v123, v124 ocean-only: occasional ripple on visible water
+  updateSparkles(dt); // v123, v124 ocean-only, v125 dash shimmer: occasional glitter on visible water
   const tgt = screenToWorld(CHIP_CX, CHIP_CY);
   const TX = tgt.x / CELL_PX, TY = tgt.y / CELL_PX;
   const xtgt = screenToWorld(view.w / 2, 18); // XP bar, top-center
@@ -4372,24 +4398,23 @@ function render() {
     ctx.beginPath(); ctx.arc(px - r * 0.3, py - r * 0.3, r * 0.28, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fill(); // shine
   }
-  // Sparkles (v123, v124 ocean ripples): expanding white rings on the
-  // water, fading out over their life. Two rings, the second trailing
-  // the first, so it reads as a ripple, not a star or a dot.
+  // Sparkles (v123, v124 ripples, v125 dash shimmer): elongated
+  // diamond glints, warm white, fading in and out over their life
+  // (alpha peaks mid-life), each with its own length and vertical
+  // offset inside its cell, so a patch reads as scattered glitter.
   for (const s of (S.sparkles || [])) {
-    const k = Math.min(1, s.t / s.life);
-    if (k >= 1) continue;
-    const px = (s.x + 0.5) * CELL_PX, py = (s.y + 0.5) * CELL_PX;
-    const ring = (kk, a) => {
-      if (kk < 0 || kk > 1) return;
-      ctx.globalAlpha = a * (1 - kk);
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.arc(px, py, 2 + kk * CELL_PX * 0.75, 0, Math.PI * 2);
-      ctx.stroke();
-    };
-    ring(k, 0.8);
-    ring((k - 0.35) / 0.65, 0.5); // trailing ring, 35% behind
+    const k = Math.min(1, s.t / s.life), a = Math.sin(Math.PI * k);
+    if (a <= 0) continue;
+    const px = (s.x + 0.5) * CELL_PX, py = (s.y + 0.5) * CELL_PX + (s.dy || 0);
+    const len = s.len || 8, h = len * 0.3;
+    ctx.globalAlpha = 0.95 * a;
+    ctx.fillStyle = '#fef3c7'; // warm white, like sun glitter
+    ctx.beginPath();
+    ctx.moveTo(px - len / 2, py);
+    ctx.lineTo(px, py - h);
+    ctx.lineTo(px + len / 2, py);
+    ctx.lineTo(px, py + h);
+    ctx.closePath(); ctx.fill();
     ctx.globalAlpha = 1;
   }
   // Digger flags: each blue digger's target cell gets a little flag
