@@ -871,8 +871,8 @@ function clampNum(v, lo, hi, fallback) {
 }
 
 function readDebug() {
-  const cols = Math.round(clampNum(inCols.value, 8, 120, 75));
-  const rows = Math.round(clampNum(inRows.value, 8, 120, 50));
+  const cols = Math.round(clampNum(inCols.value, 8, 200, 75));
+  const rows = Math.round(clampNum(inRows.value, 8, 200, 50));
   cfg = {
     cols, rows,
     projSpeed: clampNum(inSpeed.value, 40, 2000, 200),   // px/s
@@ -2237,6 +2237,11 @@ function meteorTick(dt) {
     if (m.timer <= 0) {
       m.phase = 'shower';
       m.idx = 0; m.stagger = 0;
+      // v127: stagger scales so a shower still lasts ~21s on huge
+      // maps — with the old fixed 0.7s, a 200x200 map's ~200 targets
+      // would rain for over 2 minutes. Fallback to the fixed stagger
+      // when a shower object was built directly (harness).
+      m.staggerDur = Math.min(METEOR_STAGGER, 21 / Math.max(1, m.targets.length));
       // Do NOT hide wavebanner here: floodTick already set it this
       // frame (flood toast or hidden), and meteorTick only writes it
       // during the warning phase, so the flood state returns cleanly.
@@ -2249,7 +2254,7 @@ function meteorTick(dt) {
     m.targets[m.idx].state = 'shadow';
     m.targets[m.idx].shadowT = 0;
     m.idx++;
-    m.stagger = METEOR_STAGGER;
+    m.stagger = m.staggerDur || METEOR_STAGGER;
   }
   let done = true;
   for (const t of m.targets) {
@@ -4038,8 +4043,16 @@ function render() {
   ctx.scale(cam.zoom, cam.zoom);
   ctx.translate(-cam.x, -cam.y);
   const w = cfg.cols, h = cfg.rows;
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
+  // v127: cull cell passes to the visible view (+2 cells margin, so
+  // 2x popped cells and cell edges never clip). Without this, a
+  // 200x200 map drew 40,000 cells every frame; at 3x zoom only
+  // ~6,000 are on screen. Off-screen cells are invisible anyway
+  // (canvas clips them), so culling changes nothing visually.
+  const vw = view.w / cam.zoom / 2, vh = view.h / cam.zoom / 2;
+  const vx0 = Math.max(0, Math.floor((cam.x - vw) / CELL_PX) - 2), vx1 = Math.min(w - 1, Math.ceil((cam.x + vw) / CELL_PX) + 2);
+  const vy0 = Math.max(0, Math.floor((cam.y - vh) / CELL_PX) - 2), vy1 = Math.min(h - 1, Math.ceil((cam.y + vh) / CELL_PX) + 2);
+  for (let y = vy0; y <= vy1; y++) {
+    for (let x = vx0; x <= vx1; x++) {
       const i = y * w + x;
       const st = S.cells[i];
       if (st === BLUE) {
@@ -4091,8 +4104,8 @@ function render() {
   // Two passes: the faint neighbor ripple first, then the hard-hit cell itself,
   // so the damaged cell always lands on top of its own shockwave.
   for (let pass = 0; pass < 2; pass++) {
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
+    for (let y = vy0; y <= vy1; y++) {
+      for (let x = vx0; x <= vx1; x++) {
         const i = y * w + x;
         if ((S.cells[i] !== WHITE && S.cells[i] !== GREY) || S.popT[i] < 0) continue;
         if (pass === 0 ? S.popAmp[i] >= 1 : S.popAmp[i] < 1) continue;
@@ -4107,8 +4120,8 @@ function render() {
   // the cell becomes solid territory (handled in bloomGrowth /
   // floodSpread). One coherent shape, not fragments, so a growing
   // cell reads as becoming solid, not broken.
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
+  for (let y = vy0; y <= vy1; y++) {
+    for (let x = vx0; x <= vx1; x++) {
       const i = y * w + x;
       const n = S.growN[i];
       if (n <= 0 || S.cells[i] !== EMPTY) continue;
@@ -4374,8 +4387,8 @@ function render() {
   // Fog of war over everything: full = black, half = 50% black (smooth edge).
   // Skipped entirely when fog is hidden (double-tap the minimap) — the
   // debug x-ray view.
-  if (!fogHidden) for (let y = 0; y < cfg.rows; y++) {
-    for (let x = 0; x < cfg.cols; x++) {
+  if (!fogHidden) for (let y = vy0; y <= vy1; y++) {
+    for (let x = vx0; x <= vx1; x++) {
       const f = S.fog[y * cfg.cols + x];
       if (f === 2) { ctx.fillStyle = '#000'; ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX); }
       else if (f === 1) { ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX); }
@@ -4980,7 +4993,28 @@ document.getElementById('startbtn').addEventListener('click', () => {
   if (SURVIVAL) showCommander();
 });
 
+// Random map size (v127, Sam: more map, every refresh different):
+// on page load, width and height each roll 100–200 cells, so every
+// refresh is a new, much bigger world than the old fixed 75x50.
+// Explicit URL sizes (share links, ?cols=&rows=) are respected —
+// randomize only the dimensions the URL didn't set. Start Run and
+// Dive Again keep the session's size (readDebug reads the panel),
+// so the debug panel still controls size within a session; refresh
+// the page for a new roll.
+function randomizeMapSize() {
+  let qCols = false, qRows = false;
+  try {
+    if (typeof location !== 'undefined' && location.search) {
+      const q = new URLSearchParams(location.search);
+      qCols = q.has('cols'); qRows = q.has('rows');
+    }
+  } catch (e) { /* no URL API (harness): randomize both */ }
+  if (!qCols) inCols.value = 100 + Math.floor(Math.random() * 101);
+  if (!qRows) inRows.value = 100 + Math.floor(Math.random() * 101);
+}
+
 applyUrlParams();
+randomizeMapSize();
 loadMeta();
 applyTeamColors(); // before first run: stored preference, else branch look (survival red, main blue)
 newGame();
