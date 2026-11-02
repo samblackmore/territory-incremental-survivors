@@ -3072,12 +3072,13 @@ function buildCardPool() { return [
   // run gold — the bridge to a shop unit you can see but can't afford yet.
   // Amount rolls at deal time (3–5): you see what you get before picking.
   { kind: 'gold', title: 'Gold Ore', icon: ICONS.gold },
-  // Teleport: one-time XP-row pick. Pick it, tap a Cannon or Laser,
-  // tap inside a gold base circle to move it there (stats kept — the
+  // Teleport: one-time XP-row pick. Pick it, tap a Cannon, tap
+  // inside a gold base circle to move it there (stats kept — the
   // point is moving an upgraded weapon, not buying a base one).
-  // Gated in availableCards on a living BLUE cannon/laser existing,
-  // so picking it can never leave you with nothing to move.
-  { kind: 'teleport', title: 'Teleport', icon: ICONS.teleport, sub: 'Move a Cannon or Laser to a new spot.' },
+  // Gated in availableCards on a living BLUE cannon existing, so
+  // picking it can never leave you with nothing to move.
+  // v139: Cannon only (was Cannon or Laser).
+  { kind: 'teleport', title: 'Teleport', icon: ICONS.teleport, sub: 'Move a Cannon to a new spot.' },
   { kind: 'steer', mult: 1.3, title: '+30%', icon: ICONS.steer, sub: 'Missile steering', needs: ['rocket'] },
 ]; }
 let CARD_POOL = buildCardPool();
@@ -3088,14 +3089,15 @@ function hasTurretTypes(types) {
   }
   return false;
 }
-// Teleport eligibility: a living BLUE Cannon or Laser exists to move.
-// Weapons only (no Field/Harvester/Digger/Outpost/Wall) — the point is
-// repositioning firepower, and gating here prevents picking Teleport
-// with nothing movable (which would strand the paused game in pick mode).
+// Teleport eligibility: a living BLUE Cannon exists to move.
+// Cannon only (v139, was Cannon or Laser) — the point is
+// repositioning cannon firepower, and gating here prevents picking
+// Teleport with nothing movable (which would strand the paused game
+// in pick mode).
 function hasTeleportTarget() {
   for (const t of S.turrets) {
     if (t.dead || t.color !== BLUE) continue;
-    if (t.type === 'cannon' || t.type === 'laser') return true;
+    if (t.type === 'cannon') return true;
   }
   return false;
 }
@@ -3689,10 +3691,10 @@ function placeTurretAt(sx, sy) {
   }
 }
 
-// ---- Teleport: one-time XP pick, move a Cannon or Laser ----
+// ---- Teleport: one-time XP pick, move a Cannon ----
 // Flow (game stays paused throughout, like placement, no cancel):
 //   pick Teleport card -> enterTeleport (stage 'pick', banner)
-//   -> tap a BLUE Cannon/Laser -> stage 'dest', banner names it,
+//   -> tap a BLUE Cannon -> stage 'dest', banner names it,
 //      gold base discs show (survival) where it may land
 //   -> tap inside a disc on EMPTY unoccupied ground -> it moves there
 //      instantly (no glide), re-aims at map centre, fog recomputed,
@@ -3703,13 +3705,14 @@ function placeTurretAt(sx, sy) {
 // the moving unit itself — so it can hop up to 6 cells from its old
 // spot, or jump to any Outpost anchor); main = fog-clear (no discs,
 // fog is the visualization, like placement).
-// Tapping another eligible weapon in 'dest' switches selection;
-// tapping the selected weapon itself keeps it; any other occupied cell
-// or invalid ground shows a red ring and stays in the current stage.
+// Tapping another Cannon in 'dest' switches selection; tapping the
+// selected Cannon itself keeps it; any other occupied cell or invalid
+// ground shows a red ring and stays in the current stage.
+// v139: Cannon only — Lasers are no longer selectable, in pick or dest.
 function enterTeleport() {
   S.teleporting = { stage: 'pick', unit: null };
   S.placing = null;
-  placebanner.innerHTML = 'Tap a Cannon or Laser to teleport';
+  placebanner.innerHTML = 'Tap a Cannon to teleport';
   placebanner.classList.remove('hidden');
 }
 function teleportRedRing(cx, cy) {
@@ -3724,7 +3727,7 @@ function handleTeleportTap(sx, sy) {
   cy = Math.max(0, Math.min(cfg.rows - 1, cy));
   const tapped = turretAt(cx, cy);
   const isWeapon = tapped && !tapped.dead && tapped.color === BLUE &&
-    (tapped.type === 'cannon' || tapped.type === 'laser');
+    tapped.type === 'cannon'; // v139: Cannon only, Laser no longer selectable
   if (tp.stage === 'pick') {
     if (isWeapon) {
       tp.unit = tapped;
@@ -3737,7 +3740,7 @@ function handleTeleportTap(sx, sy) {
   }
   // Destination stage.
   if (isWeapon) {
-    // Re-pick (or re-tap the selected unit): switch selection, stay here.
+    // Re-pick (or re-tap the selected Cannon): switch selection, stay here.
     tp.unit = tapped;
     placebanner.innerHTML = 'Tap inside a gold circle to move <b>' + TURRET[tapped.type].name + '</b>';
     return;
@@ -4689,10 +4692,10 @@ function render() {
       ctx.restore();
     }
     // Teleport rings: pick stage = dashed gold ring on every movable
-    // weapon (Cannon/Laser, BLUE) so you see the candidates; destination
-    // stage = solid gold ring on the selected weapon only.
+    // Cannon (BLUE) so you see the candidates; destination stage =
+    // solid gold ring on the selected Cannon only. v139: Cannon only.
     if (S.teleporting && !t.dead && t.color === BLUE &&
-        (t.type === 'cannon' || t.type === 'laser')) {
+        t.type === 'cannon') {
       const isSel = S.teleporting.stage === 'dest' && S.teleporting.unit === t;
       if (S.teleporting.stage === 'pick' || isSel) {
         ctx.save();
