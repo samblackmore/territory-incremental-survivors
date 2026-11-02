@@ -1958,7 +1958,9 @@ function checkRunOver() {
 
 // ---- Flood (SURVIVAL BRANCH) ----
 // The asymmetric enemy: not a base, but damage from a direction.
-// A flood controller picks a random edge per run, then fires waves of
+// A flood controller picks a random edge for the first storm, then
+// cycles clockwise or anticlockwise (decided once per run, v132)
+// round the map, then fires waves of
 // projectiles in patterns (a sweeping line, or scattered rain/hail)
 // from that edge. Flood shots damage rock and player territory, and
 // claim what they destroy as flood territory (RED internally, blue
@@ -2044,8 +2046,10 @@ const METEOR_ROCK_HP = 80;
 const METEOR_ROCK_SHADE = 5;
 // dir: 0 = from top, 1 = from bottom, 2 = from left, 3 = from right.
 // The emitter is a single point just outside the map on that edge —
-// never seen, only its effects creeping in. Each storm picks a new
-// dir + position along the edge, so storms surprise from anywhere.
+// never seen, only its effects creeping in. v132 (Sam): the FIRST
+// storm picks a random dir, then storms cycle round the map for the
+// rest of the run — clockwise (north -> east -> south -> west) or
+// anticlockwise, decided once at run start (f.cycle: +1 / -1).
 // Own RNG stream (seed + 99991) for the FIRST storm, so flood setup
 // never shifts the map-gen stream — same seed still builds the same
 // map as main. Later storms use Math.random (runtime events).
@@ -2057,10 +2061,29 @@ function floodPickDir(f, rng) {
   else if (f.dir === 2) { f.ex = -FLOOD_OFF; f.ey = rng() * H; }
   else { f.ex = W + FLOOD_OFF; f.ey = rng() * H; }
 }
+// Advance to the next storm's edge in the run's cycle direction.
+// Position along the new edge is still random each storm; only the
+// edge itself cycles. Legacy flood objects without f.cycle default
+// to clockwise (+1).
+function floodCycleDir(f, rng) {
+  const W = cfg.cols, H = cfg.rows;
+  const order = [0, 3, 1, 2]; // clockwise: north, east, south, west
+  const step = f.cycle === -1 ? -1 : 1;
+  f.dir = order[(order.indexOf(f.dir) + step + 4) % 4];
+  if (f.dir === 0) { f.ex = rng() * W; f.ey = -FLOOD_OFF; }
+  else if (f.dir === 1) { f.ex = rng() * W; f.ey = H + FLOOD_OFF; }
+  else if (f.dir === 2) { f.ex = -FLOOD_OFF; f.ey = rng() * H; }
+  else { f.ex = W + FLOOD_OFF; f.ey = rng() * H; }
+}
 function floodInit(seed) {
   const f = { dir: 0, ex: 0, ey: 0, phase: 'grace', timer: FLOOD_GRACE_DUR,
-              sweep: 0, ringT: 0, sweepT: 0, storms: 0, spreadT: FLOOD_SPREAD_EVERY };
-  floodPickDir(f, mulberry32(seed + 99991));
+              sweep: 0, ringT: 0, sweepT: 0, storms: 0, spreadT: FLOOD_SPREAD_EVERY, cycle: 1 };
+  const rng = mulberry32(seed + 99991);
+  floodPickDir(f, rng);
+  // Third call on the seeded stream, so the first storm's dir +
+  // position are unchanged for a given seed; cycle direction is
+  // decided once here and never re-rolled.
+  f.cycle = rng() < 0.5 ? 1 : -1;
   return f;
 }
 // Gradual, bloom-like spread with pressure (v110): each flood cell
@@ -2220,12 +2243,13 @@ function floodTick(dt) {
   f.ringT -= dt;
   if (f.ringT <= 0) { f.ringT += FLOOD_RING_EVERY; floodFireRing(); }
   if (f.timer <= 0) {
-    // Storm passes: lull, and pick the NEXT storm's direction now so
-    // the minimap pulse can name it. New lull starts in pulse phase
+    // Storm passes: lull, and cycle to the NEXT storm's direction
+    // now (v132: not a fresh random pick) so the minimap pulse can
+    // name it. New lull starts in pulse phase
     // (timer 60 > 30), so hide any toast explicitly.
     f.phase = 'lull';
     f.timer = FLOOD_LULL;
-    floodPickDir(f, Math.random);
+    floodCycleDir(f, Math.random);
     wavebanner.classList.add('hidden');
   }
 }
