@@ -47,6 +47,14 @@ const OUTPOST_RANGE = 4;             // vacuum pull range in cells (Euclidean)
 const OUTPOST_PULL_COUNT = 3;        // pickups per pull (nearest first)
 const OUTPOST_PULL_EVERY = 4;        // seconds between pulls
 const OUTPOST_FLASH_DUR = 1.5;       // range ring flash duration on pull (s, same as original Gather)
+// Field pull (v136, revived from the old Gather vacuum, now on Field):
+// every 4s, pull up to pullCount nearest idle pickups within pullRadius
+// cells toward the Field itself, so it banks its own harvest. Base
+// radius 3 (including its own cell) and count 1, upgraded by the
+// combined Field track (see STAT_DEFS bloom): radius 3 -> 6, count 1 -> 4.
+const FIELD_PULL_EVERY = 4;          // seconds between Field pulls
+const FIELD_PULL_RADIUS_BASE = 3;    // pull radius at Field level 0, in cells (Euclidean, own cell included)
+const FIELD_PULL_COUNT_BASE = 1;     // pickups per pull at Field level 0
 // Cannon split stat tracks (v114): each weapon stat levels independently
 // (chips top-left), one card per stat boost — no more bundled tracks.
 // Caps are 5 for cannon (v114, down from 8 — a 30-minute round never
@@ -77,7 +85,13 @@ const STAT_DEFS = {
     { key: 'pen', name: 'Penetration', cap: 5, effect: '+1 pierce depth (chance of continuing)', shopOnly: true },
   ],
   bloom: [
-    { key: 'growth', name: 'Growth', cap: 8, effect: '+20% growth speed' },
+    // v136: one combined Field track, cap 9, cycling growth / pull
+    // radius / pull count in that order, 3 cycles: Lv1 growth, Lv2
+    // radius, Lv3 count, Lv4 growth, Lv5 radius, Lv6 count, Lv7
+    // growth, Lv8 radius, Lv9 count. Max: growth 1.2^3 = 1.73x,
+    // pull radius 3 -> 6, pull count 1 -> 4. The card shows the next
+    // level's specific effect (see offerCards), so the rotation reads.
+    { key: 'field', name: 'Field', cap: 9, effect: 'Growth, pull radius and pull count, in rotation' },
   ],
   gather: [
     { key: 'count', name: 'Count', cap: 8, effect: '+1 pickup per pull' },
@@ -102,7 +116,14 @@ function applyStat(w, weapon, st) {
     else if (st === 'rate') w.rateMult = Math.pow(1.25, n); // v114: +25% per level (was +15%)
     else if (st === 'pen') w.penDepth = 1 + n; // max penetration depth: base 1 + 1 per level (rock hits + flood paints, each step 50% chance v106)
   } else if (weapon === 'bloom') {
-    if (st === 'growth') w.rateMult = Math.pow(1.2, n);
+    if (st === 'field') {
+      // Combined Field track (v136): growth on levels 1,4,7; pull
+      // radius on 2,5,8; pull count on 3,6,9.
+      const n = w.stats.field || 0;
+      w.rateMult = Math.pow(1.2, Math.ceil(n / 3));
+      w.pullRadius = FIELD_PULL_RADIUS_BASE + Math.floor((n + 1) / 3);
+      w.pullCount = FIELD_PULL_COUNT_BASE + Math.floor(n / 3);
+    }
   }
   // gather count derives from stats (gatherCount); mole
   // dig uses dmgBonus, set by the bundle below.
@@ -774,9 +795,11 @@ const MOLE_NUGGET_BIAS = 0.7; // blue mole: 70% toward nearest nugget, 30% rando
 // mole). Up to RED_MOLE_MAX alive — the cost, not a timer, is the
 // limiter, so the enemy has to earn its army from its own fields.
 const RED_MOLE_MAX = 3;
-// Enemy bloom head start: Growth 3 (1.2^3 = 1.73x) vs the player's
-// fresh bloom at Growth 0 — the early overwhelmed feeling, same rules.
-const RED_BLOOM_GROWTH = 3;
+// Enemy bloom head start: Field level 7 (growth at levels 1,4,7 =
+// 1.2^3 = 1.73x) vs the player's fresh Field at level 0 — the early
+// overwhelmed feeling, same rules. (v136: was Growth 3 on the old
+// single-purpose track.)
+const RED_BLOOM_FIELD = 7;
 // Territory harvest: a cell glows over HARVEST_EVERY seconds, then has
 // this chance to produce (same as the rock XP surprise, not a salary).
 const BLOOM_HARVEST_CHANCE = 0.3;
@@ -985,6 +1008,25 @@ function mkTurret(x, y, color, type) {
 function gatherCount() {
   const w = S.weapons.gather;
   return 1 + (w && w.stats ? (w.stats.count || 0) : 0);
+}
+// Field pull radius / count, derived from the combined Field track
+// (v136) so level 0 works without any pick, and test objects that set
+// stats manually still read correctly. w is a weapons entry (blue or
+// red); red Fields don't pull (pull code checks BLUE), but their
+// radius/count still derive the same way for completeness.
+function bloomPullRadius(w) {
+  const n = (w && w.stats ? (w.stats.field || 0) : 0);
+  return FIELD_PULL_RADIUS_BASE + Math.floor((n + 1) / 3);
+}
+function bloomPullCount(w) {
+  const n = (w && w.stats ? (w.stats.field || 0) : 0);
+  return FIELD_PULL_COUNT_BASE + Math.floor(n / 3);
+}
+function bloomFieldNextEffect(n) {
+  // What the NEXT Field pick (level n+1) does, for the card sub.
+  if (n % 3 === 0) return '+20% growth speed';
+  if (n % 3 === 1) return '+1 pull radius';
+  return '+1 pull count';
 }
 // Harvester pathing: BFS (not A* — we just need the nearest reachable
 // pickup, and BFS guarantees it avoids walls). From the Harvester's cell,
@@ -1196,18 +1238,30 @@ function retargetDigger(t) {
       }
     }
   }
-  let best = null, bestD = Infinity, bestKind = null;
+  let best = null, bestD = Infinity, bestKind = null, bestRank = Infinity;
+  // Waiting civilians in caves (v136): a civilian cell in a pocket
+  // the digger can't already walk to is the top-priority flag, ahead
+  // of any cave or gold, even if farther — the digger is now the
+  // rescue opener. If no waiting civilians remain, it falls back to
+  // the old cave/gold choice below.
+  const civCells = new Set();
+  if (SURVIVAL && S.rescue && S.rescue.civilians) {
+    for (const c of S.rescue.civilians) {
+      if (c.state === 'waiting') civCells.add(c.y * W + c.x);
+    }
+  }
   for (let i = 0; i < S.cells.length; i++) {
     if (dist[i] < 0) continue;
     const st = S.cells[i];
-    let kind = null;
-    if (st === WHITE && S.goldNug[i]) kind = 'gold';
-    else if (st === EMPTY && !open[i]) kind = 'cave';
+    let kind = null, rank = Infinity;
+    if (st === EMPTY && !open[i] && civCells.has(i)) { kind = 'civ'; rank = 0; }
+    else if (st === WHITE && S.goldNug[i]) { kind = 'gold'; rank = 2; }
+    else if (st === EMPTY && !open[i]) { kind = 'cave'; rank = 1; }
     else continue;
     if (blocked.has(i)) continue; // never target an occupied cell
     const d = dist[i];
-    if (d < bestD || (d === bestD && kind === 'cave' && bestKind === 'gold')) {
-      best = i; bestD = d; bestKind = kind;
+    if (rank < bestRank || (rank === bestRank && d < bestD)) {
+      best = i; bestD = d; bestKind = kind; bestRank = rank;
     }
   }
   if (best === null) { t.flag = null; t.flagKind = null; }
@@ -1218,6 +1272,12 @@ function flagValid(t) {
   const i = t.flag.y * cfg.cols + t.flag.x;
   if (t.flagKind === 'gold') {
     if (S.cells[i] !== WHITE || !S.goldNug[i]) return false;
+  } else if (t.flagKind === 'civ') {
+    // A civilian flag is stale once that civilian leaves its cave
+    // (discovered and walking home) or the cell stops being open ground.
+    if (S.cells[i] !== EMPTY) return false;
+    const civ = (SURVIVAL && S.rescue && S.rescue.civilians || []).find(c => c.x === t.flag.x && c.y === t.flag.y);
+    if (!civ || civ.state !== 'waiting') return false;
   } else if (t.flagKind === 'cave') {
     if (S.cells[i] !== EMPTY) return false;
   } else return false;
@@ -1445,7 +1505,75 @@ function civilianSettleNext(sx, sy, self) {
   if (fy - sy === 1) return 2;
   return 0;
 }
-// Greedy direction from (cx, cy) toward the nearest blue turret: pick the
+// Civilian resource collection (v136): BFS next step toward the
+// nearest idle pickup within CIV_COLLECT_RANGE steps, over EMPTY /
+// own BLUE, turret cells blocked (a pickup on a turret cell is not a
+// target — it stays for its turret's owner). Only fog-clear pickup
+// cells count, so civilians don't wander into unexplored ground for
+// a coin they can't see; pickups shine through fog on the main map,
+// but a civilian only chases one once its cell has cleared. Returns a
+// direction index, or null when nothing is in range. The range is
+// BFS steps (movement distance), not straight-line distance, so a
+// coin behind rock that takes 12 steps to reach is out of range even
+// if it looks 8 cells away.
+const CIV_COLLECT_RANGE = 10;
+function civilianCollectNext(sx, sy) {
+  const W = cfg.cols, H = cfg.rows;
+  const blocked = new Set();
+  for (const t of S.turrets) if (!t.dead) blocked.add(t.y * W + t.x);
+  const pickAt = new Set();
+  for (const c of S.coins) {
+    if (c.state !== 'idle') continue;
+    const px = Math.floor(c.x), py = Math.floor(c.y);
+    if (px < 0 || py < 0 || px >= W || py >= H) continue;
+    if (!fogHidden && S.fog[py * W + px] !== 0) continue;
+    pickAt.add(py * W + px);
+  }
+  if (pickAt.size === 0) return null;
+  const dist = new Int32Array(W * H).fill(-1);
+  const prev = new Int32Array(W * H).fill(-1);
+  const start = sy * W + sx;
+  const q = [start]; dist[start] = 0;
+  const dirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+  let head = 0, target = -1;
+  while (head < q.length) {
+    const cur = q[head++];
+    const cx = cur % W, cy = Math.floor(cur / W);
+    if (cur !== start && pickAt.has(cur)) { target = cur; break; }
+    if (dist[cur] >= CIV_COLLECT_RANGE) continue;
+    for (let d = 0; d < 4; d++) {
+      const nx = cx + dirs[d][0], ny = cy + dirs[d][1];
+      if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+      const ni = ny * W + nx;
+      if (dist[ni] >= 0 || (blocked.has(ni) && ni !== start)) continue;
+      const st = S.cells[ni];
+      if (st !== EMPTY && st !== BLUE) continue;
+      dist[ni] = dist[cur] + 1; prev[ni] = cur; q.push(ni);
+    }
+  }
+  if (target < 0) return null;
+  let cur = target;
+  while (prev[cur] !== -1 && prev[cur] !== start) cur = prev[cur];
+  if (prev[cur] === -1) return null;
+  const fx = cur % W, fy = Math.floor(cur / W);
+  if (fx - sx === 1) return 1;
+  if (fx - sx === -1) return 3;
+  if (fy - sy === 1) return 2;
+  return 0;
+}
+// Civilian collection on its cell: every idle pickup on that cell
+// flies to the HUD like a tapped / Harvester pickup (grant on arrival).
+function collectAtCivilian(c) {
+  let n = 0;
+  for (const coin of S.coins) {
+    if (coin.state !== 'idle') continue;
+    if (Math.floor(coin.x) === c.x && Math.floor(coin.y) === c.y) {
+      coin.state = 'fly'; coin.sx = coin.x; coin.sy = coin.y; coin.t = 0;
+      n++;
+    }
+  }
+  return n;
+}
 // axis with the larger gap (dirs: 0 up, 1 right, 2 down, 3 left). This is
 // how red moles encroach instead of wandering.
 function moleDirToward(cx, cy) {
@@ -1737,8 +1865,11 @@ function newGame() {
   // Enemy head start: red bloom at Growth 3 (same stat, same formula as
   // blue's Growth picks — just pre-applied, so red spreads faster early).
   S.redWeapons.bloom = { stats: initWeaponStats('bloom'), rateMult: 1, dmgBonus: 0, critChance: 0, proj: 0, evo: false };
-  S.redWeapons.bloom.stats.growth = RED_BLOOM_GROWTH;
-  applyStat(S.redWeapons.bloom, 'bloom', 'growth');
+  // v136: red Field level 7 gives growth at levels 1,4,7 = 1.2^3 = 1.73x,
+  // the old Growth 3 head start; its pull radius/count are irrelevant
+  // (red Fields don't pull), so only the growth part matters.
+  S.redWeapons.bloom.stats.field = RED_BLOOM_FIELD;
+  applyStat(S.redWeapons.bloom, 'bloom', 'field');
   // Grey rock: hard mid-map chunks, same CA blobs as caves but only where
   // the map is central AND far from the starter — never around the opening.
   // Only brown terrain converts (caves stay open); HP + shade come from the
@@ -2856,7 +2987,7 @@ function buildCardPool() { return [
   { kind: 'turret', type: 'cannon', title: 'Cannon', icon: ICONS.cannon, sub: 'Sweeps shots in an arc, blasting rock.' },
   { kind: 'turret', type: 'rocket', title: 'Rocket', icon: ICONS.rocket, sub: 'Fires homing missiles that crash and splash-dig.' },
   { kind: 'turret', type: 'laser', title: 'Laser', icon: ICONS.laser, sub: 'Waits for flood, then paints it.' },
-  { kind: 'turret', type: 'bloom', title: 'Field', icon: ICONS.bloom, sub: 'Grows territory that harvests gold coins.' },
+  { kind: 'turret', type: 'bloom', title: 'Field', icon: ICONS.bloom, sub: 'Grows territory that harvests, and pulls in nearby pickups.' },
   { kind: 'turret', type: 'lantern', title: 'Outpost', icon: ICONS.lantern, sub: 'Pushes back fog and pulls in nearby pickups.' },
   { kind: 'turret', type: 'gather', title: 'Harvester', icon: ICONS.gather, sub: 'Steps onto pickups to collect them, slowly.' },
   { kind: 'turret', type: 'mole', title: 'Digger', icon: ICONS.mole, sub: 'Digs tunnels through rock.' },
@@ -3045,6 +3176,9 @@ function offerCards() {
       const cur = w && w.stats ? (w.stats[p.stat] || 0) : 0;
       title = `${p.title} <span class="lv">Lv${cur + 1}</span>`;
       sub = p.effect;
+      // v136: Field is a rotating track, so the card shows what the
+      // NEXT pick actually does, not the generic rotation text.
+      if (p.weapon === 'bloom' && p.stat === 'field') sub = bloomFieldNextEffect(cur);
       el.dataset.weapon = p.weapon;
       el.dataset.stat = p.stat;
       if (cur === 0) newTag = '<span class="newtag">New!</span>';
@@ -3755,6 +3889,33 @@ function update(dt) {
     } else if (t.type === 'bloom') {
       t.cd -= dt;
       if (t.cd <= 0) { t.cd = TURRET.bloom.interval / rateMult * S.bloomMult; bloomGrowth(t); }
+      // Field pull (v136, blue only): every 4s, pull up to pullCount
+      // nearest idle pickups within pullRadius cells toward itself,
+      // so a Field banks its own harvest. Same 'gather' coin state as
+      // the Outpost vacuum, grant on arrival. Red Fields grow only.
+      if (t.color === BLUE) {
+        if (t.showRange > 0) t.showRange -= dt;
+        t.pullT = (t.pullT || 0) + dt;
+        if (t.pullT >= FIELD_PULL_EVERY) {
+          t.pullT = 0;
+          t.showRange = OUTPOST_FLASH_DUR; // flash pull range on every pull, like Outpost
+          const w = S.weapons.bloom;
+          const r = bloomPullRadius(w), n = bloomPullCount(w), r2 = r * r;
+          const inRange = [];
+          for (const c of S.coins) {
+            if (c.state !== 'idle') continue;
+            const dx = c.x - (t.x + 0.5), dy = c.y - (t.y + 0.5);
+            const d2 = dx * dx + dy * dy;
+            if (d2 <= r2) inRange.push({ c, d2 });
+          }
+          inRange.sort((a, b) => a.d2 - b.d2);
+          const take = Math.min(n, inRange.length);
+          for (let k = 0; k < take; k++) {
+            const c = inRange[k].c;
+            c.state = 'gather'; c.sx = c.x; c.sy = c.y; c.gx = t.x + 0.5; c.gy = t.y + 0.5; c.t = 0;
+          }
+        }
+      }
     } else if (t.type === 'lantern') {
       // Outpost: fog light + stationary vacuum (original Gather
       // mechanic, pre-Harvester, revived v107). Every OUTPOST_PULL_EVERY
@@ -3882,6 +4043,11 @@ function update(dt) {
   // civilian stays until its base is gone (destroyed, teleported
   // away) or its cell stops being open ground (flood paints it),
   // then it walks to the next nearest base, same tick. No death.
+  // v136 priority: collect first, home second. A discovered civilian
+  // (moving or settled) chases idle pickups within BFS 10 steps, like
+  // a Harvester, collecting on arrival; only when nothing is in range
+  // does it return to / stay at base. Settled civilians leave base to
+  // collect, then settle again on return (counted once, not again).
   if (SURVIVAL && S.rescue && S.rescue.civilians) {
     for (const c of S.rescue.civilians) {
       if (c.rx !== undefined) c.moveT += dt; // glide clock, like turrets
@@ -3892,17 +4058,28 @@ function update(dt) {
         if (S.fog[c.y * cfg.cols + c.x] !== 0) continue; // still hidden: wait
         c.state = 'moving'; // discovered: start escaping now, same tick
       }
+      const dirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+      // Collect on our cell (coins that spawned here, or arrived on
+      // last tick), then chase the nearest pickup in range, if any.
+      collectAtCivilian(c);
+      const cnd = civilianCollectNext(c.x, c.y);
+      if (cnd !== null) {
+        if (c.state === 'settled') { c.state = 'moving'; c.baseX = -1; c.baseY = -1; }
+        c.rx = c.x; c.ry = c.y; c.moveT = 0;
+        c.x += dirs[cnd][0]; c.y += dirs[cnd][1];
+        collectAtCivilian(c); // arrived on a pickup: bank it now
+        continue;
+      }
       if (c.state === 'settled') {
         const bt = (c.baseX !== undefined && c.baseX >= 0) ? turretAt(c.baseX, c.baseY) : null;
         const cellSt = S.cells[c.y * cfg.cols + c.x];
         if (bt && !bt.dead && bt.color === BLUE && (bt.type === 'cannon' || bt.type === 'lantern') &&
             (cellSt === EMPTY || cellSt === BLUE) && !turretAt(c.x, c.y)) {
-          continue; // still home: stay, no move
+          continue; // still home, nothing to collect: stay, no move
         }
         c.state = 'moving'; c.baseX = -1; c.baseY = -1; // base gone / cell taken: leave, same tick
       }
       // Moving: settle if already standing on a free spot around a base.
-      const dirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];
       const settleHere = civilianSettleBase(c.x, c.y, c);
       if (settleHere) {
         c.state = 'settled'; c.baseX = settleHere.x; c.baseY = settleHere.y;
@@ -4427,16 +4604,18 @@ function render() {
       ctx.beginPath(); ctx.arc(0, 1, 3, 0, Math.PI * 2); ctx.fill();
     }
     ctx.restore();
-    // Outpost vacuum range flash: on every pull, a fading dashed gold
-    // ring shows the vacuum radius (original Gather flash, revived).
-    if (t.type === 'lantern' && t.showRange > 0) {
+    // Outpost / Field vacuum range flash: on every pull, a fading
+    // dashed gold ring shows the vacuum radius (original Gather flash,
+    // revived; Field uses its own pull radius, v136).
+    if ((t.type === 'lantern' || t.type === 'bloom') && t.showRange > 0) {
       const fade = Math.min(1, t.showRange / OUTPOST_FLASH_DUR);
+      const rr = t.type === 'lantern' ? OUTPOST_RANGE : bloomPullRadius(S.weapons.bloom);
       ctx.save();
       ctx.strokeStyle = `rgba(250, 204, 21, ${0.6 * fade})`;
       ctx.lineWidth = 2;
       ctx.setLineDash([6, 6]);
       ctx.beginPath();
-      ctx.arc(px, py, OUTPOST_RANGE * CELL_PX, 0, Math.PI * 2);
+      ctx.arc(px, py, rr * CELL_PX, 0, Math.PI * 2);
       ctx.stroke();
       ctx.restore();
     }
@@ -4644,7 +4823,9 @@ function render() {
     ctx.strokeStyle = '#0b0e16';
     ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.moveTo(fx - 3, fy + 6); ctx.lineTo(fx - 3, fy - 6); ctx.stroke(); // pole
-    ctx.fillStyle = t.flagKind === 'gold' ? '#ffd75e' : '#ffffff';
+    // Gold flag = gold, civilian flag = pink (v136, rescue target),
+    // cave flag = white.
+    ctx.fillStyle = t.flagKind === 'gold' ? '#ffd75e' : (t.flagKind === 'civ' ? CIV_PINK : '#ffffff');
     ctx.beginPath();
     ctx.moveTo(fx - 3, fy - 6); ctx.lineTo(fx + 5, fy - 3); ctx.lineTo(fx - 3, fy - 1);
     ctx.closePath(); ctx.fill(); ctx.stroke();
@@ -4679,7 +4860,7 @@ function render() {
   // A stat with no picks yet (level 0) hides its row entirely — the
   // corner only shows stats you've actually invested in, and a stat
   // card shows New! on its first pick (see offerCards).
-  const STAT_LABEL = { dmg: 'DAMG', proj: 'PROJ', rate: 'RATE', pen: 'PENE', growth: 'GROW', count: 'CNTS', dig: 'DIGS' };
+  const STAT_LABEL = { dmg: 'DAMG', proj: 'PROJ', rate: 'RATE', pen: 'PENE', growth: 'GROW', field: 'FLD', count: 'CNTS', dig: 'DIGS' };
   for (const type of ['cannon', 'bloom', 'gather', 'mole']) {
     const w = S.weapons[type];
     if (!w || !w.stats) continue;
@@ -4716,7 +4897,9 @@ function render() {
       ctx.fillText(STAT_LABEL[d.key] || d.key.toUpperCase(), 30, iy + 1);
       for (let i = 0; i < d.cap; i++) {
         ctx.beginPath();
-        ctx.arc(60 + i * 7.5, iy, 2.5, 0, Math.PI * 2);
+        // Cap 9 (Field, v136) squeezes chips to 7px spacing so the row
+        // still fits its 122px box; other tracks keep 7.5px.
+        ctx.arc(60 + i * (d.cap > 8 ? 7 : 7.5), iy, 2.5, 0, Math.PI * 2);
         ctx.fillStyle = i < lvl ? '#ffd75e' : '#2a3145';
         ctx.fill();
       }
