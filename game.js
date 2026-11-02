@@ -664,7 +664,7 @@ const GREY_FILL = 0.40;        // CA seed fill for grey chunks (caves use 0.38; 
 const GREY_MIN_DIST = 12;      // cells from the starter: no grey near the opening
 const GREY_HP_MIN = 30, GREY_HP_MAX = 100;
 const GREY_GOLD_CHANCE = 0.8;  // grey drops: mostly gold (XP is easy mid-game)
-const BROWN_GOLD_CHANCE = 0.1; // regular brown rock: 10% gold on break (BLUE only, non-nugget, non-grey) — you don't have to rely on nuggets alone; independent of the XP roll, so a break can drop both
+const BROWN_GOLD_CHANCE = 0.1; // regular brown rock: 10% gold on break (BLUE only, non-nugget, non-grey) — but only if the XP roll above failed (v130, Sam: no double drops), so effective gold is 0.7 × 0.1 = 7%, XP 30%, nothing 63%, and a brown break never drops 2 coins
 // Coast (v117 beach, v119 grass, v122 ocean): three rings of open ground
 // around the island, from the edge inward: ocean, sand, grass, then
 // regular terrain. NOT percentage-based (v122): the total border is a
@@ -2752,7 +2752,9 @@ function damageBlock(idx, dmg, color, sx, sy, vx, vy, crit) {
       if (i >= 0) S.coins.splice(i, 1);
     }
   }
+  let xpDropped = false;
   if (color === BLUE && Math.random() < cfg.coinChance) {
+    xpDropped = true;
     S.coins.push({ x: cx + 0.5, y: cy + 0.5, state: 'idle', kind: 'xp',
                    phase: Math.random() * 6.283, sx: 0, sy: 0, t: 0, dead: false });
     if (S.coins.length > 800) { // safety valve: drop oldest idle coin
@@ -2760,12 +2762,14 @@ function damageBlock(idx, dmg, color, sx, sy, vx, vy, crit) {
       if (i >= 0) S.coins.splice(i, 1);
     }
   }
-  if (color === BLUE && !wasGrey && !wasNugget && Math.random() < BROWN_GOLD_CHANCE) {
-    // Regular brown rock pays a little gold sometimes (10%): you don't
-    // have to rely on nuggets alone. Independent of the XP roll above,
-    // so a break can drop both XP + gold (3% of the time). Nugget cells
-    // keep their single guaranteed gold (no extra roll); grey keeps its
-    // 80/20 guaranteed pickup below. Red/flood breaks pay nothing.
+  // v130, Sam: no double drops on brown. Gold is only rolled if the
+  // XP roll above failed, so a regular brown break drops at most
+  // one coin: XP 30%, else gold 10% of the remaining 70% = 7%
+  // effective, else nothing 63%. Nugget cells keep their guaranteed
+  // gold (no extra roll); grey keeps its 80/20 guaranteed pickup
+  // below. Red/flood breaks pay nothing. (Nugget and grey can still
+  // drop 2 coins — guaranteed + XP roll — this change is brown only.)
+  if (color === BLUE && !wasGrey && !wasNugget && !xpDropped && Math.random() < BROWN_GOLD_CHANCE) {
     S.coins.push({ x: cx + 0.5, y: cy + 0.5, state: 'idle', kind: 'gold',
                    phase: Math.random() * 6.283, sx: 0, sy: 0, t: 0, dead: false });
     if (S.coins.length > 800) { // safety valve: drop oldest idle coin
