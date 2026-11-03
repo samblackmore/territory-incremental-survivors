@@ -2642,9 +2642,25 @@ function meteorTick(dt) {
 // and EMPTY cells holding an idle coin are skipped in ADD mode
 // (a coin buried in rock would be uncollectible). In CARVE mode an
 // idle-coin cell is EMPTY anyway, so it stays EMPTY with its coin.
-// No drops in either mode — the meteor does not pay, like flood
-// destruction, so a nugget on a converted/carved cell is lost with
-// no free coin. Fog is recomputed once, after all cells, not per cell.
+// Drops (v145): ADD mode still pays nothing — a nugget on a
+// converted cell is lost with no free coin, like flood destruction.
+// CARVE mode pays like a BLUE cannon break, terrain only: regular
+// brown WHITE drops XP 30%, else gold 10% (never both); a nugget
+// WHITE drops its guaranteed gold plus the XP roll; GREY drops the
+// XP roll plus a guaranteed 80% gold / 20% XP pickup. Territory
+// (BLUE/RED) carved to EMPTY pays nothing, exactly as a cannon
+// bombing territory pays nothing — territory pays on harvest, not
+// on destruction. Fog is recomputed once, after all cells, not per cell.
+// Push one idle coin, with the same 800-coin safety valve damageBlock
+// uses (drop the oldest idle coin when full).
+function pushIdleCoin(cx, cy, kind) {
+  S.coins.push({ x: cx + 0.5, y: cy + 0.5, state: 'idle', kind,
+                 phase: Math.random() * 6.283, sx: 0, sy: 0, t: 0, dead: false });
+  if (S.coins.length > 800) {
+    const i = S.coins.findIndex(c => c.state === 'idle');
+    if (i >= 0) S.coins.splice(i, 1);
+  }
+}
 function meteorImpact(tx, ty) {
   const cluster = [];
   for (let dy = -2; dy <= 2; dy++) {
@@ -2692,13 +2708,23 @@ function meteorImpact(tx, ty) {
     } else {
       // CARVE: non-empty cells to EMPTY, no rock placed anywhere.
       if (cell === EMPTY) continue;
-      const wasCell = cell;
+      const wasCell = cell, wasNugget = !!S.goldNug[idx], wasGrey = cell === GREY;
       S.cells[idx] = EMPTY;
       S.hp[idx] = 0; S.maxhp[idx] = 0;
-      S.goldNug[idx] = 0; // nugget lost with the rock, no free coin
+      S.goldNug[idx] = 0;
       S.growN[idx] = 0; S.growBy[idx] = 0;
       if (S.noHarvest) S.noHarvest[idx] = 0;
       if (wasCell === WHITE || wasCell === GREY) S.destroyed++;
+      // v145: terrain carved here pays exactly like a BLUE cannon
+      // break (same rolls as damageBlock, same order). Territory
+      // pays nothing — the if below is terrain-only on purpose.
+      if (wasCell === WHITE || wasCell === GREY) {
+        if (wasNugget) pushIdleCoin(x, y, 'gold'); // nugget's guaranteed gold
+        let xpDropped = false;
+        if (Math.random() < cfg.coinChance) { pushIdleCoin(x, y, 'xp'); xpDropped = true; }
+        if (!wasGrey && !wasNugget && !xpDropped && Math.random() < BROWN_GOLD_CHANCE) pushIdleCoin(x, y, 'gold');
+        if (wasGrey) pushIdleCoin(x, y, Math.random() < GREY_GOLD_CHANCE ? 'gold' : 'xp');
+      }
       spawnBurst(x + 0.5, y + 0.5, CELL_COLORS[wasCell]);
       changed = true;
     }
