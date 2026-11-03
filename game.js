@@ -410,21 +410,24 @@ function drawMinimap() {
     }
   }
   // Incoming-storm warning (survival, early lull only): a gently
-  // pulsing yellow line on the minimap edges. v137: waves come from
-  // all sides, so all four edges pulse, not just the sweep's side —
-  // the sweep side is named in the toast once it joins, not in the
-  // pulse. This is the quiet warning; the final 30s before the storm
-  // use the old toast countdown instead (see floodTick). During the
-  // storm itself there's no pulse: the flood is visible on the
-  // minimap as blue territory. No pulse during grace either.
+  // pulsing yellow line on the minimap edges. v137: waves came from
+  // all sides, so all four edges pulsed. v151: waves come only from
+  // the starter side, so only that edge pulses — the direction the
+  // front is coming from. If starterDir is unknown (synthetic flood
+  // objects), fall back to all four edges. This is the quiet
+  // warning; the final 30s before the storm use the old toast
+  // countdown instead (see floodTick). During the storm itself
+  // there's no pulse: the flood is visible on the minimap as blue
+  // territory. No pulse during grace either.
   if (SURVIVAL && S.flood && S.flood.phase === 'lull' && S.flood.timer > FLOOD_TOAST_AT) {
     const W = minimap.width, H = minimap.height, T = 3; // line thickness px
     const a = 0.42 + 0.18 * Math.sin(S.time * Math.PI * 2 / 2.2); // gentle 2.2s pulse, alpha 0.24–0.60
     mmctx.fillStyle = `rgba(255, 215, 94, ${a})`; // gold #ffd75e
-    mmctx.fillRect(0, 0, W, T); // top
-    mmctx.fillRect(0, H - T, W, T); // bottom
-    mmctx.fillRect(0, 0, T, H); // left
-    mmctx.fillRect(W - T, 0, T, H); // right
+    const side = S.flood.starterDir;
+    if (side === 0 || side === undefined) mmctx.fillRect(0, 0, W, T); // top (north)
+    if (side === 1 || side === undefined) mmctx.fillRect(0, H - T, W, T); // bottom (south)
+    if (side === 2 || side === undefined) mmctx.fillRect(0, 0, T, H); // left (west)
+    if (side === 3 || side === undefined) mmctx.fillRect(W - T, 0, T, H); // right (east)
   }
   // Meteor warning (v116): yellow circles on the minimap for every
   // target that has not impacted yet — all of them during the 10s
@@ -1932,6 +1935,11 @@ function newGame() {
   if (SURVIVAL) {
     starterT.isStarter = true;
     starterT.base = starterT.angle = inlandAngle(pc.x, pc.y);
+    // v151: waves come only from the starter side, fixed for the
+    // run. Set here, not in floodInit (the starter is placed after
+    // floodInit), and never updated on teleport — a teleported
+    // starter does not move the flood front.
+    if (S.flood) S.flood.starterDir = starterSideDir(pc.x, pc.y);
   }
   S.turrets.push(starterT);
   S.weapons.cannon = { stats: initWeaponStats('cannon'), rateMult: 1, dmgBonus: 0, critChance: 0, proj: 0, evo: false, evoPaint: false };
@@ -2212,12 +2220,13 @@ const SURVIVAL = true; // survival branch: player renders red, flood is blue, en
 const FLOOD_GRACE_DUR = 300;  // 5 min grace before the first storm: prepare your base (XP-bar threat countdown gives the ETA; commander dialog disabled v126)
 const FLOOD_SWEEP_START = 1200; // 20 min run time: the sweeping cannon joins the waves (v137, v150: was 10 min, see floodTick)
 // Phases (v137, Sam; v140 waves reworked; v146 first storm at 5:00;
-// v150 sweep pushed to 20 min):
+// v150 sweep pushed to 20 min; v151 waves fixed to starter side):
 // 0–5 min grace, no storms; first storm starts at 5:00, no first
-// lull; 5–20 min waves only (whole-border straight-line waves,
-// inward); 20+ min waves + sweep (the sweeping cannon, from one
-// cycling side, as before). Run time is S.time, so a storm that
-// starts before 20:00 gains its sweep mid-storm the moment the clock
+// lull; 5–20 min waves only, from the starter side only
+// (straight-line waves inward from that edge); 20+ min waves
+// (starter side) + sweep (the sweeping cannon, from one cycling
+// side, as before). Run time is S.time, so a storm that starts
+// before 20:00 gains its sweep mid-storm the moment the clock
 // crosses 20:00. Between storms: 60s lull, pulse then toast.
 const FLOOD_TOAST_AT = 30;    // seconds before a storm when the old toast countdown returns (earlier in the lull: minimap pulse only)
 const FLOOD_STORM_DUR = 20;   // seconds a storm barrages, then it passes
@@ -2326,9 +2335,21 @@ function floodCycleDir(f, rng) {
   else if (f.dir === 2) { f.ex = -FLOOD_OFF; f.ey = rng() * H; }
   else { f.ex = W + FLOOD_OFF; f.ey = rng() * H; }
 }
+// v151: the map edge nearest (x, y), in FLOOD_DIRS order
+// (north, south, west, east) on ties. The starter cannon sits on a
+// beach facing inland, so its nearest edge is the side behind it —
+// the side the single-side waves come from.
+function starterSideDir(x, y) {
+  const dN = y, dS = cfg.rows - 1 - y, dW = x, dE = cfg.cols - 1 - x;
+  let dir = 0, best = dN;
+  if (dS < best) { dir = 1; best = dS; }
+  if (dW < best) { dir = 2; best = dW; }
+  if (dE < best) { dir = 3; best = dE; }
+  return dir;
+}
 function floodInit(seed) {
   const f = { dir: 0, ex: 0, ey: 0, phase: 'grace', timer: FLOOD_GRACE_DUR,
-              sweep: 0, waveT: 0, sweepT: 0, storms: 0, spreadT: FLOOD_SPREAD_EVERY, cycle: 1 };
+              sweep: 0, waveT: 0, sweepT: 0, storms: 0, spreadT: FLOOD_SPREAD_EVERY, cycle: 1, starterDir: undefined };
   const rng = mulberry32(seed + 99991);
   floodPickDir(f, rng);
   // Third call on the seeded stream, so the first storm's dir +
@@ -2463,16 +2484,24 @@ function floodWaveReachesLand(cx, cy, dx, dy) {
   }
   return false;
 }
-// Border wave (v140, v141 culling + attack-only): the whole border
-// spawns at once, one projectile per border cell that reaches land,
-// travelling straight inward — north edge south, south edge north,
-// west edge east, east edge west — like a wave coming in from the
-// ocean. Corners spawn twice (once per edge direction), so a corner
-// cell sends one shot south and one east, etc., unless that ray is
-// culled. Spawned just inside the edge (projectiles can't spawn
-// outside: stepProjectile kills out-of-bounds shots on the first
-// step). Speed is randomised ±15% per projectile, so the line breaks
-// up as faster shots outrun slower ones instead of staying perfect.
+// Border wave (v140, v141 culling + attack-only, v151 single side):
+// v140–v150 the whole border spawned at once, one projectile per
+// border cell that reaches land, travelling straight inward — north
+// edge south, south edge north, west edge east, east edge west,
+// corners twice (once per edge direction). v151: waves come only
+// from the starter side (S.flood.starterDir, the map edge nearest
+// the starter at run start — the side behind you, since the starter
+// faces inland). The spawn code is unchanged — one projectile per
+// border cell on that edge, culling, speed jitter, attack-only —
+// just restricted to one edge, so a corner cell on that edge now
+// spawns once, not twice, and the erosion rate on that side is
+// unchanged (a wave every 1.2s from that side, as before); the
+// other three sides get no waves at all, so inland caves survive
+// longer and the mission becomes rescuing civilians before the
+// front erodes in from behind. The sweep is NOT changed: it still
+// cycles and still joins at 20 min, so after 20 min there is a
+// second front. If starterDir is unknown (synthetic flood objects
+// in tests), fall back to all four sides, as before.
 // v141: wave shots are attack-only, NOT flood shots (flood: false):
 // they leave no flood paint trail on EMPTY ground, they bomb blue
 // territory to EMPTY instead of claiming it as flood, and a broken
@@ -2489,13 +2518,18 @@ function floodFireWave() {
     S.projs.push({ x, y, vx: vx * speed, vy: vy * speed,
                    color: RED, dmg: FLOOD_DMG, flood: false, crit: false, dead: false });
   };
-  for (let x = 0; x < W; x++) {
-    fire(x, 0, x + 0.5, 0.05, 0, 1);   // north edge -> south
-    fire(x, H - 1, x + 0.5, H - 0.05, 0, -1); // south edge -> north
+  const side = S.flood ? S.flood.starterDir : undefined;
+  if (side === 0 || side === undefined) {
+    for (let x = 0; x < W; x++) fire(x, 0, x + 0.5, 0.05, 0, 1); // north edge -> south
   }
-  for (let y = 0; y < H; y++) {
-    fire(0, y, 0.05, y + 0.5, 1, 0);   // west edge -> east
-    fire(W - 1, y, W - 0.05, y + 0.5, -1, 0); // east edge -> west
+  if (side === 1 || side === undefined) {
+    for (let x = 0; x < W; x++) fire(x, H - 1, x + 0.5, H - 0.05, 0, -1); // south edge -> north
+  }
+  if (side === 2 || side === undefined) {
+    for (let y = 0; y < H; y++) fire(0, y, 0.05, y + 0.5, 1, 0); // west edge -> east
+  }
+  if (side === 3 || side === undefined) {
+    for (let y = 0; y < H; y++) fire(W - 1, y, W - 0.05, y + 0.5, -1, 0); // east edge -> west
   }
 }
 function floodTick(dt) {
@@ -2536,15 +2570,28 @@ function floodTick(dt) {
     // Final 30s before the storm: the old toast countdown returns
     // (explicit, urgent). Earlier in the lull the minimap pulse
     // carries the warning quietly (see drawMinimap).
-    // v137 toast: waves come from all sides, so before the sweep joins
-    // the toast names no side; once the sweep will be active at storm
-    // start (run time + remaining lull >= 20:00, v150), it names the
-    // sweep's cycling side as well as the waves.
+    // v137 toast: waves came from all sides, so before the sweep
+    // joined the toast named no side. v151: waves come only from
+    // the starter side, so the toast names it; once the sweep will
+    // be active at storm start (run time + remaining lull >= 20:00,
+    // v150), it names the sweep's cycling side too — both sides if
+    // they differ, one side if they coincide. If starterDir is
+    // unknown (synthetic flood objects), fall back to the old
+    // all-sides wording.
     if (f.timer <= FLOOD_TOAST_AT) {
       const sweepAtStorm = (S.time + f.timer >= FLOOD_SWEEP_START);
-      wavebanner.textContent = sweepAtStorm
-        ? 'FLOOD WAVES + SWEEP FROM THE ' + FLOOD_DIRS[f.dir].toUpperCase() + ' IN ' + Math.max(1, Math.ceil(f.timer)) + 's'
-        : 'FLOOD WAVES FROM ALL SIDES IN ' + Math.max(1, Math.ceil(f.timer)) + 's';
+      const n = Math.max(1, Math.ceil(f.timer));
+      const waveSide = (f.starterDir !== undefined) ? FLOOD_DIRS[f.starterDir].toUpperCase() : null;
+      const sweepSide = FLOOD_DIRS[f.dir].toUpperCase();
+      if (sweepAtStorm && waveSide && waveSide !== sweepSide) {
+        wavebanner.textContent = 'FLOOD WAVES FROM THE ' + waveSide + ' + SWEEP FROM THE ' + sweepSide + ' IN ' + n + 's';
+      } else if (sweepAtStorm) {
+        wavebanner.textContent = 'FLOOD WAVES + SWEEP FROM THE ' + sweepSide + ' IN ' + n + 's';
+      } else if (waveSide) {
+        wavebanner.textContent = 'FLOOD WAVES FROM THE ' + waveSide + ' IN ' + n + 's';
+      } else {
+        wavebanner.textContent = 'FLOOD WAVES FROM ALL SIDES IN ' + n + 's';
+      }
       wavebanner.classList.remove('hidden');
     } else {
       wavebanner.classList.add('hidden'); // early lull: pulse only
