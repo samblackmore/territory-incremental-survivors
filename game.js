@@ -461,6 +461,7 @@ function stepLvParticles(dt) {
   lvctx.globalAlpha = 1;
 }
 const placebanner = document.getElementById('placebanner');
+const placeswap = document.getElementById('placeswap');
 const wavebanner = document.getElementById('wavebanner');
 const runover = document.getElementById('runover');
 const runstats = document.getElementById('runstats');
@@ -2006,6 +2007,7 @@ function newGame() {
   overlay.classList.add('hidden');
   runover.classList.add('hidden');
   placebanner.classList.add('hidden');
+  placeswap.classList.add('hidden');
   wavebanner.classList.add('hidden');
   updateHud();
 }
@@ -2154,6 +2156,7 @@ function checkRunOver() {
     S.paused = true;
     S.placing = null;
     placebanner.classList.add('hidden');
+    placeswap.classList.add('hidden');
     runstats.innerHTML = SURVIVAL
       ? 'Flood storms <b>' + (S.flood ? S.flood.storms : 0) + '</b> · Level <b>' + S.level + '</b><br>' +
         'Survived <b>' + Math.round(S.time) + 's</b> · ' +
@@ -3498,10 +3501,12 @@ document.querySelectorAll('#levelup .card').forEach(card => {
       const type = card.dataset.type;
       const w = S.weapons[type];
       const cost = parseInt(card.dataset.cost || '0', 10);
+      let digApplied = false;
       if (w && card.dataset.stat === 'mole-place') {
         if (w.stats && (w.stats.dig || 0) < 8) {
           w.stats.dig++;
           w.dmgBonus = w.stats.dig;
+          digApplied = true;
         }
         S.gold -= cost;
         // fall through to placement below
@@ -3514,6 +3519,9 @@ document.querySelectorAll('#levelup .card').forEach(card => {
       overlay.classList.add('hidden');
       updateHud();
       enterPlacement(type);
+      // v147 swap: remember what this pick cost, so the Swap button
+      // can refund exactly that amount (and undo a mole dig pick).
+      if (S.placing) { S.placing.cost = cost; S.placing.moleBundle = digApplied; }
       return;
     }
     if (kind === 'teleport') {
@@ -3611,7 +3619,40 @@ function nearBase(cx, cy) {
   }
   return false;
 }
+// v147 Swap upgrade type: while placing, tap this to go back to
+// the level-up screen and choose something different. It undoes
+// exactly what picking the shop card did, except the XP reset (the
+// level was spent, the pick is what is being changed): gold refunded,
+// pending restored, mole-bundle dig undone if it was applied. The
+// cards shown are the same deal as before — no re-deal, so swapping
+// is not a free re-roll: the dealt cards are still in the DOM, the
+// overlay was only hidden, not cleared. Picking a different card
+// from there spends the restored pending pick as normal; picking
+// the same placement card again just re-enters placement.
+placeswap.addEventListener('click', () => {
+  if (!S.placing) return;
+  const p = S.placing;
+  if (p.cost) S.gold += p.cost;
+  if (p.moleBundle) {
+    const w = S.weapons.mole;
+    if (w && w.stats && (w.stats.dig || 0) > 0) {
+      w.stats.dig--;
+      w.dmgBonus = w.stats.dig;
+    }
+  }
+  S.placing = null;
+  placebanner.classList.add('hidden');
+  placeswap.classList.add('hidden');
+  S.pending++;
+  // Refresh the shop gold label to the refunded gold (offerShopCards
+  // set it at deal time, before the deduction).
+  document.getElementById('shoplabel').innerHTML =
+    'Shop<span class="shopgold">' + S.gold + '<span class="coin"></span></span>';
+  overlay.classList.remove('hidden'); // game stays paused while choosing
+  updateHud();
+});
 function enterPlacement(type) {  S.placing = { type };
+  placeswap.classList.remove('hidden');
   if (type === 'waypoint') {
     // Waypoints bypass the base discs: any clear cell, any ground
     // (rock, territory, cave — you aim at walls, not just open ground).
@@ -3676,6 +3717,7 @@ function placeTurretAt(sx, sy) {
     // each wall IS new.)
     S.placing = null;
     placebanner.classList.add('hidden');
+    placeswap.classList.add('hidden');
     if (!S.runOver) {
       if (S.pending > 0) {
         offerCards(); offerShopCards();
@@ -3703,6 +3745,7 @@ function placeTurretAt(sx, sy) {
     spawnBurst(cx + 0.5, cy + 0.5, '#ffd75e'); // gold, matching the marker
     S.placing = null;
     placebanner.classList.add('hidden');
+    placeswap.classList.add('hidden');
     if (!S.runOver) {
       if (S.pending > 0) {
         offerCards(); offerShopCards();
@@ -3783,6 +3826,7 @@ function placeTurretAt(sx, sy) {
   computeFog(); // light fog (v128): the new unit reveals immediately, not on the next rock break
   S.placing = null;
   placebanner.classList.add('hidden');
+  placeswap.classList.add('hidden');
   if (!S.runOver) {
     if (S.pending > 0) {
       offerCards(); offerShopCards(); // more picks: fresh XP + shop rows, stays paused
@@ -3814,6 +3858,7 @@ function placeTurretAt(sx, sy) {
 function enterTeleport() {
   S.teleporting = { stage: 'pick', unit: null };
   S.placing = null;
+  placeswap.classList.add('hidden'); // swap is for placements, not teleport
   placebanner.innerHTML = 'Tap a Cannon to teleport';
   placebanner.classList.remove('hidden');
 }
@@ -3870,6 +3915,7 @@ function completeTeleport(t, cx, cy) {
   computeFog(); // unit moved, so its disc reveals at the new spot, like placement
   S.teleporting = null;
   placebanner.classList.add('hidden');
+  placeswap.classList.add('hidden');
   if (!S.runOver) {
     if (S.pending > 0) {
       offerCards(); offerShopCards(); // more picks: fresh XP + shop rows, stays paused

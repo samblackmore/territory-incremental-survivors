@@ -399,6 +399,17 @@
   }
   .banner.hidden { display: none; }
   .banner b { color: #7db4ff; }
+  /* Swap button: sits under the placement banner while placing.
+     The banner itself is pointer-events: none, so this is a separate
+     element, not a child of it, or it could never be tapped. */
+  #placeswap {
+    position: fixed; top: 76px; left: 50%; transform: translateX(-50%);
+    background: rgba(10, 13, 22, 0.9);
+    border: 1px solid #f5b301; border-radius: 10px;
+    padding: 8px 16px; font-size: 14px; color: #ffd75e;
+    z-index: 9; cursor: pointer; white-space: nowrap;
+  }
+  #placeswap.hidden { display: none; }
   #wavebanner { border-color: #ffd75e; color: #ffd75e; font-weight: bold; letter-spacing: .08em; }
   /* Run-over overlay */
   #runover {
@@ -522,6 +533,7 @@
 </div>
 
 <div id="placebanner" class="banner hidden"></div>
+<button id="placeswap" class="hidden">Swap upgrade type</button>
 <div id="wavebanner" class="banner hidden"></div>
 
 <div id="startscreen" class="hidden">
@@ -591,6 +603,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=146"></script>
+<script src="game.js?v=147"></script>
 </body>
 </html>
