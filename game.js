@@ -982,10 +982,34 @@ function saveMeta() {
 // ---- Game state ----
 let S = null;
 
+// v144, starter-only inland aim: direction from (x, y) to the nearest
+// interior cell — a cell that is none of ocean/beach/grass. Coast
+// flags never clear, so this is geographic, not rock-state: the aim
+// does not drift as the wall in front of the starter is cleared.
+// From a beach cell the nearest interior cell is straight inland
+// (the cliff wall), so a starter on the east beach faces west, on
+// the south beach faces north, in a corner faces diagonally inward.
+// Falls back to map centre if there is no interior cell at all.
+function inlandAngle(x, y) {
+  if (!S.ocean || !S.beach || !S.grass) return Math.atan2(cfg.rows / 2 - y, cfg.cols / 2 - x);
+  let best = null, bd = Infinity;
+  for (let yy = 0; yy < cfg.rows; yy++) {
+    for (let xx = 0; xx < cfg.cols; xx++) {
+      const i = yy * cfg.cols + xx;
+      if (S.ocean[i] || S.beach[i] || S.grass[i]) continue;
+      const d2 = (xx - x) ** 2 + (yy - y) ** 2;
+      if (d2 < bd) { bd = d2; best = { x: xx, y: yy }; }
+    }
+  }
+  if (!best) return Math.atan2(cfg.rows / 2 - y, cfg.cols / 2 - x);
+  return Math.atan2(best.y - y, best.x - x);
+}
 function mkTurret(x, y, color, type) {
   const spec = TURRET[type];
   // Base aim is fixed at placement: blue aims map-center, red aims at blue's
   // corner. Nobody tracks anybody — the patterns do the fighting.
+  // Exception (v144, survival only): the starter cannon, set in newGame,
+  // faces inland instead — see inlandAngle above.
   const base = color === BLUE
     ? Math.atan2(cfg.rows / 2 - y, cfg.cols / 2 - x)
     : Math.atan2(cfg.rows * 0.85 - y, cfg.cols * 0.15 - x);
@@ -1875,7 +1899,19 @@ function newGame() {
     S.hp[pci] = 0; S.maxhp[pci] = 0;
   }
   // The starter is always Cannon; the shop only gates mid-run drafts.
-  S.turrets.push(mkTurret(pc.x, pc.y, BLUE, 'cannon'));
+  // v144 (survival only): only the starter faces inland — every later
+  // BLUE cannon keeps the map-centre base from mkTurret. The starter's
+  // inland aim is a one-time base at spawn, not a tracking rule: it
+  // does not re-aim as terrain clears (inlandAngle is geographic),
+  // a waypoint overrides it while placed, and teleport clears the
+  // starter flag (see completeTeleport), so an escaped starter aims
+  // at map centre like any placed cannon.
+  const starterT = mkTurret(pc.x, pc.y, BLUE, 'cannon');
+  if (SURVIVAL) {
+    starterT.isStarter = true;
+    starterT.base = starterT.angle = inlandAngle(pc.x, pc.y);
+  }
+  S.turrets.push(starterT);
   S.weapons.cannon = { stats: initWeaponStats('cannon'), rateMult: 1, dmgBonus: 0, critChance: 0, proj: 0, evo: false, evoPaint: false };
   // Perma base: cannon starts at the perma levels (not 0), and in-run
   // picks stack on top (same track, same cap 5 total). Starter is always
@@ -3790,8 +3826,12 @@ function completeTeleport(t, cx, cy) {
   spawnBurst(ox + 0.5, oy + 0.5, CELL_COLORS[BLUE]); // leave: burst at origin
   t.x = cx; t.y = cy; t.rx = cx; t.ry = cy; t.moveT = 1; // instant, no glide
   // Re-aim at map centre from the new spot (BLUE weapons aim centre).
+  // v144: teleport clears the starter flag — a teleported starter is
+  // now a placed cannon, so it keeps centre aim thereafter (including
+  // on waypoint removal) instead of snapping back to the coast.
   t.base = Math.atan2(cfg.rows / 2 - cy, cfg.cols / 2 - cx);
   t.angle = t.base;
+  t.isStarter = false;
   spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[BLUE]); // arrive: burst at destination
   computeFog(); // unit moved, so its disc reveals at the new spot, like placement
   S.teleporting = null;
@@ -5117,7 +5157,9 @@ function tapCoin(sx, sy) {
 // waypoint cell during normal play to remove it, free. Placement taps
 // never remove (they refuse duplicates with a red ring instead), so
 // removal never charges gold. Last removal reverts BLUE cannons to
-// map-centre aim (placement formula, so aim returns exactly).
+// map-centre aim (placement formula, so aim returns exactly) — except
+// a v144 starter, which reverts to its inland aim, so placing and
+// removing a waypoint does not silently kill the starter's cliff aim.
 function tryWaypointRemove(sx, sy) {
   if (!S.waypoints || !S.waypoints.length) return false;
   const wpt = screenToWorld(sx, sy);
@@ -5129,7 +5171,8 @@ function tryWaypointRemove(sx, sy) {
   if (!S.waypoints.length) {
     for (const t of S.turrets) {
       if (!t.dead && t.color === BLUE && t.type === 'cannon') {
-        t.base = Math.atan2(cfg.rows / 2 - t.y, cfg.cols / 2 - t.x);
+        t.base = (t.isStarter && SURVIVAL) ? inlandAngle(t.x, t.y)
+          : Math.atan2(cfg.rows / 2 - t.y, cfg.cols / 2 - t.x);
       }
     }
   }
