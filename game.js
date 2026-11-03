@@ -256,6 +256,22 @@ const xpfill = document.getElementById('xpfill');
 const xplabel = document.getElementById('xplabel');
 const statsEl = document.getElementById('d-stats');
 const overlay = document.getElementById('levelup');
+const lvviewmap = document.getElementById('lvviewmap');
+// v149 View map / View upgrades: toggle between the cards and the
+// map underneath, without leaving the level-up screen. The overlay
+// itself stays visible (so stepLvParticles keeps raining), only the
+// .cards hide, and in map view the overlay is transparent and
+// click-through so the map can be panned/zoomed. Taps on the map
+// while viewing it do nothing (see endPointer), so assessing can't
+// accidentally collect a coin or delete a waypoint. Every new deal
+// resets to cards view (see offerCards).
+if (lvviewmap) lvviewmap.addEventListener('click', () => {
+  // Don't rely on toggle()'s return value (the harness stub's
+  // toggle returns undefined); read the class back instead.
+  overlay.classList.toggle('mapview');
+  const viewingMap = overlay.classList.contains('mapview');
+  lvviewmap.textContent = viewingMap ? 'View upgrades' : 'View map';
+});
 const lvfx = document.getElementById('lvfx');
 const lvctx = lvfx ? lvfx.getContext('2d') : null;
 // Minimap: black + one pixel per red/blue bloom cell, top-right.
@@ -2010,6 +2026,8 @@ function newGame() {
   resetCamera(START_ZOOM_MULT, (pc.x + 0.5) * CELL_PX, (pc.y + 0.5) * CELL_PX);
 
   overlay.classList.add('hidden');
+  overlay.classList.remove('mapview');
+  if (lvviewmap) lvviewmap.textContent = 'View map';
   runover.classList.add('hidden');
   placebanner.classList.add('hidden');
   placeswap.classList.add('hidden');
@@ -3302,6 +3320,10 @@ function penCost() {
   return 10 + lv * UNIT_COST_STEP;
 }
 function offerCards() {
+  // v149: a new deal always starts in cards view, not map view — a
+  // previous View map toggle must not carry over to the next level.
+  overlay.classList.remove('mapview');
+  if (lvviewmap) lvviewmap.textContent = 'View map';
   // XP row: 3 free cards, weighted draw without replacement. Gold Ore
   // counts three-quarters (weight 0.75 vs 1 for everything else) — it's
   // uncapped, so without a discount it would crowd out real upgrades
@@ -5300,7 +5322,11 @@ function endPointer(e) {
   pointers.delete(e.pointerId);
   if (pointers.size === 0) {
     if (downPos && !panning) {
-      if (S.placing) placeTurretAt(downPos.x, downPos.y); // placement eats the tap
+      // v149: in View map mode, taps assess only — no coin collect,
+      // no waypoint removal, no debug chip. Pan/pinch already ran
+      // in pointermove, so this guard only blocks the tap actions.
+      if (overlay.classList.contains('mapview')) { /* assess only */ }
+      else if (S.placing) placeTurretAt(downPos.x, downPos.y); // placement eats the tap
       else if (S.teleporting) handleTeleportTap(downPos.x, downPos.y); // teleport eats the tap
       else if (tryChipDoubleTap(downPos.x, downPos.y)) { /* debug level grant */ }
       else if (!tapCoin(downPos.x, downPos.y)) tryWaypointRemove(downPos.x, downPos.y); // coin first (a coin on a waypoint collects, it does not remove it), then free waypoint removal

@@ -238,6 +238,20 @@
     pointer-events: none;
   }
   #levelup .cards { position: relative; z-index: 1; margin: auto; /* centers when it fits, scrolls from the top when it doesn't */ }
+  /* View map / View upgrades toggle, at the top of the level-up screen.
+     In map view the cards hide, the overlay goes transparent and
+     click-through (so you can pan/zoom the map underneath), and only
+     this button stays clickable — the blue particle rain keeps going
+     because the overlay itself is never hidden, just the cards. */
+  #lvviewmap {
+    position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+    z-index: 2; padding: 8px 16px; font-size: 14px; border-radius: 10px;
+    border: 1px solid #3a4666; background: rgba(10, 13, 22, 0.9);
+    color: var(--text); cursor: pointer; white-space: nowrap;
+  }
+  #levelup.mapview { background: transparent; pointer-events: none; }
+  #levelup.mapview .cards { display: none; }
+  #levelup.mapview #lvviewmap { pointer-events: auto; }
   /* Pre-game start screen */
   #startscreen {
     position: fixed; inset: 0;
@@ -565,6 +579,7 @@
 </div>
 <div id="levelup" class="hidden">
   <canvas id="lvfx"></canvas>
+  <button id="lvviewmap">View map</button>
   <div class="cards">
     <h2>Level up! Choose an upgrade</h2>
     <div class="cardrow" id="xprow">
@@ -603,6 +618,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=148"></script>
+<script src="game.js?v=149"></script>
 </body>
 </html>
