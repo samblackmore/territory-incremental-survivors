@@ -2210,14 +2210,15 @@ function checkRunOver() {
 // flood is a controller object on S plus these functions.
 const SURVIVAL = true; // survival branch: player renders red, flood is blue, enemy base off
 const FLOOD_GRACE_DUR = 300;  // 5 min grace before the first storm: prepare your base (XP-bar threat countdown gives the ETA; commander dialog disabled v126)
-const FLOOD_SWEEP_START = 600; // 10 min run time: the sweeping cannon joins the waves (v137, see floodTick)
-// Phases (v137, Sam; v140 waves reworked; v146 first storm at 5:00):
+const FLOOD_SWEEP_START = 1200; // 20 min run time: the sweeping cannon joins the waves (v137, v150: was 10 min, see floodTick)
+// Phases (v137, Sam; v140 waves reworked; v146 first storm at 5:00;
+// v150 sweep pushed to 20 min):
 // 0–5 min grace, no storms; first storm starts at 5:00, no first
-// lull; 5–10 min waves only (whole-border straight-line waves,
-// inward); 10+ min waves + sweep (the sweeping cannon, from one
+// lull; 5–20 min waves only (whole-border straight-line waves,
+// inward); 20+ min waves + sweep (the sweeping cannon, from one
 // cycling side, as before). Run time is S.time, so a storm that
-// starts before 10:00 gains its sweep mid-storm the moment the clock
-// crosses 10:00. Between storms: 60s lull, pulse then toast.
+// starts before 20:00 gains its sweep mid-storm the moment the clock
+// crosses 20:00. Between storms: 60s lull, pulse then toast.
 const FLOOD_TOAST_AT = 30;    // seconds before a storm when the old toast countdown returns (earlier in the lull: minimap pulse only)
 const FLOOD_STORM_DUR = 20;   // seconds a storm barrages, then it passes
 // v146: no first lull — the first storm starts at 5:00, the moment
@@ -2537,8 +2538,8 @@ function floodTick(dt) {
     // carries the warning quietly (see drawMinimap).
     // v137 toast: waves come from all sides, so before the sweep joins
     // the toast names no side; once the sweep will be active at storm
-    // start (run time + remaining lull >= 10:00), it names the sweep's
-    // cycling side as well as the waves.
+    // start (run time + remaining lull >= 20:00, v150), it names the
+    // sweep's cycling side as well as the waves.
     if (f.timer <= FLOOD_TOAST_AT) {
       const sweepAtStorm = (S.time + f.timer >= FLOOD_SWEEP_START);
       wavebanner.textContent = sweepAtStorm
@@ -2551,11 +2552,12 @@ function floodTick(dt) {
     return;
   }
   // Storm (v137 split, v140 waves): constant barrage — border waves
-  // from all sides, plus, from 10:00 run time, the sweeping cannon from
-  // its single cycling side. No banner and no pulse while it runs:
-  // the flood is visible on the minimap as blue territory creeping in.
-  // Sweep is gated on run time, not storm start, so a storm that
-  // starts before 10:00 gains its sweep mid-storm at 10:00 exactly;
+  // from all sides, plus, from 20:00 run time (v150, was 10:00), the
+  // sweeping cannon from its single cycling side. No banner and no
+  // pulse while it runs: the flood is visible on the minimap as blue
+  // territory creeping in. Sweep is gated on run time, not storm
+  // start, so a storm that starts before 20:00 gains its sweep
+  // mid-storm at 20:00 exactly;
   // while gated off, the sweep angle and timer are left alone, so the
   // first sweep shot fires as soon as the gate opens.
   if (S.time >= FLOOD_SWEEP_START) {
