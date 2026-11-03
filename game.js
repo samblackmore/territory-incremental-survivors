@@ -58,8 +58,12 @@ const OUTPOST_FLASH_DUR = 1.5;       // range ring flash duration on pull (s, sa
 // 20 -> 16 -> 12 -> 8s at max, i.e. maxed throughput 4 per 8s (0.5/s)
 // vs the old 4 per 4s (1/s), and base throughput 1 per 20s (0.05/s)
 // vs the old 1 per 4s (0.25/s).
-const FIELD_PULL_EVERY = 20;         // seconds between Field pulls at level 0 (was 4, v138: 5x slower)
-const FIELD_PULL_INTERVAL_STEP = 4;  // seconds shaved per interval pick (20 -> 16 -> 12 -> 8)
+// v148 (Sam: v138 nerfed too hard): frequency doubled at every level
+// — base and step both halved, so interval 10 -> 8 -> 6 -> 4s:
+// base throughput 1 per 10s (0.1/s), maxed 4 per 4s (1/s, back to
+// the pre-nerf max, but base is still 2.5x slower than pre-nerf).
+const FIELD_PULL_EVERY = 10;         // seconds between Field pulls at level 0 (v138: 20, v148: halved)
+const FIELD_PULL_INTERVAL_STEP = 2;  // seconds shaved per interval pick (10 -> 8 -> 6 -> 4)
 const FIELD_PULL_RADIUS_BASE = 3;    // pull radius at Field level 0, in cells (Euclidean, own cell included)
 const FIELD_PULL_COUNT_BASE = 1;     // pickups per pull at Field level 0
 // Cannon split stat tracks (v114): each weapon stat levels independently
@@ -101,7 +105,8 @@ const STAT_DEFS = {
     // v138: interval joins as a fourth rotating stat, cap 12:
     // Lv1 growth, Lv2 radius, Lv3 count, Lv4 interval, repeat.
     // Max unchanged for growth/radius/count (1.73x, 6, 4), plus
-    // interval 20 -> 16 -> 12 -> 8s. Red Field level (below) moves
+    // interval 20 -> 16 -> 12 -> 8s (v148: 10 -> 8 -> 6 -> 4s).
+    // Red Field level (below) moves
     // 7 -> 9 so its growth head start stays 1.73x (growth picks at
     // levels 1, 5, 9 under the 4-stat rotation).
     { key: 'field', name: 'Field', cap: 12, effect: 'Growth, pull radius, pull count and pull interval, in rotation' },
@@ -1074,7 +1079,7 @@ function bloomFieldNextEffect(n) {
   if (n % 4 === 0) return '+20% growth speed';
   if (n % 4 === 1) return '+1 pull radius';
   if (n % 4 === 2) return '+1 pull count';
-  return '-4s pull interval';
+  return '-2s pull interval';
 }
 // Harvester pathing: BFS (not A* — we just need the nearest reachable
 // pickup, and BFS guarantees it avoids walls). From the Harvester's cell,
@@ -4117,6 +4122,7 @@ function update(dt) {
       // the Outpost vacuum, grant on arrival. Red Fields grow only.
       // v138: interval is bloomPullInterval(w) — 20s at level 0,
       // -4s per interval pick, down to 8s at level 12.
+      // v148: halved — 10s at level 0, -2s per pick, down to 4s.
       if (t.color === BLUE) {
         if (t.showRange > 0) t.showRange -= dt;
         t.pullT = (t.pullT || 0) + dt;
