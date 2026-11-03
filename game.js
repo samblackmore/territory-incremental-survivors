@@ -5460,11 +5460,12 @@ document.getElementById('startbtn').addEventListener('click', () => {
   if (SURVIVAL) showCommander();
 });
 
-// Random map size (v127, v128 range: Sam: 100–200 was really big,
-// then 50–100, then max 150 after a 140 map felt about the large
-// limit — so now 50–150): on page load, width and height each roll
-// 50–150 cells, so every refresh is a new world, bigger than the
-// old fixed 75x50 but not as huge as v127's 100–200.
+// Random map size (v127, v128 range, v143 minimum: Sam: 100–200 was
+// really big, then 50–100, then max 150 after a 140 map felt about
+// the large limit — so now 50–150, then minimum raised to 75): on
+// page load, width and height each roll 75–150 cells, so every
+// refresh is a new world, bigger than the old fixed 75x50 but not as
+// huge as v127's 100–200.
 // Explicit URL sizes (share links, ?cols=&rows=) are respected —
 // randomize only the dimensions the URL didn't set. Start Run and
 // Dive Again keep the session's size (readDebug reads the panel),
@@ -5478,8 +5479,8 @@ function randomizeMapSize() {
       qCols = q.has('cols'); qRows = q.has('rows');
     }
   } catch (e) { /* no URL API (harness): randomize both */ }
-  if (!qCols) inCols.value = 50 + Math.floor(Math.random() * 101);
-  if (!qRows) inRows.value = 50 + Math.floor(Math.random() * 101);
+  if (!qCols) inCols.value = 75 + Math.floor(Math.random() * 76);
+  if (!qRows) inRows.value = 75 + Math.floor(Math.random() * 76);
 }
 
 applyUrlParams();
