@@ -2591,80 +2591,80 @@ function meteorTick(dt) {
     m.idx = 0; m.stagger = 0;
   }
 }
-// One meteor impact: process the circular cluster around (tx, ty).
-// See the METEOR_* constants for the per-cell rules (EMPTY -> grey,
-// terrain -> 10 damage, territory -> EMPTY, turret -> 3 damage,
-// civilian/idle-coin cells skipped). Fog is recomputed once, after
-// all cells, not per cell.
+// One meteor impact (v142, Sam: one add/subtract effect per meteor,
+// not per-cell): first count the circular cluster around (tx, ty)
+// (radius 2, 13 cells, in-bounds only) by cell state — EMPTY vs
+// WHITE/GREY/BLUE/RED, regardless of turret/civilian/coin on top.
+// Mostly empty (empty > non-empty, tie goes to carve) -> ADD: the
+// whole area becomes landed rock (GREY, 80 HP, shade 5, clearable
+// later for normal grey rewards). Mostly not empty -> CARVE: every
+// non-empty cell is removed to EMPTY, and no rock is placed anywhere
+// in the cluster. Protections from before are kept in both modes,
+// as gaps in the effect: civilian cells are skipped whole (civilians
+// never die, never get buried), living turrets take 3 damage and
+// their ground is left unchanged (a turret pad is never buried),
+// and EMPTY cells holding an idle coin are skipped in ADD mode
+// (a coin buried in rock would be uncollectible). In CARVE mode an
+// idle-coin cell is EMPTY anyway, so it stays EMPTY with its coin.
+// No drops in either mode — the meteor does not pay, like flood
+// destruction, so a nugget on a converted/carved cell is lost with
+// no free coin. Fog is recomputed once, after all cells, not per cell.
 function meteorImpact(tx, ty) {
-  let changed = false;
+  const cluster = [];
   for (let dy = -2; dy <= 2; dy++) {
     for (let dx = -2; dx <= 2; dx++) {
       if (dx * dx + dy * dy > METEOR_CLUSTER_R2) continue;
       const x = tx + dx, y = ty + dy;
       if (x < 0 || y < 0 || x >= cfg.cols || y >= cfg.rows) continue;
-      const idx = y * cfg.cols + x;
-      // Civilians never die and never get buried: skip their cell whole.
-      if (S.rescue && (S.rescue.civilians || []).some(c => c.x === x && c.y === y)) continue;
-      // Living turret on the cell: damage the unit, leave its ground alone
-      // (burying a turret pad in rock would break fog flood-fill from it).
-      const tur = S.turrets.find(t => !t.dead && t.x === x && t.y === y);
-      if (tur) {
-        damageTurret(tur, METEOR_UNIT_DMG, RED);
-        spawnBurst(x + 0.5, y + 0.5, '#ffd75e'); // meteor flash on the unit
+      cluster.push({ x, y, idx: y * cfg.cols + x });
+    }
+  }
+  let emptyCount = 0;
+  for (const c of cluster) if (S.cells[c.idx] === EMPTY) emptyCount++;
+  const add = emptyCount > cluster.length - emptyCount; // mostly empty; tie -> carve
+  let changed = false;
+  for (const c of cluster) {
+    const { x, y, idx } = c;
+    // Civilians never die and never get buried: skip their cell whole.
+    if (S.rescue && (S.rescue.civilians || []).some(cv => cv.x === x && cv.y === y)) continue;
+    // Living turret on the cell: damage the unit, leave its ground alone
+    // (burying a turret pad in rock would break fog flood-fill from it).
+    const tur = S.turrets.find(t => !t.dead && t.x === x && t.y === y);
+    if (tur) {
+      damageTurret(tur, METEOR_UNIT_DMG, RED);
+      spawnBurst(x + 0.5, y + 0.5, '#ffd75e'); // meteor flash on the unit
+      continue;
+    }
+    const cell = S.cells[idx];
+    if (add) {
+      // ADD: whole area to rock, except the idle-coin gap above.
+      if (cell === EMPTY && (S.coins || []).some(co => co.state === 'idle' && Math.floor(co.x) === x && Math.floor(co.y) === y)) continue;
+      if (cell === GREY && S.hp[idx] === METEOR_ROCK_HP && S.shade[idx] === METEOR_ROCK_SHADE && S.growN[idx] === 0) {
+        // Already exactly the landed rock: no change, no burst spam.
+        // (Still clear a nugget? No — a landed rock has no nugget by
+        // construction, and this branch only fires when it already is one.)
         continue;
       }
-      const cell = S.cells[idx];
-      if (cell === EMPTY) {
-        // Idle coin on this cell would be buried and uncollectible
-        // (Harvester can't stand on rock): leave the cell empty, the
-        // cluster just has a gap where the coin sits.
-        if ((S.coins || []).some(c => c.state === 'idle' && Math.floor(c.x) === x && Math.floor(c.y) === y)) continue;
-        S.cells[idx] = GREY;
-        S.hp[idx] = METEOR_ROCK_HP; S.maxhp[idx] = METEOR_ROCK_HP;
-        S.shade[idx] = METEOR_ROCK_SHADE;
-        S.hitBy[idx] = 0; S.goldNug[idx] = 0;
-        S.growN[idx] = 0; S.growBy[idx] = 0;
-        if (S.noHarvest) S.noHarvest[idx] = 0;
-        spawnBurst(x + 0.5, y + 0.5, CELL_COLORS[GREY]); // grey dust per new rock
-        changed = true;
-        continue;
-      }
-      if (cell === WHITE || cell === GREY) {
-        // Terrain damage, by hand (not damageBlock): no drops, no nugget
-        // release — the meteor does not pay, like flood destruction.
-        // Pop + chip + damage number read like any rock hit; a kill
-        // also bursts, clears to EMPTY, and loses any nugget on the cell.
-        S.hp[idx] = Math.max(0, S.hp[idx] - METEOR_TERRAIN_DMG);
-        S.hitBy[idx] = RED; // threat tint, like flood damage (cellRGB is RED-or-player)
-        S.popT[idx] = 0; S.popAmp[idx] = 1; S.popCol[idx] = RED;
-        S.popDX[idx] = 0; S.popDY[idx] = 0;
-        spawnChip(x + 0.5, y + 0.5, CELL_COLORS[GREY], 0, -1);
-        spawnDmgNum(x + 0.5, y + 0.2, METEOR_TERRAIN_DMG, false);
-        if (S.hp[idx] <= 0) {
-          const wasCell = cell;
-          S.cells[idx] = EMPTY;
-          S.hp[idx] = 0; S.maxhp[idx] = 0;
-          S.goldNug[idx] = 0; // nugget lost with the rock, no free coin
-          S.growN[idx] = 0; S.growBy[idx] = 0;
-          if (S.noHarvest) S.noHarvest[idx] = 0;
-          S.destroyed++;
-          spawnBurst(x + 0.5, y + 0.5, CELL_COLORS[wasCell]);
-        }
-        changed = true;
-        continue;
-      }
-      if (cell === BLUE || cell === RED) {
-        // Territory bombed to a hole. No drops (territory pays only on
-        // harvest, not on destruction), growth cleared, fog recomputed below.
-        S.cells[idx] = EMPTY;
-        S.hp[idx] = 0; S.maxhp[idx] = 0;
-        S.growN[idx] = 0; S.growBy[idx] = 0;
-        if (S.noHarvest) S.noHarvest[idx] = 0;
-        spawnBurst(x + 0.5, y + 0.5, CELL_COLORS[cell]);
-        changed = true;
-        continue;
-      }
+      S.cells[idx] = GREY;
+      S.hp[idx] = METEOR_ROCK_HP; S.maxhp[idx] = METEOR_ROCK_HP;
+      S.shade[idx] = METEOR_ROCK_SHADE;
+      S.hitBy[idx] = 0; S.goldNug[idx] = 0;
+      S.growN[idx] = 0; S.growBy[idx] = 0;
+      if (S.noHarvest) S.noHarvest[idx] = 0;
+      spawnBurst(x + 0.5, y + 0.5, CELL_COLORS[GREY]); // grey dust per new rock
+      changed = true;
+    } else {
+      // CARVE: non-empty cells to EMPTY, no rock placed anywhere.
+      if (cell === EMPTY) continue;
+      const wasCell = cell;
+      S.cells[idx] = EMPTY;
+      S.hp[idx] = 0; S.maxhp[idx] = 0;
+      S.goldNug[idx] = 0; // nugget lost with the rock, no free coin
+      S.growN[idx] = 0; S.growBy[idx] = 0;
+      if (S.noHarvest) S.noHarvest[idx] = 0;
+      if (wasCell === WHITE || wasCell === GREY) S.destroyed++;
+      spawnBurst(x + 0.5, y + 0.5, CELL_COLORS[wasCell]);
+      changed = true;
     }
   }
   if (changed) computeFog();
