@@ -2185,14 +2185,18 @@ function checkRunOver() {
 const SURVIVAL = true; // survival branch: player renders red, flood is blue, enemy base off
 const FLOOD_GRACE_DUR = 300;  // 5 min grace before the first storm: prepare your base (XP-bar threat countdown gives the ETA; commander dialog disabled v126)
 const FLOOD_SWEEP_START = 600; // 10 min run time: the sweeping cannon joins the waves (v137, see floodTick)
-// Phases (v137, Sam; v140 waves reworked): 0–5 min grace, no storms;
-// 5–10 min waves only (whole-border straight-line waves, inward);
-// 10+ min waves + sweep (the sweeping cannon, from one cycling side,
-// as before). Run time is S.time, so a storm that starts before
-// 10:00 gains its sweep mid-storm the moment the clock crosses 10:00.
+// Phases (v137, Sam; v140 waves reworked; v146 first storm at 5:00):
+// 0–5 min grace, no storms; first storm starts at 5:00, no first
+// lull; 5–10 min waves only (whole-border straight-line waves,
+// inward); 10+ min waves + sweep (the sweeping cannon, from one
+// cycling side, as before). Run time is S.time, so a storm that
+// starts before 10:00 gains its sweep mid-storm the moment the clock
+// crosses 10:00. Between storms: 60s lull, pulse then toast.
 const FLOOD_TOAST_AT = 30;    // seconds before a storm when the old toast countdown returns (earlier in the lull: minimap pulse only)
-const FLOOD_FIRST_STORM = 30; // seconds of lull after grace before the first storm (toast shows the whole time: 30 <= 30)
 const FLOOD_STORM_DUR = 20;   // seconds a storm barrages, then it passes
+// v146: no first lull — the first storm starts at 5:00, the moment
+// grace ends, with no extra 30s toast after it. Later storms still
+// get their 60s lull (pulse, then toast in the final 30s).
 const FLOOD_LULL = 60;        // seconds between storms (was 20: lengthened so pulse (60→30) + toast (30→0) both get a window)
 const FLOOD_DMG = 1;          // per flood projectile — constant barrage, so toned down (was 2)
 const FLOOD_SPEED = 8;        // cells/s — slower than player shots (12.5), a lumbering front
@@ -2482,10 +2486,14 @@ function floodTick(dt) {
     // (no RED cells exist yet, so floodSpread finds nothing).
     wavebanner.classList.add('hidden'); // no stale toast
     if (f.timer <= 0) {
-      // Grace over: first lull, direction already picked at init,
-      // so the toast (30s) warns the whole way to the first storm.
-      f.phase = 'lull';
-      f.timer = FLOOD_FIRST_STORM;
+      // v146: grace over = first storm, immediately. No first lull,
+      // no extra toast — the grace threat countdown was the warning.
+      // Direction was already picked at init, so waves fire at once.
+      f.phase = 'storm';
+      f.timer = FLOOD_STORM_DUR;
+      f.sweep = 0; f.waveT = 0; f.sweepT = 0; // fire immediately
+      f.storms++;
+      wavebanner.classList.add('hidden'); // storm: no toast (flood visible)
     }
     return;
   }
