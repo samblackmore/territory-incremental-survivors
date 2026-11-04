@@ -727,6 +727,14 @@ const GREY_SHADES = [
 ];
 const GREY_FILL = 0.40;        // CA seed fill for grey chunks (caves use 0.38; below ~0.33 the CA collapses to nothing)
 const GREY_MIN_DIST = 12;      // cells from the starter: no grey near the opening
+// v152 spawn tuning (Sam: unlucky hard rock next to spawn, and corner
+// spawns wasting half the arc): brown rock within SPAWN_EASY_RADIUS
+// of the starter is capped at SPAWN_EASY_MAX_HP, and beach cells
+// within SPAWN_CORNER_MARGIN of a perpendicular edge (i.e. in a
+// corner) are never picked as the starter. Both are tuning knobs.
+const SPAWN_EASY_RADIUS = 12;  // cells from the starter: easy rock zone (matches GREY_MIN_DIST)
+const SPAWN_EASY_MAX_HP = 4;   // brown rock HP cap in that zone (was up to 10)
+const SPAWN_CORNER_MARGIN = 15; // cells from a perpendicular edge: corner exclusion (see spawn filter)
 const GREY_HP_MIN = 30, GREY_HP_MAX = 100;
 const GREY_GOLD_CHANCE = 0.8;  // grey drops: mostly gold (XP is easy mid-game)
 const BROWN_GOLD_CHANCE = 0.1; // regular brown rock: 10% gold on break (BLUE only, non-nugget, non-grey) — but only if the XP roll above failed (v130, Sam: no double drops), so effective gold is 0.7 × 0.1 = 7%, XP 30%, nothing 63%, and a brown break never drops 2 coins
@@ -1902,9 +1910,23 @@ function newGame() {
   if (SURVIVAL) {
     const beachCells = [];
     for (let i = 0; i < n; i++) if (S.beach[i]) beachCells.push(i);
-    if (beachCells.length) {
+    // v152 corner restriction: a beach cell is in a corner when its
+    // second-nearest map edge is within SPAWN_CORNER_MARGIN — e.g.
+    // an east-beach cell only a few cells from the north edge. Its
+    // inland direction is diagonal, so half the ±60° arc shoots
+    // off-map instead of at terrain. Exclude those cells, so the
+    // starter always sits mid-edge with its arc facing inland.
+    // Fallback: if filtering empties the list (tiny custom maps),
+    // use the full beach list — a corner spawn beats no spawn.
+    const midEdgeCells = beachCells.filter(i => {
+      const x = i % cfg.cols, y = Math.floor(i / cfg.cols);
+      const ds = [y, cfg.rows - 1 - y, x, cfg.cols - 1 - x].sort((a, b) => a - b);
+      return ds[1] >= SPAWN_CORNER_MARGIN;
+    });
+    const spawnCells = midEdgeCells.length ? midEdgeCells : beachCells;
+    if (spawnCells.length) {
       const starterRng = mulberry32(seed + 88888);
-      const bi = beachCells[Math.floor(starterRng() * beachCells.length)];
+      const bi = spawnCells[Math.floor(starterRng() * spawnCells.length)];
       pc = { x: bi % cfg.cols, y: Math.floor(bi / cfg.cols) };
     } else {
       const pA = { x: cfg.cols * 0.15, y: cfg.rows * 0.85 };
@@ -1980,6 +2002,26 @@ function newGame() {
         maxhp[i] = hp[i] = GREY_HP_MIN + Math.round(v * (GREY_HP_MAX - GREY_HP_MIN));
         shade[i] = Math.round(v * 7);
       }
+    }
+  }
+  // v152 easy rock at spawn: yes, you can seed a spot — not by
+  // re-seeding the global Perlin field (that would move the whole
+  // map), but by post-processing the spawn area after generation.
+  // Brown rock within SPAWN_EASY_RADIUS of the starter is capped
+  // at SPAWN_EASY_MAX_HP (both hp and maxhp, so the cell reads as
+  // full-health light rock, not damaged dark rock). Perlin variation
+  // survives as 3 vs 4 HP, and beyond the radius the full 3–10
+  // depth is untouched — so an unlucky spawn can no longer start
+  // you next to a 10-HP wall, but the rest of the map still varies.
+  // Grey is untouched here (it was already excluded within 12
+  // cells, and this loop only touches WHITE).
+  for (let y = 0; y < cfg.rows; y++) {
+    for (let x = 0; x < cfg.cols; x++) {
+      const i = y * cfg.cols + x;
+      if (cells[i] !== WHITE) continue;
+      const dx = x - pc.x, dy = y - pc.y;
+      if (dx * dx + dy * dy >= SPAWN_EASY_RADIUS * SPAWN_EASY_RADIUS) continue;
+      if (hp[i] > SPAWN_EASY_MAX_HP) { hp[i] = SPAWN_EASY_MAX_HP; maxhp[i] = SPAWN_EASY_MAX_HP; }
     }
   }
   // Gold nuggets: 1% of rock cells seed a cluster of 1-5 contiguous cells.
