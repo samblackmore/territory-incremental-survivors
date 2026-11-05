@@ -539,6 +539,17 @@ function resetCamera(zoomMult = 1, cx = null, cy = null) {
   clampCamera();
 }
 const START_ZOOM_MULT = 3; // v119: start zoom = 3x the full-map zoom (tunable; max is 8x)
+// v154 place bar + unlock cards (Sam, 2026-11-05): shop removed from the
+// level-up screen; placements live in an always-visible bottom bar,
+// gold-gated, tap icon then tap map. Units start unlocked or are
+// unlocked by an XP-row card (VS-style), then bought with gold.
+// Start unlocked, per Sam: Cannon (starter weapon), Outpost and Wall
+// from the very beginning; Field, Digger, Harvester, Laser, Waypoint
+// are unlock cards (Harvester is the nice-to-have). Start-screen
+// toggles still filter the run: a toggled-off type never unlocks.
+const START_UNLOCKED = ['cannon', 'lantern', 'wall'];
+const UNLOCKABLE = ['bloom', 'mole', 'gather', 'laser', 'waypoint'];
+const PLACEBAR_TYPES = ['cannon', 'lantern', 'wall', 'bloom', 'mole', 'gather', 'laser', 'waypoint'];
 // v153 auto-cam try-it (Sam, 2026-11-04): a toggleable, slow, north-only
 // follow camera. It never moves south, never changes zoom, never kills
 // anything — it just drifts north, at 1 cell/s, when even your
@@ -1798,6 +1809,10 @@ function newGame() {
   const goldNug = new Uint8Array(n); // 1 = gold nugget locked in this rock cell
   S = { cells, hp, maxhp, hitBy, popT, popAmp, popCol, popDX, popDY, projs: [], xp: 0, level: 1, pending: 0,
         freqMult: 1, paused: false, frame: 0, seed, shade, goldNug, autoCam: prevAutoCam,
+        // v154: which placement types are in the bottom bar. Start
+        // unlocked are Cannon/Outpost/Wall (if enabled on the start
+        // screen); the rest join when an XP unlock card is picked.
+        unlocked: Object.fromEntries(PLACEBAR_TYPES.map(t => [t, START_UNLOCKED.includes(t) && !(meta && meta.enabled && meta.enabled[t] === false)])),
         coins: [], floaters: [], gold: 0, chipPulse: 0, time: 0, lastBanked: banked,
         // XP bar animation: xpShown eases toward xp; level-up cards wait
         // for the bar to finish filling.
@@ -3372,6 +3387,18 @@ function availableCards() {
     if (c.kind === 'teleport') return hasTeleportTarget();
     return (!c.needs || hasTurretTypes(c.needs));
   });
+  if (SURVIVAL) {
+    // v154 unlock cards: a placement type joins the bottom bar when
+    // its card is picked (VS-style), then it's bought with gold there.
+    // Start-unlocked types never appear here; start-screen toggles
+    // filter the pool, so a toggled-off type can never be unlocked.
+    for (const t of UNLOCKABLE) {
+      if (S.unlocked && S.unlocked[t]) continue;
+      if (meta && meta.enabled && meta.enabled[t] === false) continue;
+      const entry = CARD_POOL.find(c => c.kind === 'turret' && c.type === t);
+      if (entry) pool.push({ kind: 'unlock', type: t, title: entry.title, icon: entry.icon, sub: entry.sub });
+    }
+  }
   if (cannonRateMaxed()) {
     pool.push({ kind: 'evo', title: 'Sprayer', icon: ICONS.evoSpray, sub: 'Blazing-fast sweep spray' });
   }
@@ -3510,6 +3537,13 @@ function offerCards() {
       if (p.weapon === 'cannon' && p.stat === 'dmg') evoLine = `<span class="evoline">${ICONS.evoPaint} EVO</span>`;
       if (p.weapon === 'cannon' && p.stat === 'rate') evoLine = `<span class="evoline">${ICONS.evoSpray} EVO</span>`;
     }
+    else if (p.kind === 'unlock') {
+      // v154: unlocks a placement type for the bottom bar, and the
+      // pick itself places one for free (VS-style: you get the weapon).
+      title = p.title;
+      sub = p.sub || 'Unlocks in the bottom bar — place one now, free.';
+      newTag = '<span class="newtag">New!</span>';
+    }
     else if (p.kind === 'evo') {
       title = `Sprayer <span class="lv">EVO</span>`;
       sub = p.sub;
@@ -3565,6 +3599,9 @@ function offerCards() {
 // draw) in a 3x3 grid; main keeps the original 2-card affordable-first
 // random draw (unchanged).
 function offerShopCards() {
+  // v154: legacy — the level-up screen no longer calls this (shop
+  // removed, placements live in the place bar). Kept so the harness
+  // and the shop pool (availableShopCards) stay testable.
   const pool = availableShopCards();
   const els = document.querySelectorAll('#levelup .shopcard');
   document.getElementById('shoplabel').innerHTML =
@@ -3673,6 +3710,22 @@ document.querySelectorAll('#levelup .card').forEach(card => {
       // v147 swap: remember what this pick cost, so the Swap button
       // can refund exactly that amount (and undo a mole dig pick).
       if (S.placing) { S.placing.cost = cost; S.placing.moleBundle = digApplied; }
+      return;
+    }
+    if (kind === 'unlock') {
+      // v154: unlocks the type for the bottom bar and places one for
+      // free, VS-style. Mole bundle: if a Digger weapon already exists,
+      // the free placement also carries the +1 dig upgrade, like the
+      // old shop bundle did.
+      const type = card.dataset.type;
+      if (S.unlocked) S.unlocked[type] = true;
+      S.pending--;
+      overlay.classList.add('hidden');
+      updateHud(); updatePlaceBar();
+      enterPlacement(type);
+      // v154: free placement; Mole dig is applied at placement time
+      // (payForPlacement), not here, so it can't double-count.
+      if (S.placing) { S.placing.cost = 0; S.placing.moleBundle = type === 'mole'; S.placing.free = true; }
       return;
     }
     if (kind === 'teleport') {
@@ -3802,8 +3855,43 @@ placeswap.addEventListener('click', () => {
   overlay.classList.remove('hidden'); // game stays paused while choosing
   updateHud();
 });
+// v154: gold is paid on successful placement from the bar (not at
+// icon tap, so a failed tap or a cancel never needs a refund).
+// Shop-legacy placements already paid at card pick, and unlock
+// placements are free, so only fromBar pays here. Mole bundle:
+// a bar/unlock Digger placement also applies the +1 dig upgrade
+// at placement time (after its weapon entry is created).
+function payForPlacement(type, placing) {
+  if (!placing) return;
+  if (placing.fromBar) {
+    const cost = unitCost(type);
+    if (S.gold >= cost) S.gold -= cost;
+  }
+  if (type === 'mole' && placing.moleBundle && (placing.fromBar || placing.free)) {
+    const w = S.weapons.mole;
+    if (w && w.stats && (w.stats.dig || 0) < 8) {
+      w.stats.dig++;
+      w.dmgBonus = w.stats.dig;
+    }
+  }
+  updatePlaceBar();
+}
+// Cancel a bar placement: tap its icon again. Unlock placements can
+// also be cancelled this way (the unlock itself stays — you keep the
+// button, you just don't place this free one right now).
+function cancelPlacement() {
+  if (!S || !S.placing) return;
+  S.placing = null;
+  placebanner.classList.add('hidden');
+  placeswap.classList.add('hidden');
+  updatePlaceBar();
+  if (S.pending > 0) { offerCards(); overlay.classList.remove('hidden'); }
+}
 function enterPlacement(type) {  S.placing = { type };
-  placeswap.classList.remove('hidden');
+  // v154: Swap is gone with the shop — a bar placement is cancelled
+  // by tapping its icon again (see place bar handler), an unlock
+  // placement is a free pick with no level-up to return to.
+  placeswap.classList.add('hidden');
   if (type === 'waypoint') {
     // Waypoints bypass the base discs: any clear cell, any ground
     // (rock, territory, cave — you aim at walls, not just open ground).
@@ -3866,12 +3954,22 @@ function placeTurretAt(sx, sy) {
     // No turret, no weapon entry — walls are terrain. (So the shop card
     // keeps showing New! + the description every time, which is fine:
     // each wall IS new.)
+    const wallPlacing = S.placing;
+    payForPlacement(type, wallPlacing);
+    // v154 wall chaining: a bar wall stays in placement mode while
+    // you can afford another, so you can tap-tap-tap a defensive
+    // line before a wave. Unlock walls are free and single-shot.
+    if (wallPlacing && wallPlacing.fromBar && S.gold >= unitCost('wall') && !S.runOver && S.pending <= 0) {
+      S.placing = { type: 'wall', fromBar: true, moleBundle: false, cost: unitCost('wall') };
+      updatePlaceBar();
+      return;
+    }
     S.placing = null;
     placebanner.classList.add('hidden');
     placeswap.classList.add('hidden');
     if (!S.runOver) {
       if (S.pending > 0) {
-        offerCards(); offerShopCards();
+        offerCards(); // v154: shop removed from level-up, placements live in the place bar
         overlay.classList.remove('hidden');
       } else {
         S.paused = false;
@@ -3894,12 +3992,13 @@ function placeTurretAt(sx, sy) {
     }
     S.waypoints.push({ x: cx, y: cy });
     spawnBurst(cx + 0.5, cy + 0.5, '#ffd75e'); // gold, matching the marker
+    payForPlacement(type, S.placing);
     S.placing = null;
     placebanner.classList.add('hidden');
     placeswap.classList.add('hidden');
     if (!S.runOver) {
       if (S.pending > 0) {
-        offerCards(); offerShopCards();
+        offerCards(); // v154: shop removed from level-up, placements live in the place bar
         overlay.classList.remove('hidden');
       } else {
         S.paused = false;
@@ -3975,12 +4074,13 @@ function placeTurretAt(sx, sy) {
   }
   spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[BLUE]);
   computeFog(); // light fog (v128): the new unit reveals immediately, not on the next rock break
+  payForPlacement(type, S.placing); // v154: bar placements pay here, after the weapon entry exists (Mole dig)
   S.placing = null;
   placebanner.classList.add('hidden');
   placeswap.classList.add('hidden');
   if (!S.runOver) {
     if (S.pending > 0) {
-      offerCards(); offerShopCards(); // more picks: fresh XP + shop rows, stays paused
+      offerCards(); // v154: shop removed from level-up, placements live in the place bar // more picks: fresh XP + shop rows, stays paused
       overlay.classList.remove('hidden');
     } else {
       S.paused = false;
@@ -4069,7 +4169,7 @@ function completeTeleport(t, cx, cy) {
   placeswap.classList.add('hidden');
   if (!S.runOver) {
     if (S.pending > 0) {
-      offerCards(); offerShopCards(); // more picks: fresh XP + shop rows, stays paused
+      offerCards(); // v154: shop removed from level-up, placements live in the place bar // more picks: fresh XP + shop rows, stays paused
       overlay.classList.remove('hidden');
     } else {
       S.paused = false;
@@ -4185,7 +4285,7 @@ function update(dt) {
     // level-up); it resets to zero only when you pick a card.
     S.pending++;
     S.paused = true;
-    offerCards(); offerShopCards();
+    offerCards(); // v154: shop removed from level-up, placements live in the place bar
     overlay.classList.remove('hidden');
     updateHud();
   }
@@ -5297,6 +5397,51 @@ function render() {
 }
 
 // ---- HUD ----
+// v154 place bar: one button per placement type, icon + current gold
+// cost, hidden until unlocked, dimmed when unaffordable, gold-ringed
+// while its placement mode is active. Buttons are looked up by id
+// (pb-<type>) so the harness stub can provide them; a missing button
+// is skipped, never thrown on.
+const placeBtns = {};
+function initPlaceBar() {
+  for (const t of PLACEBAR_TYPES) {
+    try { placeBtns[t] = document.getElementById('pb-' + t); } catch (e) { placeBtns[t] = null; }
+    const btn = placeBtns[t];
+    if (!btn) continue;
+    const entry = CARD_POOL.find(c => c.kind === 'turret' && c.type === t);
+    btn.innerHTML = `<span class="picon">${entry ? entry.icon : ''}</span><span class="pcost"></span>`;
+    btn.addEventListener('click', () => onPlaceBtn(t));
+  }
+  updatePlaceBar();
+}
+function updatePlaceBar() {
+  if (!S || !S.unlocked) return;
+  for (const t of PLACEBAR_TYPES) {
+    const btn = placeBtns[t];
+    if (!btn) continue;
+    const unlocked = !!S.unlocked[t];
+    btn.classList.toggle('hidden', !unlocked);
+    if (!unlocked) continue;
+    const cost = unitCost(t);
+    btn.innerHTML = `<span class="picon">${(CARD_POOL.find(c => c.kind === 'turret' && c.type === t) || {}).icon || ''}</span><span class="pcost">${cost}<span class="coin"></span></span>`;
+    btn.classList.toggle('unaffordable', S.gold < cost);
+    btn.classList.toggle('active', !!(S.placing && S.placing.type === t));
+  }
+}
+// Tap a place-bar button: if its placement mode is already active,
+// cancel it; if another type is active, switch to this one; if you
+// can't afford it, do nothing (the dimmed button already says so).
+function onPlaceBtn(type) {
+  if (!S || !S.unlocked || !S.unlocked[type]) return;
+  if (S.placing && S.placing.type === type) { cancelPlacement(); return; }
+  if (S.gold < unitCost(type)) return;
+  if (S.teleporting) return;
+  enterPlacement(type);
+  S.placing.fromBar = true;
+  S.placing.moleBundle = type === 'mole';
+  S.placing.cost = unitCost(type);
+  updatePlaceBar();
+}
 function updateHud() {
   const lvl = S.level;
   // While cards show, the bar measures against the frozen threshold that
@@ -5344,6 +5489,7 @@ function updateHud() {
     `<div>Weapons: <b>${Object.entries(S.weapons).filter(([, w]) => w).map(([k, w]) => `${k} ${w.stats ? Object.entries(w.stats).map(([s, n]) => `${s} ${n}`).join('/') : ''} (×${w.rateMult.toFixed(2)} rate, +${w.dmgBonus} dmg${w.critChance ? `, ${Math.round(w.critChance * 100)}% crit` : ''}${w.proj ? `, +${w.proj} proj` : ''})`).join(' · ')}</b></div>` +
     `<div>Projectiles alive: <b>${S.projs.length}</b> · Missiles: <b>${S.missiles.length}</b></div>` +
     `<div>Pickups: <b>${S.coins.length}</b> on field · Gold this run: <b>${S.gold}</b> · Total: <b>${meta.gold}</b> · Red bank: <b>${S.redGold || 0}</b> (next mole <b>${redMoleCost()}</b>)</div>`;
+  updatePlaceBar(); // v154: costs/affordability follow gold, which changes outside level-ups now
 }
 
 // ---- Main loop ----
@@ -5782,6 +5928,7 @@ applyUrlParams();
 randomizeMapSize();
 loadMeta();
 applyTeamColors(); // before first run: stored preference, else branch look (survival red, main blue)
+initPlaceBar(); // v154: bottom bar buttons (needs CARD_POOL + ICONS, both built above)
 newGame();
 S.paused = true; // behind the start screen until the player picks a starter
 renderStartScreen();

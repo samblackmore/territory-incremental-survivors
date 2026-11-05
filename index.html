@@ -59,6 +59,12 @@
     background: #0b0e16;
     touch-action: none; /* 1-finger pan + 2-finger pinch, no page scroll/zoom */
   }
+  /* v154: fullscreen + debug buttons hidden, not removed — Sam hasn't
+     used them in a long time and the bottom space is now the place bar.
+     The elements and their JS stay, so a secret way back is one CSS
+     change away. */
+  #debug-toggle { display: none; }
+  #fsbtn { display: none; }
   #debug-toggle {
     position: fixed;
     right: 12px; bottom: 12px;
@@ -104,6 +110,40 @@
     box-shadow: 0 4px 16px rgba(0,0,0,.4);
   }
   #cambtn.on { border-color: #ffd75e; color: #ffd75e; }
+  /* v154 place bar: always-visible C&C-style placement buttons along
+     the bottom, thumb-reachable. Icon + gold cost only, no names.
+     Buttons are filled by JS from ICONS + unitCost(); locked units
+     (not yet unlocked via an XP card) are hidden, unaffordable ones
+     are dimmed. 8 buttons at 42px + gaps fits a 390px phone. */
+  #placebar {
+    position: fixed;
+    bottom: 12px; left: 50%; transform: translateX(-50%);
+    z-index: 7;
+    display: flex; gap: 4px;
+    max-width: calc(100vw - 24px);
+    background: rgba(10, 13, 22, 0.85);
+    border: 1px solid #2a3145;
+    border-radius: 12px;
+    padding: 6px;
+  }
+  .placebtn {
+    width: 42px; height: 54px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    color: var(--text);
+    cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+    padding: 4px 0;
+  }
+  .placebtn svg { width: 26px; height: 26px; }
+  .placebtn .pcost { font-size: 11px; font-weight: bold; color: #ffd75e; }
+  .placebtn.unaffordable { opacity: 0.45; }
+  .placebtn.active { border-color: #ffd75e; background: rgba(255, 215, 94, 0.12); }
+  .placebtn.hidden { display: none; }
+  /* v154: shop row is gone from the level-up screen — placements live
+     in the place bar now. Keep the elements (harness + code), hide them. */
+  #shoprow, #shoplabel { display: none !important; }
   /* Minimap: territory coverage, top-right under the XP bar */
   #minimap-wrap {
     position: fixed;
@@ -118,8 +158,9 @@
     /* v128: canvas is 2px per cell internally, so a 150-cell map would
        be 300px wide and eat the phone screen. Cap the DISPLAY size
        only — internal drawing and the double-tap toggle are untouched,
-       the browser just scales the canvas down to fit. */
-    max-width: 150px; max-height: 150px; width: auto; height: auto; }
+       the browser just scales the canvas down to fit.
+       v154: 150px was nearly half a phone screen wide; 100px instead. */
+    max-width: 100px; max-height: 100px; width: auto; height: auto; }
   #minimap-stats {
     display: flex; gap: 12px; margin-top: 5px;
     font-size: 12px; font-weight: 700; color: #fff;
@@ -482,6 +523,16 @@
   <button id="debug-toggle">&lt;&gt;</button>
   <button id="fsbtn" title="Fullscreen">⛶</button>
   <button id="cambtn" title="Auto camera: slow north-only follow">CAM</button>
+  <div id="placebar">
+    <button class="placebtn" id="pb-cannon" data-type="cannon" title="Cannon"></button>
+    <button class="placebtn" id="pb-lantern" data-type="lantern" title="Outpost"></button>
+    <button class="placebtn" id="pb-wall" data-type="wall" title="Wall"></button>
+    <button class="placebtn" id="pb-bloom" data-type="bloom" title="Field"></button>
+    <button class="placebtn" id="pb-mole" data-type="mole" title="Digger"></button>
+    <button class="placebtn" id="pb-gather" data-type="gather" title="Harvester"></button>
+    <button class="placebtn" id="pb-laser" data-type="laser" title="Laser"></button>
+    <button class="placebtn" id="pb-waypoint" data-type="waypoint" title="Waypoint"></button>
+  </div>
   <div id="minimap-wrap">
     <canvas id="minimap"></canvas>
     <div id="minimap-stats">
@@ -634,6 +685,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=153"></script>
+<script src="game.js?v=154"></script>
 </body>
 </html>
