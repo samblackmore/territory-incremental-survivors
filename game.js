@@ -410,15 +410,13 @@ function drawMinimap() {
     }
   }
   // Incoming-storm warning (survival, early lull only): a gently
-  // pulsing yellow line on the minimap edges. v137: waves came from
-  // all sides, so all four edges pulsed. v151: waves come only from
-  // the starter side, so only that edge pulses — the direction the
-  // front is coming from. If starterDir is unknown (synthetic flood
-  // objects), fall back to all four edges. This is the quiet
-  // warning; the final 30s before the storm use the old toast
-  // countdown instead (see floodTick). During the storm itself
-  // there's no pulse: the flood is visible on the minimap as blue
-  // territory. No pulse during grace either.
+  // pulsing yellow line on the minimap edges. v155 bottom-only: only
+  // the bottom (south) edge pulses — the front always comes from
+  // below. If starterDir is unknown (synthetic flood objects), fall
+  // back to all four edges. This is the quiet warning; the final 30s
+  // before the storm use the toast countdown instead (see floodTick).
+  // During the storm itself there's no pulse: the flood is visible
+  // on the minimap as blue territory. No pulse during grace either.
   if (SURVIVAL && S.flood && S.flood.phase === 'lull' && S.flood.timer > FLOOD_TOAST_AT) {
     const W = minimap.width, H = minimap.height, T = 3; // line thickness px
     const a = 0.42 + 0.18 * Math.sin(S.time * Math.PI * 2 / 2.2); // gentle 2.2s pulse, alpha 0.24–0.60
@@ -1957,20 +1955,19 @@ function newGame() {
   if (SURVIVAL) {
     const beachCells = [];
     for (let i = 0; i < n; i++) if (S.beach[i]) beachCells.push(i);
-    // v152 corner restriction: a beach cell is in a corner when its
-    // second-nearest map edge is within SPAWN_CORNER_MARGIN — e.g.
-    // an east-beach cell only a few cells from the north edge. Its
-    // inland direction is diagonal, so half the ±60° arc shoots
-    // off-map instead of at terrain. Exclude those cells, so the
-    // starter always sits mid-edge with its arc facing inland.
-    // Fallback: if filtering empties the list (tiny custom maps),
-    // use the full beach list — a corner spawn beats no spawn.
-    const midEdgeCells = beachCells.filter(i => {
+    // v155 bottom-only: spawn is always on the bottom beach — a
+    // beach cell in the bottom coast band (last 20 rows, the max
+    // coast depth), with x at least SPAWN_CORNER_MARGIN from either
+    // side edge, so the starter sits mid-bottom, never in a corner.
+    // This collapses the v152 second-nearest-edge filter to an
+    // x-margin along the bottom only. Fallback: if filtering empties
+    // the list (tiny custom maps), use the full beach list — a
+    // corner spawn beats no spawn.
+    const bottomCells = beachCells.filter(i => {
       const x = i % cfg.cols, y = Math.floor(i / cfg.cols);
-      const ds = [y, cfg.rows - 1 - y, x, cfg.cols - 1 - x].sort((a, b) => a - b);
-      return ds[1] >= SPAWN_CORNER_MARGIN;
+      return y >= cfg.rows - 20 && x >= SPAWN_CORNER_MARGIN && x <= cfg.cols - 1 - SPAWN_CORNER_MARGIN;
     });
-    const spawnCells = midEdgeCells.length ? midEdgeCells : beachCells;
+    const spawnCells = bottomCells.length ? bottomCells : beachCells;
     if (spawnCells.length) {
       const starterRng = mulberry32(seed + 88888);
       const bi = spawnCells[Math.floor(starterRng() * spawnCells.length)];
@@ -1993,22 +1990,22 @@ function newGame() {
     S.hp[pci] = 0; S.maxhp[pci] = 0;
   }
   // The starter is always Cannon; the shop only gates mid-run drafts.
-  // v144 (survival only): only the starter faces inland — every later
-  // BLUE cannon keeps the map-centre base from mkTurret. The starter's
-  // inland aim is a one-time base at spawn, not a tracking rule: it
-  // does not re-aim as terrain clears (inlandAngle is geographic),
-  // a waypoint overrides it while placed, and teleport clears the
-  // starter flag (see completeTeleport), so an escaped starter aims
-  // at map centre like any placed cannon.
+  // v155 bottom-only (supersedes v144 inland aim): the starter always
+  // faces straight up (-PI/2, north), because the spawn is always on
+  // the bottom beach and the run always goes up. Every later BLUE
+  // cannon keeps the map-centre base from mkTurret. A waypoint
+  // overrides it while placed, and teleport clears the starter flag
+  // (see completeTeleport), so an escaped starter aims at map centre
+  // like any placed cannon. inlandAngle() is kept for the harness,
+  // but no longer used for the starter.
   const starterT = mkTurret(pc.x, pc.y, BLUE, 'cannon');
   if (SURVIVAL) {
     starterT.isStarter = true;
-    starterT.base = starterT.angle = inlandAngle(pc.x, pc.y);
-    // v151: waves come only from the starter side, fixed for the
-    // run. Set here, not in floodInit (the starter is placed after
-    // floodInit), and never updated on teleport — a teleported
-    // starter does not move the flood front.
-    if (S.flood) S.flood.starterDir = starterSideDir(pc.x, pc.y);
+    starterT.base = starterT.angle = -Math.PI / 2;
+    // v155: waves always come from the south, fixed for the run.
+    // Never updated on teleport — a teleported starter does not
+    // move the flood front.
+    if (S.flood) S.flood.starterDir = 1; // FLOOD_DIRS[1] = 'south'
   }
   S.turrets.push(starterT);
   S.weapons.cannon = { stats: initWeaponStats('cannon'), rateMult: 1, dmgBonus: 0, critChance: 0, proj: 0, evo: false, evoPaint: false };
@@ -2396,34 +2393,21 @@ const METEOR_ROCK_HP = 80;
 const METEOR_ROCK_SHADE = 5;
 // dir: 0 = from top, 1 = from bottom, 2 = from left, 3 = from right.
 // The emitter is a single point just outside the map on that edge —
-// never seen, only its effects creeping in. v132 (Sam): the FIRST
-// storm picks a random dir, then storms cycle round the map for the
-// rest of the run — clockwise (north -> east -> south -> west) or
-// anticlockwise, decided once at run start (f.cycle: +1 / -1).
-// Own RNG stream (seed + 99991) for the FIRST storm, so flood setup
-// never shifts the map-gen stream — same seed still builds the same
-// map as main. Later storms use Math.random (runtime events).
+// never seen, only its effects creeping in. v155 bottom-only
+// (supersedes v132 cycling): the sweep emitter is always on the
+// south edge, at a random x along it each storm. No cycling, no
+// second front from another side after 20:00 — the flood always
+// comes from below, like the waves.
 function floodPickDir(f, rng) {
   const W = cfg.cols, H = cfg.rows;
-  f.dir = Math.floor(rng() * 4);
-  if (f.dir === 0) { f.ex = rng() * W; f.ey = -FLOOD_OFF; }
-  else if (f.dir === 1) { f.ex = rng() * W; f.ey = H + FLOOD_OFF; }
-  else if (f.dir === 2) { f.ex = -FLOOD_OFF; f.ey = rng() * H; }
-  else { f.ex = W + FLOOD_OFF; f.ey = rng() * H; }
+  f.dir = 1; // south, always
+  f.ex = rng() * W; f.ey = H + FLOOD_OFF;
 }
-// Advance to the next storm's edge in the run's cycle direction.
-// Position along the new edge is still random each storm; only the
-// edge itself cycles. Legacy flood objects without f.cycle default
-// to clockwise (+1).
+// Next storm: same south edge, new random x along it.
 function floodCycleDir(f, rng) {
   const W = cfg.cols, H = cfg.rows;
-  const order = [0, 3, 1, 2]; // clockwise: north, east, south, west
-  const step = f.cycle === -1 ? -1 : 1;
-  f.dir = order[(order.indexOf(f.dir) + step + 4) % 4];
-  if (f.dir === 0) { f.ex = rng() * W; f.ey = -FLOOD_OFF; }
-  else if (f.dir === 1) { f.ex = rng() * W; f.ey = H + FLOOD_OFF; }
-  else if (f.dir === 2) { f.ex = -FLOOD_OFF; f.ey = rng() * H; }
-  else { f.ex = W + FLOOD_OFF; f.ey = rng() * H; }
+  f.dir = 1; // south, always
+  f.ex = rng() * W; f.ey = H + FLOOD_OFF;
 }
 // v151: the map edge nearest (x, y), in FLOOD_DIRS order
 // (north, south, west, east) on ties. The starter cannon sits on a
@@ -2438,8 +2422,8 @@ function starterSideDir(x, y) {
   return dir;
 }
 function floodInit(seed) {
-  const f = { dir: 0, ex: 0, ey: 0, phase: 'grace', timer: FLOOD_GRACE_DUR,
-              sweep: 0, waveT: 0, sweepT: 0, storms: 0, spreadT: FLOOD_SPREAD_EVERY, cycle: 1, starterDir: undefined };
+  const f = { dir: 1, ex: 0, ey: 0, phase: 'grace', timer: FLOOD_GRACE_DUR,
+              sweep: 0, waveT: 0, sweepT: 0, storms: 0, spreadT: FLOOD_SPREAD_EVERY, cycle: 1, starterDir: 1 }; // v155: south, always
   const rng = mulberry32(seed + 99991);
   floodPickDir(f, rng);
   // Third call on the seeded stream, so the first storm's dir +
@@ -2669,18 +2653,17 @@ function floodTick(dt) {
     // unknown (synthetic flood objects), fall back to the old
     // all-sides wording.
     if (f.timer <= FLOOD_TOAST_AT) {
+      // v155 bottom-only: no side is named — waves and sweep always
+      // come from below. Synthetic flood objects with no starterDir
+      // keep the old all-sides wording.
       const sweepAtStorm = (S.time + f.timer >= FLOOD_SWEEP_START);
       const n = Math.max(1, Math.ceil(f.timer));
-      const waveSide = (f.starterDir !== undefined) ? FLOOD_DIRS[f.starterDir].toUpperCase() : null;
-      const sweepSide = FLOOD_DIRS[f.dir].toUpperCase();
-      if (sweepAtStorm && waveSide && waveSide !== sweepSide) {
-        wavebanner.textContent = 'FLOOD WAVES FROM THE ' + waveSide + ' + SWEEP FROM THE ' + sweepSide + ' IN ' + n + 's';
-      } else if (sweepAtStorm) {
-        wavebanner.textContent = 'FLOOD WAVES + SWEEP FROM THE ' + sweepSide + ' IN ' + n + 's';
-      } else if (waveSide) {
-        wavebanner.textContent = 'FLOOD WAVES FROM THE ' + waveSide + ' IN ' + n + 's';
-      } else {
+      if (f.starterDir === undefined) {
         wavebanner.textContent = 'FLOOD WAVES FROM ALL SIDES IN ' + n + 's';
+      } else if (sweepAtStorm) {
+        wavebanner.textContent = 'FLOOD WAVES + SWEEP IN ' + n + 's';
+      } else {
+        wavebanner.textContent = 'FLOOD WAVES IN ' + n + 's';
       }
       wavebanner.classList.remove('hidden');
     } else {
@@ -5550,7 +5533,7 @@ function tryWaypointRemove(sx, sy) {
   if (!S.waypoints.length) {
     for (const t of S.turrets) {
       if (!t.dead && t.color === BLUE && t.type === 'cannon') {
-        t.base = (t.isStarter && SURVIVAL) ? inlandAngle(t.x, t.y)
+        t.base = (t.isStarter && SURVIVAL) ? -Math.PI / 2 // v155: starter faces up, not inlandAngle
           : Math.atan2(cfg.rows / 2 - t.y, cfg.cols / 2 - t.x);
       }
     }
