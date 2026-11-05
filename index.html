@@ -89,6 +89,21 @@
     cursor: pointer;
     box-shadow: 0 4px 16px rgba(0,0,0,.4);
   }
+  /* v153 auto-cam toggle: above fullscreen, same pill style. Gold when on. */
+  #cambtn {
+    position: fixed;
+    right: 12px; bottom: 104px;
+    z-index: 7;
+    padding: 10px 14px;
+    background: var(--panel);
+    border: 1px solid #2a3145;
+    border-radius: 999px;
+    color: var(--accent);
+    font-size: 13px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+    cursor: pointer;
+    box-shadow: 0 4px 16px rgba(0,0,0,.4);
+  }
+  #cambtn.on { border-color: #ffd75e; color: #ffd75e; }
   /* Minimap: territory coverage, top-right under the XP bar */
   #minimap-wrap {
     position: fixed;
@@ -466,6 +481,7 @@
 <div id="layout">
   <button id="debug-toggle">&lt;&gt;</button>
   <button id="fsbtn" title="Fullscreen">⛶</button>
+  <button id="cambtn" title="Auto camera: slow north-only follow">CAM</button>
   <div id="minimap-wrap">
     <canvas id="minimap"></canvas>
     <div id="minimap-stats">
@@ -618,6 +634,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=152"></script>
+<script src="game.js?v=153"></script>
 </body>
 </html>

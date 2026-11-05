@@ -539,6 +539,37 @@ function resetCamera(zoomMult = 1, cx = null, cy = null) {
   clampCamera();
 }
 const START_ZOOM_MULT = 3; // v119: start zoom = 3x the full-map zoom (tunable; max is 8x)
+// v153 auto-cam try-it (Sam, 2026-11-04): a toggleable, slow, north-only
+// follow camera. It never moves south, never changes zoom, never kills
+// anything — it just drifts north, at 1 cell/s, when even your
+// southernmost fixed unit has moved north. Manual pan, placing, and
+// teleporting all pause it for that frame; tapping CAM turns it off
+// again. Default off each first load, preserved across runs in a
+// session (see newGame). This is stage 1 only: no hard edge, no
+// abandonment, no zoom-out — just feel whether a slowly advancing
+// camera creates pressure without fighting the player.
+const AUTO_CAM_SPEED = CELL_PX * 1; // 1 cell/s, deliberately very slow
+const AUTO_CAM_MARGIN_CELLS = 3; // southernmost fixed unit sits this far above the bottom edge
+function updateAutoCam(dt) {
+  if (!S || !S.autoCam) return;
+  if (S.placing || S.teleporting) return;
+  if (typeof panning !== 'undefined' && panning) return;
+  // Fixed units only: Harvesters and Diggers wander for coins/rock and
+  // must not pin the camera south. Cannon, Laser, Field, Outpost are
+  // fixed (lantern = Outpost, bloom = Field, internal names).
+  let southY = -1;
+  for (const t of S.turrets) {
+    if (t.dead || t.color !== BLUE) continue;
+    if (t.type === 'gather' || t.type === 'mole') continue;
+    if (t.y > southY) southY = t.y;
+  }
+  if (southY < 0) return;
+  const hh = view.h / cam.zoom / 2;
+  const targetY = (southY + 0.5) * CELL_PX + AUTO_CAM_MARGIN_CELLS * CELL_PX - hh;
+  if (targetY >= cam.y) return; // north-only: never drift south
+  cam.y = Math.max(targetY, cam.y - AUTO_CAM_SPEED * dt);
+  clampCamera();
+}
 // World border (v120, kept in v122): a subtle translucent white line
 // around the map's edge, so you can tell exactly where the game world
 // stops, even through fog. In v122 the ocean is inside the map, so
@@ -1738,6 +1769,7 @@ function snapAnchor(a) { // fallback spawn when there are no caves at all
 function newGame() {
   // Bank the previous run's gold into the outer total.
   let banked = 0;
+  const prevAutoCam = !!(S && S.autoCam); // v153: CAM toggle persists across runs in a session
   if (S && S.gold > 0) {
     banked = S.gold;
     meta.gold += banked;
@@ -1765,7 +1797,7 @@ function newGame() {
   const shade = new Uint8Array(n); // Perlin shade index (0..7) for empty cells — visual only
   const goldNug = new Uint8Array(n); // 1 = gold nugget locked in this rock cell
   S = { cells, hp, maxhp, hitBy, popT, popAmp, popCol, popDX, popDY, projs: [], xp: 0, level: 1, pending: 0,
-        freqMult: 1, paused: false, frame: 0, seed, shade, goldNug,
+        freqMult: 1, paused: false, frame: 0, seed, shade, goldNug, autoCam: prevAutoCam,
         coins: [], floaters: [], gold: 0, chipPulse: 0, time: 0, lastBanked: banked,
         // XP bar animation: xpShown eases toward xp; level-up cards wait
         // for the bar to finish filling.
@@ -2082,6 +2114,7 @@ function newGame() {
   placebanner.classList.add('hidden');
   placeswap.classList.add('hidden');
   wavebanner.classList.add('hidden');
+  if (typeof syncCamBtn === 'function') syncCamBtn(); // v153: CAM button reflects preserved toggle
   updateHud();
 }
 
@@ -4133,6 +4166,7 @@ function updateSparkles(dt) {
   S.sparkles = S.sparkles.filter(s => s.t < s.life);
 }
 function update(dt) {
+  updateAutoCam(dt); // v153 try-it: slow north-only follow, toggleable, never south/zoom/death
   const arcRad = (cfg.arc * Math.PI) / 180;
   const turnRate = (cfg.turnRate * Math.PI) / 180; // rad/s
   // XP bar animates toward the true XP (full bar in ~0.6s); the level-up
@@ -5474,6 +5508,21 @@ if (fsbtn) {
   fsbtn.addEventListener('click', () => {
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     else document.documentElement.requestFullscreen().catch(() => {});
+  });
+}
+
+// ---- Auto camera toggle (v153 try-it): one tap, gold when on, off again on tap.
+// Persists across runs in a session via S.autoCam in newGame; default off.
+const cambtn = document.getElementById('cambtn');
+function syncCamBtn() {
+  if (!cambtn) return;
+  if (S && S.autoCam) cambtn.classList.add('on'); else cambtn.classList.remove('on');
+}
+if (cambtn) {
+  cambtn.addEventListener('click', () => {
+    if (!S) return;
+    S.autoCam = !S.autoCam;
+    syncCamBtn();
   });
 }
 
