@@ -235,6 +235,7 @@ const MOLE_TURN_EVERY = 3;         // cells before random turn
 const COIN_FLY_DUR = 0.45;           // seconds for a tapped coin to zip to the corner
 const RING_DUR = 0.3;                // conversion shockwave ring lifetime (s)
 const CHIP_CX = 41, CHIP_CY = 48;    // coin-counter chip center, in screen (CSS) px
+const CIV_CHIP_CX = CHIP_CX + 84, CIV_CHIP_CY = CHIP_CY; // v165: civilians counter chip, right next to the gold chip
 // (hit-feel knobs live in cfg via the debug panel: popHold, popDur, popPush,
 // rippleAmp, trailT)
 
@@ -1662,12 +1663,14 @@ function civilianAt(cx, cy) {
   for (const c of S.rescue.civilians) if (c.x === cx && c.y === cy) return c;
   return null;
 }
-// Congregation (v113): the base a civilian may settle around, or null.
-// A cell is settleable when it is open ground (EMPTY/BLUE), not turret-
-// occupied, not already holding another civilian (self excluded — the
-// caller is standing there), and within CIV_SETTLE_RADIUS (Manhattan)
-// of a living BLUE Cannon or Outpost. Nearest such base wins when a
-// cell sits between two bases (that base is "the base they chose").
+// Collection spot (v113 settle spot, v165 collection trigger): the
+// base a civilian may be collected at, or null. A cell is a spot when
+// it is open ground (EMPTY/BLUE), not turret-occupied, not already
+// holding another civilian (self excluded — the caller is standing
+// there), and within CIV_SETTLE_RADIUS (Manhattan) of a living BLUE
+// Cannon or Outpost. Nearest such base wins when a cell sits between
+// two bases. Standing on a spot means "home" — the civilian flies
+// away (see collectCivilian), it does not settle there anymore.
 function civilianSettleBase(cx, cy, self) {
   if (cx < 0 || cy < 0 || cx >= cfg.cols || cy >= cfg.rows) return null;
   const st = S.cells[cy * cfg.cols + cx];
@@ -1724,62 +1727,12 @@ function civilianSettleNext(sx, sy, self) {
   if (fy - sy === 1) return 2;
   return 0;
 }
-// Civilian resource collection (v136): BFS next step toward the
-// nearest idle pickup within CIV_COLLECT_RANGE steps, over EMPTY /
-// own BLUE, turret cells blocked (a pickup on a turret cell is not a
-// target — it stays for its turret's owner). Only fog-clear pickup
-// cells count, so civilians don't wander into unexplored ground for
-// a coin they can't see; pickups shine through fog on the main map,
-// but a civilian only chases one once its cell has cleared. Returns a
-// direction index, or null when nothing is in range. The range is
-// BFS steps (movement distance), not straight-line distance, so a
-// coin behind rock that takes 12 steps to reach is out of range even
-// if it looks 8 cells away.
-const CIV_COLLECT_RANGE = 10;
-function civilianCollectNext(sx, sy) {
-  const W = cfg.cols, H = cfg.rows;
-  const blocked = new Set();
-  for (const t of S.turrets) if (!t.dead) blocked.add(t.y * W + t.x);
-  const pickAt = new Set();
-  for (const c of S.coins) {
-    if (c.state !== 'idle') continue;
-    const px = Math.floor(c.x), py = Math.floor(c.y);
-    if (px < 0 || py < 0 || px >= W || py >= H) continue;
-    if (!fogHidden && S.fog[py * W + px] !== 0) continue;
-    pickAt.add(py * W + px);
-  }
-  if (pickAt.size === 0) return null;
-  const dist = new Int32Array(W * H).fill(-1);
-  const prev = new Int32Array(W * H).fill(-1);
-  const start = sy * W + sx;
-  const q = [start]; dist[start] = 0;
-  const dirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];
-  let head = 0, target = -1;
-  while (head < q.length) {
-    const cur = q[head++];
-    const cx = cur % W, cy = Math.floor(cur / W);
-    if (cur !== start && pickAt.has(cur)) { target = cur; break; }
-    if (dist[cur] >= CIV_COLLECT_RANGE) continue;
-    for (let d = 0; d < 4; d++) {
-      const nx = cx + dirs[d][0], ny = cy + dirs[d][1];
-      if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
-      const ni = ny * W + nx;
-      if (dist[ni] >= 0 || (blocked.has(ni) && ni !== start)) continue;
-      const st = S.cells[ni];
-      if (st !== EMPTY && st !== BLUE) continue;
-      dist[ni] = dist[cur] + 1; prev[ni] = cur; q.push(ni);
-    }
-  }
-  if (target < 0) return null;
-  let cur = target;
-  while (prev[cur] !== -1 && prev[cur] !== start) cur = prev[cur];
-  if (prev[cur] === -1) return null;
-  const fx = cur % W, fy = Math.floor(cur / W);
-  if (fx - sx === 1) return 1;
-  if (fx - sx === -1) return 3;
-  if (fy - sy === 1) return 2;
-  return 0;
-}
+// v165: civilian resource SEEKING is gone (v136's civilianCollectNext
+// was deleted with it). A civilian never goes out of its way for a
+// pickup — it only banks what is on the cell it happens to stand on
+// (see collectAtCivilian, called on its cell each step). The rescue
+// itself is now a collection: reaching a base flies the civilian to
+// the civilians counter (see collectCivilian), it does not settle.
 // Civilian collection on its cell: every idle pickup on that cell
 // flies to the HUD like a tapped / Harvester pickup (grant on arrival).
 function collectAtCivilian(c) {
@@ -1792,6 +1745,19 @@ function collectAtCivilian(c) {
     }
   }
   return n;
+}
+// v165: collect the civilian itself. It leaves the map at once (its
+// cell frees up for the next civilian the same tick — the update loop
+// filters 'collected' civilians out after the pass) as a pink blob
+// flying to the civilians counter, reusing the coin fly machinery
+// (kind 'civ', same accelerating lerp, same COIN_FLY_DUR). The count
+// increments when the fly ARRIVES at the chip, not when it leaves —
+// see the fly loop. The pink burst is the departure pop.
+function collectCivilian(c) {
+  c.state = 'collected';
+  spawnBurst(c.x + 0.5, c.y + 0.5, CIV_PINK);
+  S.coins.push({ x: c.x + 0.5, y: c.y + 0.5, state: 'fly', kind: 'civ',
+                 sx: c.x + 0.5, sy: c.y + 0.5, t: 0, phase: 0, dead: false });
 }
 // axis with the larger gap (dirs: 0 up, 1 right, 2 down, 3 left). This is
 // how red moles encroach instead of wandering.
@@ -1918,7 +1884,7 @@ function newGame() {
         // unlocked is Cannon only (v156, if enabled on the start
         // screen); the rest join when an XP unlock card is picked.
         unlocked: Object.fromEntries(PLACEBAR_TYPES.map(t => [t, START_UNLOCKED.includes(t) && !(meta && meta.enabled && meta.enabled[t] === false)])),
-        coins: [], floaters: [], gold: 0, chipPulse: 0, time: 0, lastBanked: banked,
+        coins: [], floaters: [], gold: 0, chipPulse: 0, civChipPulse: 0, time: 0, lastBanked: banked,
         // XP bar animation: xpShown eases toward xp; level-up cards wait
         // for the bar to finish filling.
         xpShown: 0, awaitingLevel: false,
@@ -2603,7 +2569,7 @@ const CIV_MIN = 1;
 const CIV_MAX = 5;
 const CIV_STEP_DUR = 1.0; // seconds per civilian step — slow on purpose, like Harvester
 const CIV_PINK = '#f472b6'; // civilian blob + minimap ? + rescue burst, one pink everywhere
-const CIV_SETTLE_RADIUS = 2; // Manhattan distance from a base a civilian may settle (v113: congregate, not vanish)
+const CIV_SETTLE_RADIUS = 2; // Manhattan distance from a base at which a civilian is collected (v113: settle spot; v165: collection trigger — same spot, the civilian flies away instead of staying)
 // Meteor shower (v116, v126 interval doubled in frequency): a periodic reshuffling event to liven up the
 // quiet first 3 minutes — and every 1–2 minutes after, even during a
 // flood storm. Sequence: 10s warning (toast countdown + yellow circles
@@ -4752,17 +4718,15 @@ function update(dt) {
   // clears, then walk home 1 cell per second to the nearest Cannon or
   // Outpost (BFS each step, so tunnels opening / bases moving / flood
   // blocking all reroute automatically). No path yet = wait in place.
-  // Arriving = settle, not vanish (v113): civilians congregate around
-  // the base they chose, one per cell (settle radius 2, nearest base
-  // wins), counted once toward rescued on first arrival. A settled
-  // civilian stays until its base is gone (destroyed, teleported
-  // away) or its cell stops being open ground (flood paints it),
-  // then it walks to the next nearest base, same tick. No death.
-  // v136 priority: collect first, home second. A discovered civilian
-  // (moving or settled) chases idle pickups within BFS 10 steps, like
-  // a Harvester, collecting on arrival; only when nothing is in range
-  // does it return to / stay at base. Settled civilians leave base to
-  // collect, then settle again on return (counted once, not again).
+  // v165 collection (Sam, 2026-11-06): arriving = collected, not
+  // settled. A civilian standing on a free spot around a base (the
+  // old v113 settle spot, radius 2) flies to the civilians counter
+  // and is gone from the map; the rescued count increments when the
+  // fly arrives at the chip. No crowd, no settled state, no
+  // settled-block-placement anymore — a collected cell is free ground
+  // again. Resource seeking is gone too (v136 reverted): a civilian
+  // never goes out of its way for a pickup, it only banks what is on
+  // the cell it happens to stand on. No death.
   if (SURVIVAL && S.rescue && S.rescue.civilians) {
     for (const c of S.rescue.civilians) {
       if (c.rx !== undefined) c.moveT += dt; // glide clock, like turrets
@@ -4774,33 +4738,11 @@ function update(dt) {
         c.state = 'moving'; // discovered: start escaping now, same tick
       }
       const dirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];
-      // Collect on our cell (coins that spawned here, or arrived on
-      // last tick), then chase the nearest pickup in range, if any.
+      // Chance pickup only: bank what is on our cell (a coin that
+      // spawned here, or arrived last tick) — never chase one.
       collectAtCivilian(c);
-      const cnd = civilianCollectNext(c.x, c.y);
-      if (cnd !== null) {
-        if (c.state === 'settled') { c.state = 'moving'; c.baseX = -1; c.baseY = -1; }
-        c.rx = c.x; c.ry = c.y; c.moveT = 0;
-        c.x += dirs[cnd][0]; c.y += dirs[cnd][1];
-        collectAtCivilian(c); // arrived on a pickup: bank it now
-        continue;
-      }
-      if (c.state === 'settled') {
-        const bt = (c.baseX !== undefined && c.baseX >= 0) ? turretAt(c.baseX, c.baseY) : null;
-        const cellSt = S.cells[c.y * cfg.cols + c.x];
-        if (bt && !bt.dead && bt.color === BLUE && (bt.type === 'cannon' || bt.type === 'lantern') &&
-            (cellSt === EMPTY || cellSt === BLUE) && !turretAt(c.x, c.y)) {
-          continue; // still home, nothing to collect: stay, no move
-        }
-        c.state = 'moving'; c.baseX = -1; c.baseY = -1; // base gone / cell taken: leave, same tick
-      }
-      // Moving: settle if already standing on a free spot around a base.
-      const settleHere = civilianSettleBase(c.x, c.y, c);
-      if (settleHere) {
-        c.state = 'settled'; c.baseX = settleHere.x; c.baseY = settleHere.y;
-        if (!c.counted) { c.counted = true; S.rescue.rescued++; spawnBurst(c.x + 0.5, c.y + 0.5, CIV_PINK); }
-        continue;
-      }
+      // Already home? Collect immediately (no extra second).
+      if (civilianSettleBase(c.x, c.y, c)) { collectCivilian(c); continue; }
       // Otherwise walk one step toward the nearest free spot; if none
       // exists (base full / no space yet), walk toward the nearest
       // base anyway so the crowd waits near base, not stranded mid-map.
@@ -4809,13 +4751,12 @@ function update(dt) {
       if (nd === null) continue; // no path yet: wait for a tunnel / base
       c.rx = c.x; c.ry = c.y; c.moveT = 0;
       c.x += dirs[nd][0]; c.y += dirs[nd][1];
-      // Arrived on a free spot? Settle immediately (no extra second).
-      const settleNow = civilianSettleBase(c.x, c.y, c);
-      if (settleNow) {
-        c.state = 'settled'; c.baseX = settleNow.x; c.baseY = settleNow.y;
-        if (!c.counted) { c.counted = true; S.rescue.rescued++; spawnBurst(c.x + 0.5, c.y + 0.5, CIV_PINK); }
-      }
+      collectAtCivilian(c); // stepped onto a pickup: bank it by chance
+      // Arrived on a free spot? Collect immediately (no extra second).
+      if (civilianSettleBase(c.x, c.y, c)) collectCivilian(c);
     }
+    // Collected civilians are flying to the counter, not on the map.
+    S.rescue.civilians = S.rescue.civilians.filter(c => c.state !== 'collected');
   }
   for (const p of S.projs) stepProjectile(p, dt);
   if (S.projs.length > 4000) S.projs.splice(0, S.projs.length - 4000); // safety valve
@@ -4926,6 +4867,8 @@ function update(dt) {
   updateSparkles(dt); // v123, v124 ocean-only, v125 dashes, v126 both: occasional glitter/ripples on visible water
   const tgt = screenToWorld(CHIP_CX, CHIP_CY);
   const TX = tgt.x / CELL_PX, TY = tgt.y / CELL_PX;
+  const civTgt = screenToWorld(CIV_CHIP_CX, CIV_CHIP_CY); // v165: civilians counter chip
+  const CIVTX = civTgt.x / CELL_PX, CIVTY = civTgt.y / CELL_PX;
   const xtgt = screenToWorld(view.w / 2, 18); // XP bar, top-center
   const XX = xtgt.x / CELL_PX, XY = xtgt.y / CELL_PX;
   for (const c of S.coins) {
@@ -4933,8 +4876,10 @@ function update(dt) {
       c.t += dt;
       const k = Math.min(1, c.t / COIN_FLY_DUR);
       const e = k * k;
-      // XP orbs fly to the XP bar; gold coins fly to the gold chip.
-      const gx = c.kind === 'gold' ? TX : XX, gy = c.kind === 'gold' ? TY : XY;
+      // XP orbs fly to the XP bar; gold coins fly to the gold chip;
+      // collected civilians fly to the civilians counter chip.
+      const gx = c.kind === 'gold' ? TX : c.kind === 'civ' ? CIVTX : XX;
+      const gy = c.kind === 'gold' ? TY : c.kind === 'civ' ? CIVTY : XY;
       c.x = c.sx + (gx - c.sx) * e;
       c.y = c.sy + (gy - c.sy) * e;
       if (k >= 1) {
@@ -4943,6 +4888,12 @@ function update(dt) {
           S.gold++; // run gold only — banked to the meta total when the run ends
           S.chipPulse = 1; // the "blurp": chip pops
           S.floaters.push({ x: CHIP_CX + 30, y: CHIP_CY, t: 0 });
+        } else if (c.kind === 'civ') {
+          // v165: the rescue counts on ARRIVAL at the counter, not
+          // when the civilian leaves the map.
+          if (S.rescue) S.rescue.rescued++;
+          S.civChipPulse = 1;
+          S.floaters.push({ x: CIV_CHIP_CX + 30, y: CIV_CHIP_CY, t: 0 });
         } else {
           S.xp++;
           checkLevel();
@@ -4996,6 +4947,7 @@ function update(dt) {
   for (const f of S.floaters) f.t += dt;
   S.floaters = S.floaters.filter(f => f.t < 0.7);
   S.chipPulse = Math.max(0, S.chipPulse - dt * 3);
+  S.civChipPulse = Math.max(0, (S.civChipPulse || 0) - dt * 3); // v165: civilians chip pop decays like the gold one
 
   // Harvester units: each living blue Harvester roams the grid toward the
   // closest idle pickup it can reach anywhere (BFS, avoids walls). It
@@ -5501,14 +5453,15 @@ function render() {
     if (c.state === 'idle') r += Math.sin(S.time * 4 + c.phase) * 1.2;
     else r *= 1 - 0.4 * Math.min(1, c.t / COIN_FLY_DUR);
     const isGold = c.kind === 'gold';
+    const isCiv = c.kind === 'civ'; // v165: collected civilian flying to its counter — pink, like the civilian itself
     ctx.beginPath(); ctx.arc(px, py, r + 2.5, 0, Math.PI * 2);
-    ctx.fillStyle = isGold ? 'rgba(255, 200, 60, 0.22)' : 'rgba(125, 211, 252, 0.25)';
+    ctx.fillStyle = isGold ? 'rgba(255, 200, 60, 0.22)' : isCiv ? 'rgba(244, 114, 182, 0.25)' : 'rgba(125, 211, 252, 0.25)';
     ctx.fill(); // glow
     ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2);
-    ctx.fillStyle = isGold ? '#f5b301' : '#7dd3fc';
+    ctx.fillStyle = isGold ? '#f5b301' : isCiv ? CIV_PINK : '#7dd3fc';
     ctx.fill();
     ctx.lineWidth = 1.5;
-    ctx.strokeStyle = isGold ? '#8a5b00' : '#0369a1';
+    ctx.strokeStyle = isGold ? '#8a5b00' : isCiv ? '#be185d' : '#0369a1';
     ctx.stroke();
     ctx.beginPath(); ctx.arc(px - r * 0.3, py - r * 0.3, r * 0.28, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fill(); // shine
@@ -5587,6 +5540,29 @@ function render() {
   ctx.textBaseline = 'middle';
   ctx.fillText('× ' + S.gold, CHIP_CX - chw / 2 + 26, CHIP_CY + 1);
   ctx.restore();
+  // Civilians counter chip (v165, survival only): right next to the
+  // gold chip, same size and style, pink dot instead of a gold coin.
+  // Pops when a rescued civilian's fly arrives at it.
+  if (SURVIVAL) {
+    const cpulse = S.civChipPulse || 0;
+    ctx.save();
+    ctx.translate(CIV_CHIP_CX, CIV_CHIP_CY);
+    const ccs = 1 + 0.3 * cpulse;
+    ctx.scale(ccs, ccs);
+    ctx.translate(-CIV_CHIP_CX, -CIV_CHIP_CY);
+    ctx.fillStyle = 'rgba(10, 13, 22, 0.85)';
+    rr(CIV_CHIP_CX - chw / 2, CIV_CHIP_CY - chh / 2, chw, chh, 8); ctx.fill();
+    ctx.lineWidth = 1.5; ctx.strokeStyle = '#2a3145';
+    rr(CIV_CHIP_CX - chw / 2, CIV_CHIP_CY - chh / 2, chw, chh, 8); ctx.stroke();
+    ctx.beginPath(); ctx.arc(CIV_CHIP_CX - chw / 2 + 14, CIV_CHIP_CY, 7, 0, Math.PI * 2);
+    ctx.fillStyle = CIV_PINK; ctx.fill();
+    ctx.lineWidth = 1.5; ctx.strokeStyle = '#be185d'; ctx.stroke();
+    ctx.fillStyle = '#dfe5f2';
+    ctx.font = 'bold 13px system-ui, sans-serif';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('× ' + (S.rescue ? S.rescue.rescued : 0), CIV_CHIP_CX - chw / 2 + 26, CIV_CHIP_CY + 1);
+    ctx.restore();
+  }
   // Stat chips start under the gold chip (no passive badges anymore —
   // Bounce removed v106, Penetration is a stat row, not a badge).
   let ppy = CHIP_CY + 32;
