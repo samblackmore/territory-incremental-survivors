@@ -410,24 +410,6 @@ function drawMinimap() {
       mmctx.fillText('?', site.x * px + 1, site.y * px + 1);
     }
   }
-  // Incoming-storm warning (survival, early lull only): a gently
-  // pulsing yellow line on the minimap edges. v155 bottom-only: only
-  // the bottom (south) edge pulses — the front always comes from
-  // below. If starterDir is unknown (synthetic flood objects), fall
-  // back to all four edges. This is the quiet warning; the final 30s
-  // before the storm use the toast countdown instead (see floodTick).
-  // During the storm itself there's no pulse: the flood is visible
-  // on the minimap as blue territory. No pulse during grace either.
-  if (SURVIVAL && S.flood && S.flood.phase === 'lull' && S.flood.timer > FLOOD_TOAST_AT) {
-    const W = minimap.width, H = minimap.height, T = 3; // line thickness px
-    const a = 0.42 + 0.18 * Math.sin(S.time * Math.PI * 2 / 2.2); // gentle 2.2s pulse, alpha 0.24–0.60
-    mmctx.fillStyle = `rgba(255, 215, 94, ${a})`; // gold #ffd75e
-    const side = S.flood.starterDir;
-    if (side === 0 || side === undefined) mmctx.fillRect(0, 0, W, T); // top (north)
-    if (side === 1 || side === undefined) mmctx.fillRect(0, H - T, W, T); // bottom (south)
-    if (side === 2 || side === undefined) mmctx.fillRect(0, 0, T, H); // left (west)
-    if (side === 3 || side === undefined) mmctx.fillRect(W - T, 0, T, H); // right (east)
-  }
   // Meteor warning (v116): yellow circles on the minimap for every
   // target that has not impacted yet — all of them during the 10s
   // warning, then the remaining ones as the shower progresses (each
@@ -1304,6 +1286,7 @@ function collectAtGather(t) {
   const here = [];
   for (const c of S.coins) {
     if (c.state !== 'idle') continue;
+    if (coinFogged(c)) continue; // v166: fogged coins are not collectible
     if (Math.floor(c.x) === t.x && Math.floor(c.y) === t.y) here.push(c);
   }
   const take = here.slice(0, gatherCount());
@@ -1325,6 +1308,7 @@ function collectAtMole(t) {
   let n = 0;
   for (const c of S.coins) {
     if (c.state !== 'idle') continue;
+    if (coinFogged(c)) continue; // v166: fogged coins are not collectible
     if (Math.abs(Math.floor(c.x) - t.x) <= MOLE_PICKUP_RANGE &&
         Math.abs(Math.floor(c.y) - t.y) <= MOLE_PICKUP_RANGE) {
       c.state = 'fly'; c.sx = c.x; c.sy = c.y; c.t = 0;
@@ -1739,6 +1723,7 @@ function collectAtCivilian(c) {
   let n = 0;
   for (const coin of S.coins) {
     if (coin.state !== 'idle') continue;
+    if (coinFogged(coin)) continue; // v166: fogged coins are not collectible
     if (Math.floor(coin.x) === c.x && Math.floor(coin.y) === c.y) {
       coin.state = 'fly'; coin.sx = coin.x; coin.sy = coin.y; coin.t = 0;
       n++;
@@ -2476,7 +2461,7 @@ function checkRunOver() {
     placebanner.classList.add('hidden');
     placeswap.classList.add('hidden');
     runstats.innerHTML = SURVIVAL
-      ? 'Flood storms <b>' + (S.flood ? S.flood.storms : 0) + '</b> · Level <b>' + S.level + '</b><br>' +
+      ? 'Attack <b>' + Math.max(0, Math.round(S.time - FLOOD_GRACE_DUR)) + 's</b> · Level <b>' + S.level + '</b><br>' +
         'Survived <b>' + Math.round(S.time) + 's</b> · ' +
         'Excavated <b>' + S.destroyed + '</b> · ' +
         'Gold <b>' + meta.gold + '</b><br>' +
@@ -2492,49 +2477,48 @@ function checkRunOver() {
 
 // ---- Flood (SURVIVAL BRANCH) ----
 // The asymmetric enemy: not a base, but damage from a direction.
-// A flood controller picks a random edge for the first storm, then
-// cycles clockwise or anticlockwise (decided once per run, v132)
-// round the map for the sweeping cannon. The waves (v140: straight
-// border waves, not radial rings) come from the whole border at
-// once, travelling inward. Flood shots damage rock and
-// player territory, and claim what they destroy as flood territory
-// (RED internally, blue on screen after the palette flip) — so the
-// flood visibly advances as a front the player must push back, not
-// a transient event.
+// A flood controller fires single staggered shots from the south
+// edge (v166: no storms, no lulls, no waves — one continuous
+// attack from 3:00, ramping faster over time), and from 20:00 a
+// sweeping cannon joins, also from the south. Flood shots damage
+// rock and player territory, and claim what they destroy as flood
+// territory (RED internally, blue on screen after the palette
+// flip) — so the flood visibly advances as a front the player must
+// push back, not a transient event.
 // No classes in this codebase (plain functions + S state), so the
 // flood is a controller object on S plus these functions.
 const SURVIVAL = true; // survival branch: player renders red, flood is blue, enemy base off
-const FLOOD_GRACE_DUR = 180;  // v159: 3 min grace before the first storm (was 5 min) — Sam: five minutes of no threat feels too long. Prepare your base (XP-bar threat countdown gives the ETA; commander dialog disabled v126)
-const FLOOD_SWEEP_START = 1200; // 20 min run time: the sweeping cannon joins the waves (v137, v150: was 10 min, see floodTick)
-// Phases (v137, Sam; v140 waves reworked; v146 first storm at 5:00;
-// v150 sweep pushed to 20 min; v151 waves fixed to starter side;
-// v155 bottom-only; v159 first storm at 3:00, staggered waves):
-// 0–3 min grace, no storms; first storm starts at 3:00, no first
-// lull; 3–20 min staggered wave shots only, from the south only
-// (single columns at random x, like rain, not a simultaneous row);
-// 20+ min staggered waves + sweep (the sweeping cannon, always
-// from the south). Run time is S.time, so a storm that starts
-// before 20:00 gains its sweep mid-storm the moment the clock
-// crosses 20:00. Between storms: 60s lull, pulse then toast.
-const FLOOD_TOAST_AT = 30;    // seconds before a storm when the old toast countdown returns (earlier in the lull: minimap pulse only)
-const FLOOD_STORM_DUR = 20;   // seconds a storm barrages, then it passes
-// v146: no first lull — the first storm starts at the end of grace, the moment
-// grace ends, with no extra 30s toast after it. Later storms still
-// get their 60s lull (pulse, then toast in the final 30s).
-const FLOOD_LULL = 60;        // seconds between storms (was 20: lengthened so pulse (60→30) + toast (30→0) both get a window)
+const FLOOD_GRACE_DUR = 180;  // v159: 3 min grace before the attack starts (was 5 min) — Sam: five minutes of no threat feels too long. Prepare your base (XP-bar threat countdown gives the ETA; commander dialog disabled v126)
+const FLOOD_SWEEP_START = 1200; // 20 min run time: the sweeping cannon joins the attack (v137, v150: was 10 min, see floodTick)
+// Phases (v166, Sam, 2026-11-06 — waves/storms/lulls REMOVED):
+// 0–3 min grace, no attack; at 3:00 the attack starts and never
+// stops — no storms, no lulls, no breather. Single staggered shots
+// from the south only (single columns at random x, like rain, not a
+// simultaneous row), at floodWaveInterval(), which ramps from 5s
+// and halves every 3 min of attack time, floored at 0.2s. From
+// 20:00 the sweeping cannon joins, also from the south, also
+// continuous. The flood spread still creeps on its own clock the
+// whole time, storm or not — waiting it out never worked, and now
+// there is nothing to wait out.
+// (History: v137 storms + 60s lulls, v146 first storm at grace end,
+// v150 sweep at 20:00, v151 starter-side waves, v155 bottom-only,
+// v159 staggered waves at 3:00. All of that storm/lull machinery
+// was deleted in v166; floodCycleDir is kept only for the harness.)
 const FLOOD_DMG = 1;          // per flood projectile — constant barrage, so toned down (was 2)
 const FLOOD_SPEED = 8;        // cells/s — slower than player shots (12.5), a lumbering front
 const FLOOD_OFF = 3;          // cells outside the map the emitter sits (never seen)
 const FLOOD_SWEEP_EVERY = 0.12; // seconds between sweeping-cannon shots
 const FLOOD_SWEEP_RATE = Math.PI / 2; // rad/s the sweep rotates (90 deg/s)
-// v159 staggered waves (Sam, 2026-11-05): inside a storm, wave shots
+// v159 staggered waves (Sam, 2026-11-05; v166: the storm/lull
+// cycle is gone, the shots are now the whole attack): wave shots
 // are single columns at random south x positions, staggered like rain
 // going bottom-up — not a simultaneous row across the whole border.
-// Interval starts long (one shot every 5s at the first storm) and
-// gets gradually faster as attack time grows: it halves every 3
-// minutes of attack time (5s at 3:00, 2.5s at 6:00, 1.25s at 9:00,
-// 0.63s at 12:00, 0.31s at 15:00), floored at 0.2s (~5 shots/s).
-// The lull between storms is still the breather to rebuild.
+// Interval starts long (one shot every 5s when the attack starts
+// at 3:00) and gets gradually faster as attack time grows: it
+// halves every 3 minutes of attack time (5s at 3:00, 2.5s at 6:00,
+// 1.25s at 9:00, 0.63s at 12:00, 0.31s at 15:00), floored at 0.2s
+// (~5 shots/s). There is no breather anymore — the ramp is the
+// pressure.
 const FLOOD_WAVE_FIRST_INTERVAL = 5;
 const FLOOD_WAVE_MIN_INTERVAL = 0.2;
 const FLOOD_WAVE_RAMP_HALF_LIFE = 180; // seconds of attack time to halve the interval
@@ -2571,8 +2555,8 @@ const CIV_STEP_DUR = 1.0; // seconds per civilian step — slow on purpose, like
 const CIV_PINK = '#f472b6'; // civilian blob + minimap ? + rescue burst, one pink everywhere
 const CIV_SETTLE_RADIUS = 2; // Manhattan distance from a base at which a civilian is collected (v113: settle spot; v165: collection trigger — same spot, the civilian flies away instead of staying)
 // Meteor shower (v116, v126 interval doubled in frequency): a periodic reshuffling event to liven up the
-// quiet first 3 minutes — and every 1–2 minutes after, even during a
-// flood storm. Sequence: 10s warning (toast countdown + yellow circles
+// quiet first 3 minutes — and every 1–2 minutes after, even during
+// the attack. Sequence: 10s warning (toast countdown + yellow circles
 // on the minimap for every target), then shadows appear one by one,
 // staggered, each shrinking from large to small, then impact.
 // Impact, per cell in a circular cluster (radius 2, 13 cells):
@@ -2619,7 +2603,9 @@ function floodPickDir(f, rng) {
   f.dir = 1; // south, always
   f.ex = rng() * W; f.ey = H + FLOOD_OFF;
 }
-// Next storm: same south edge, new random x along it.
+// v166: storms are gone, so nothing in the game calls this anymore
+// (the harness still exercises it). Kept so the south-emitter rule
+// stays in one place: same south edge, new random x along it.
 function floodCycleDir(f, rng) {
   const W = cfg.cols, H = cfg.rows;
   f.dir = 1; // south, always
@@ -2822,77 +2808,36 @@ function floodFireWave() {
 function floodTick(dt) {
   const f = S.flood;
   if (!f || S.runOver) return;
-  // Gradual spread ticks always (storm or lull), on its own clock.
+  // Gradual spread ticks always, on its own clock.
   if (f.spreadT === undefined) f.spreadT = FLOOD_SPREAD_EVERY;
   f.spreadT -= dt;
   if (f.spreadT <= 0) { f.spreadT += FLOOD_SPREAD_EVERY; floodSpread(); }
   f.timer -= dt;
   if (f.phase === 'grace') {
-    // Grace: prepare your base. No storms, no toast/pulse — the XP bar
-    // threat countdown gives the ETA during grace (the commander
-    // dialog gave it at the start). Spread no-ops here
-    // (no RED cells exist yet, so floodSpread finds nothing).
+    // Grace: prepare your base. No attack, no toast — the XP bar
+    // threat countdown gives the ETA during grace. Spread no-ops
+    // here (no RED cells exist yet, so floodSpread finds nothing).
     wavebanner.classList.add('hidden'); // no stale toast
     if (f.timer <= 0) {
-      // v146: grace over = first storm, immediately. No first lull,
-      // no extra toast — the grace threat countdown was the warning.
-      // Direction was already picked at init, so waves fire at once.
-      f.phase = 'storm';
-      f.timer = FLOOD_STORM_DUR;
+      // v166: grace over = the attack starts, and it never stops.
+      // No storm, no lull, no breather — the grace threat countdown
+      // was the only warning. Direction was already picked at init,
+      // so shots fire at once.
+      f.phase = 'attack';
       f.sweep = 0; f.waveT = 0; f.sweepT = 0; // fire immediately
       f.storms++;
-      wavebanner.classList.add('hidden'); // storm: no toast (flood visible)
+      wavebanner.classList.add('hidden'); // attack: no toast (flood visible)
     }
     return;
   }
-  if (f.phase === 'lull') {
-    if (f.timer <= 0) {
-      f.phase = 'storm';
-      f.timer = FLOOD_STORM_DUR;
-      f.sweep = 0; f.waveT = 0; f.sweepT = 0; // fire immediately
-      f.storms++;
-      wavebanner.classList.add('hidden'); // storm: no toast (flood visible)
-      return;
-    }
-    // Final 30s before the storm: the old toast countdown returns
-    // (explicit, urgent). Earlier in the lull the minimap pulse
-    // carries the warning quietly (see drawMinimap).
-    // v137 toast: waves came from all sides, so before the sweep
-    // joined the toast named no side. v151: waves come only from
-    // the starter side, so the toast names it; once the sweep will
-    // be active at storm start (run time + remaining lull >= 20:00,
-    // v150), it names the sweep's cycling side too — both sides if
-    // they differ, one side if they coincide. If starterDir is
-    // unknown (synthetic flood objects), fall back to the old
-    // all-sides wording.
-    if (f.timer <= FLOOD_TOAST_AT) {
-      // v155 bottom-only: no side is named — waves and sweep always
-      // come from below. Synthetic flood objects with no starterDir
-      // keep the old all-sides wording.
-      const sweepAtStorm = (S.time + f.timer >= FLOOD_SWEEP_START);
-      const n = Math.max(1, Math.ceil(f.timer));
-      if (f.starterDir === undefined) {
-        wavebanner.textContent = 'FLOOD WAVES FROM ALL SIDES IN ' + n + 's';
-      } else if (sweepAtStorm) {
-        wavebanner.textContent = 'FLOOD WAVES + SWEEP IN ' + n + 's';
-      } else {
-        wavebanner.textContent = 'FLOOD WAVES IN ' + n + 's';
-      }
-      wavebanner.classList.remove('hidden');
-    } else {
-      wavebanner.classList.add('hidden'); // early lull: pulse only
-    }
-    return;
-  }
-  // Storm (v137 split, v140 waves): constant barrage — border waves
-  // from all sides, plus, from 20:00 run time (v150, was 10:00), the
-  // sweeping cannon from its single cycling side. No banner and no
-  // pulse while it runs: the flood is visible on the minimap as blue
-  // territory creeping in. Sweep is gated on run time, not storm
-  // start, so a storm that starts before 20:00 gains its sweep
-  // mid-storm at 20:00 exactly;
-  // while gated off, the sweep angle and timer are left alone, so the
-  // first sweep shot fires as soon as the gate opens.
+  // Attack (v166): continuous, no phases after this. Staggered
+  // single shots from the south at floodWaveInterval() — the ramp
+  // is the pressure now, not a storm cycle. From 20:00 run time
+  // the sweeping cannon joins, also continuous, also from the south.
+  // No banner and no pulse while it runs: the flood is visible on
+  // the minimap as blue territory creeping in. While gated off, the
+  // sweep angle and timer are left alone, so the first sweep shot
+  // fires as soon as the gate opens.
   if (S.time >= FLOOD_SWEEP_START) {
     f.sweepT -= dt;
     if (f.sweepT <= 0) { f.sweepT += FLOOD_SWEEP_EVERY; floodFireAt(f.sweep); }
@@ -2900,21 +2845,13 @@ function floodTick(dt) {
   }
   f.waveT -= dt;
   if (f.waveT <= 0) { f.waveT += floodWaveInterval(); floodFireWave(); }
-  if (f.timer <= 0) {
-    // Storm passes: lull, and cycle to the NEXT storm's direction
-    // now (v132: not a fresh random pick) so the minimap pulse can
-    // name it. New lull starts in pulse phase
-    // (timer 60 > 30), so hide any toast explicitly.
-    f.phase = 'lull';
-    f.timer = FLOOD_LULL;
-    floodCycleDir(f, Math.random);
-    wavebanner.classList.add('hidden');
-  }
 }
 
-// Meteor shower (v116): periodic terrain reshuffle, even during flood.
-// Runs after floodTick in update(), so the 10s warning countdown wins
-// over the flood toast while it lasts, then the flood toast returns.
+// Meteor shower (v116): periodic terrain reshuffle, even during the
+// attack. Runs after floodTick in update(), so the 10s warning
+// countdown wins over the wavebanner while it lasts (v166: there is
+// no flood toast anymore, so the banner is the meteor countdown's
+// alone during the warning).
 // Paused/finished runs freeze it (update() only runs when playing).
 function meteorNextInterval() {
   return METEOR_INTERVAL_MIN + Math.random() * (METEOR_INTERVAL_MAX - METEOR_INTERVAL_MIN);
@@ -2924,15 +2861,26 @@ function meteorTargets() {
   // from 7–10, Sam: reduce density, keep shower frequency), so
   // 7–11 on the default 75x50 (3750 cells),
   // fewer on tiny maps, more on huge ones. Positions are uniform —
-  // anywhere, including fog, starter area, and flood territory.
+  // anywhere, including fog, starter area, and flood territory —
+  // except the ocean (v166, Sam: a meteor ADD in the ocean drops
+  // an 80-HP rock that blocks the flood shots coming from the
+  // south, gutting the threat — and meteors are strong early).
+  // Retry up to 20 times for a non-ocean cell; if the map is
+  // (nearly) all ocean, that target is skipped.
   const area = cfg.cols * cfg.rows;
   const base = 3 + Math.floor(Math.random() * 3); // 3, 4, or 5
   const n = Math.max(1, Math.round(area / 1728 * base));
   const out = [];
   for (let k = 0; k < n; k++) {
-    out.push({ x: Math.floor(Math.random() * cfg.cols),
-               y: Math.floor(Math.random() * cfg.rows),
-               state: 'pending', shadowT: 0 });
+    let tx = -1, ty = -1;
+    for (let tries = 0; tries < 20; tries++) {
+      const x = Math.floor(Math.random() * cfg.cols);
+      const y = Math.floor(Math.random() * cfg.rows);
+      if (S.ocean && S.ocean[y * cfg.cols + x]) continue;
+      tx = x; ty = y; break;
+    }
+    if (tx < 0) continue;
+    out.push({ x: tx, y: ty, state: 'pending', shadowT: 0 });
   }
   return out;
 }
@@ -3037,6 +2985,11 @@ function meteorImpact(tx, ty) {
       if (dx * dx + dy * dy > METEOR_CLUSTER_R2) continue;
       const x = tx + dx, y = ty + dy;
       if (x < 0 || y < 0 || x >= cfg.cols || y >= cfg.rows) continue;
+      // v166: the ocean is untouched by meteors — a rock dropped
+      // in the ocean would block the flood shots from the south.
+      // Ocean cells are not in the cluster at all, so they neither
+      // count toward the add/carve decision nor get changed.
+      if (S.ocean && S.ocean[y * cfg.cols + x]) continue;
       cluster.push({ x, y, idx: y * cfg.cols + x });
     }
   }
@@ -3102,20 +3055,19 @@ function meteorImpact(tx, ty) {
 }
 
 // Debug only: jump the run clock to the end of grace (3:00) and start
-// a storm immediately, mirroring the lull -> storm transition (fire
-// immediately, toast hidden, storm counted once). Run time only moves
-// forward, never backwards, so clicking mid-storm restarts that storm
-// without inflating the storm count. Paused/placing/teleport state is
-// left untouched: time is frozen while paused anyway, so the storm
-// fires once play resumes. No-op if there is no flood or the run is
-// over (the debug panel sits under the run-over overlay anyway).
+// the attack immediately (v166: no storms anymore — fire at once,
+// toast hidden, attack counted once). Run time only moves forward,
+// never backwards, so clicking mid-attack restarts it without
+// inflating the count. Paused/placing/teleport state is left
+// untouched: time is frozen while paused anyway, so the attack fires
+// once play resumes. No-op if there is no flood or the run is over
+// (the debug panel sits under the run-over overlay anyway).
 function debugJumpToFlood() {
   const f = S.flood;
   if (!f || S.runOver) return;
   if (S.time < FLOOD_GRACE_DUR) S.time = FLOOD_GRACE_DUR;
-  if (f.phase !== 'storm') f.storms++;
-  f.phase = 'storm';
-  f.timer = FLOOD_STORM_DUR;
+  if (f.phase !== 'attack') f.storms++;
+  f.phase = 'attack';
   f.sweep = 0; f.waveT = 0; f.sweepT = 0;
   wavebanner.classList.add('hidden');
   updateHud();
@@ -3284,6 +3236,20 @@ function coinAt(cx, cy) {
     if (Math.floor(c.x) === cx && Math.floor(c.y) === cy) return true;
   }
   return false;
+}
+// v166: an idle coin is hidden by fog — invisible and uncollectible
+// while its cell is fogged (fog 1 half-fog hides it too; only fully
+// clear cells show their resources). Flying/gathering coins are
+// already being banked, so they still render and still grant. The
+// fog x-ray debug (fogHidden) counts as clear, like everywhere else.
+// Two deliberate exceptions keep shining through fog: meteor warning
+// rings and rescue ? marks (they are warnings, not resources).
+function coinFogged(c) {
+  if (c.state !== 'idle') return false;
+  if (fogHidden) return false;
+  const cx = Math.floor(c.x), cy = Math.floor(c.y);
+  if (cx < 0 || cy < 0 || cx >= cfg.cols || cy >= cfg.rows) return false;
+  return S.fog[cy * cfg.cols + cx] !== 0;
 }
 
 function stepProjectile(p, dt) {
@@ -4585,6 +4551,7 @@ function update(dt) {
           const inRange = [];
           for (const c of S.coins) {
             if (c.state !== 'idle') continue;
+            if (coinFogged(c)) continue; // v166: fogged coins are not collectible
             const dx = c.x - (t.x + 0.5), dy = c.y - (t.y + 0.5);
             const d2 = dx * dx + dy * dy;
             if (d2 <= r2) inRange.push({ c, d2 });
@@ -4618,6 +4585,7 @@ function update(dt) {
           const inRange = [];
           for (const c of S.coins) {
             if (c.state !== 'idle') continue;
+            if (coinFogged(c)) continue; // v166: fogged coins are not collectible
             const dx = c.x - (t.x + 0.5), dy = c.y - (t.y + 0.5);
             const d2 = dx * dx + dy * dy;
             if (d2 <= r2) inRange.push({ c, d2 });
@@ -5445,9 +5413,12 @@ function render() {
       ctx.fill();
     }
   }
-  // Pickups (XP orbs + gold coins) shine through the fog — idle ones pulse
-  // gently so they beg to be tapped.
+  // Pickups (XP orbs + gold coins): idle ones pulse gently so they
+  // beg to be tapped — but only on fog-clear cells (v166: a fogged
+  // coin is invisible until the fog lifts; flying/gathering coins
+  // still render, they are already being banked).
   for (const c of S.coins) {
+    if (coinFogged(c)) continue;
     const px = c.x * CELL_PX, py = c.y * CELL_PX;
     let r = 5.5;
     if (c.state === 'idle') r += Math.sin(S.time * 4 + c.phase) * 1.2;
@@ -5686,11 +5657,11 @@ function updateHud() {
   // Run timer (play time, pauses excluded) after the level + XP counts.
   const tsec = Math.floor(S.time || 0);
   const timer = `${Math.floor(tsec / 60)}:${String(tsec % 60).padStart(2, '0')}`;
-  // Threat countdown (survival, grace only): time until the flood cycle
-  // starts, counting down from the grace duration (3:00). Short + vague
-  // on purpose ("threat", not "flood storm"), yellow, inside the XP bar
-  // next to the run timer. Hidden once grace ends — lull/storm warnings
-  // (minimap pulse + toast) take over from there.
+  // Threat countdown (survival, grace only): time until the attack
+  // starts, counting down from the grace duration (3:00). Short +
+  // vague on purpose ("threat", not "flood"), yellow, inside the XP
+  // bar next to the run timer. Hidden once grace ends — the attack
+  // itself is visible from there, no warning needed.
   let threat = '';
   if (SURVIVAL && S.flood && S.flood.phase === 'grace') {
     const gsec = Math.max(0, Math.ceil(S.flood.timer));
@@ -5758,6 +5729,7 @@ function tapCoin(sx, sy) {
   for (let i = S.coins.length - 1; i >= 0; i--) {
     const c = S.coins[i];
     if (c.state !== 'idle') continue;
+    if (coinFogged(c)) continue; // v166: fogged coins cannot be tapped
     const dx = c.x - cx, dy = c.y - cy;
     if (dx * dx + dy * dy < 0.81) { // 0.9-cell tap radius
       c.state = 'fly'; c.sx = c.x; c.sy = c.y; c.t = 0;
