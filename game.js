@@ -167,7 +167,7 @@ function cannonDmgMaxed() {
 // costs extra, and the price climbs as your army grows. Tunable.
 // Early game is cheap on purpose: Outpost 2 (base expansion), Field 3
 // (early resources), Digger 4 (early exploration), Waypoint 5 (cannon
-// aiming) — the flood starts at 5 min, so you need cheap options before
+// aiming) — the flood starts at 3 min, so you need cheap options before
 // you can level the cannon.
 const UNIT_COST = { cannon: 10, mole: 4, bloom: 3, gather: 6, lantern: 2, wall: 2, laser: 20, waypoint: 5 };
 const UNIT_COST_STEP = 5;
@@ -1943,6 +1943,12 @@ function newGame() {
         noHarvest: new Uint8Array(n),
         // fog of war: 0 = clear, 1 = half, 2 = full (black)
         fog: new Uint8Array(n).fill(2),
+        // v159: cells permanently revealed by enemy projectiles
+        // (see stepProjectile). Merged into computeFog, so a revealed
+        // cell stays clear even when no turret is in range — the map
+        // gets revealed in the pattern of the enemy shots, instead of
+        // projectiles flying obscured by fog. Fog still only clears.
+        fogRevealed: new Uint8Array(n),
         // ocean (v122, survival only): 1 = ocean-ring cell (see coastMask).
         // Geographic only — gameplay still sees EMPTY; rendering/minimap
         // use it to show blue ocean when the cell is open.
@@ -2282,6 +2288,9 @@ function computeFog() {
     }
   }
   for (const i of half) nf[i] = 1;
+  // v159: enemy-projectile reveals are permanent and survive the
+  // recompute — a cell a red shot passed through stays clear.
+  if (S.fogRevealed) for (let i = 0; i < n; i++) if (S.fogRevealed[i]) nf[i] = 0;
   // Merge: fog only ever clears.
   for (let i = 0; i < n; i++) if (nf[i] < S.fog[i]) S.fog[i] = nf[i];
 }
@@ -2383,20 +2392,21 @@ function checkRunOver() {
 // No classes in this codebase (plain functions + S state), so the
 // flood is a controller object on S plus these functions.
 const SURVIVAL = true; // survival branch: player renders red, flood is blue, enemy base off
-const FLOOD_GRACE_DUR = 300;  // 5 min grace before the first storm: prepare your base (XP-bar threat countdown gives the ETA; commander dialog disabled v126)
+const FLOOD_GRACE_DUR = 180;  // v159: 3 min grace before the first storm (was 5 min) — Sam: five minutes of no threat feels too long. Prepare your base (XP-bar threat countdown gives the ETA; commander dialog disabled v126)
 const FLOOD_SWEEP_START = 1200; // 20 min run time: the sweeping cannon joins the waves (v137, v150: was 10 min, see floodTick)
 // Phases (v137, Sam; v140 waves reworked; v146 first storm at 5:00;
-// v150 sweep pushed to 20 min; v151 waves fixed to starter side):
-// 0–5 min grace, no storms; first storm starts at 5:00, no first
-// lull; 5–20 min waves only, from the starter side only
-// (straight-line waves inward from that edge); 20+ min waves
-// (starter side) + sweep (the sweeping cannon, from one cycling
-// side, as before). Run time is S.time, so a storm that starts
+// v150 sweep pushed to 20 min; v151 waves fixed to starter side;
+// v155 bottom-only; v159 first storm at 3:00, staggered waves):
+// 0–3 min grace, no storms; first storm starts at 3:00, no first
+// lull; 3–20 min staggered wave shots only, from the south only
+// (single columns at random x, like rain, not a simultaneous row);
+// 20+ min staggered waves + sweep (the sweeping cannon, always
+// from the south). Run time is S.time, so a storm that starts
 // before 20:00 gains its sweep mid-storm the moment the clock
 // crosses 20:00. Between storms: 60s lull, pulse then toast.
 const FLOOD_TOAST_AT = 30;    // seconds before a storm when the old toast countdown returns (earlier in the lull: minimap pulse only)
 const FLOOD_STORM_DUR = 20;   // seconds a storm barrages, then it passes
-// v146: no first lull — the first storm starts at 5:00, the moment
+// v146: no first lull — the first storm starts at the end of grace, the moment
 // grace ends, with no extra 30s toast after it. Later storms still
 // get their 60s lull (pulse, then toast in the final 30s).
 const FLOOD_LULL = 60;        // seconds between storms (was 20: lengthened so pulse (60→30) + toast (30→0) both get a window)
@@ -2405,7 +2415,22 @@ const FLOOD_SPEED = 8;        // cells/s — slower than player shots (12.5), a 
 const FLOOD_OFF = 3;          // cells outside the map the emitter sits (never seen)
 const FLOOD_SWEEP_EVERY = 0.12; // seconds between sweeping-cannon shots
 const FLOOD_SWEEP_RATE = Math.PI / 2; // rad/s the sweep rotates (90 deg/s)
-const FLOOD_WAVE_EVERY = 1.2; // seconds between border waves (was the radial ring interval, v140)
+// v159 staggered waves (Sam, 2026-11-05): inside a storm, wave shots
+// are single columns at random south x positions, staggered like rain
+// going bottom-up — not a simultaneous row across the whole border.
+// Interval starts long (one shot every 5s at the first storm) and
+// gets gradually faster as attack time grows: it halves every 3
+// minutes of attack time (5s at 3:00, 2.5s at 6:00, 1.25s at 9:00,
+// 0.63s at 12:00, 0.31s at 15:00), floored at 0.2s (~5 shots/s).
+// The lull between storms is still the breather to rebuild.
+const FLOOD_WAVE_FIRST_INTERVAL = 5;
+const FLOOD_WAVE_MIN_INTERVAL = 0.2;
+const FLOOD_WAVE_RAMP_HALF_LIFE = 180; // seconds of attack time to halve the interval
+function floodWaveInterval() {
+  const t = Math.max(0, S.time - FLOOD_GRACE_DUR);
+  return Math.max(FLOOD_WAVE_MIN_INTERVAL,
+    FLOOD_WAVE_FIRST_INTERVAL * Math.pow(0.5, t / FLOOD_WAVE_RAMP_HALF_LIFE));
+}
 const FLOOD_WAVE_SPEED_JITTER = 0.15; // wave speed randomisation, ±15% (v140): the line breaks up as faster shots outrun slower ones, instead of staying perfect
 const FLOOD_SPREAD_EVERY = 2; // seconds between gradual-spread ticks
 // Pressure (v110): base chance per flood cell per spread tick, AFTER
@@ -2434,7 +2459,7 @@ const CIV_STEP_DUR = 1.0; // seconds per civilian step — slow on purpose, like
 const CIV_PINK = '#f472b6'; // civilian blob + minimap ? + rescue burst, one pink everywhere
 const CIV_SETTLE_RADIUS = 2; // Manhattan distance from a base a civilian may settle (v113: congregate, not vanish)
 // Meteor shower (v116, v126 interval doubled in frequency): a periodic reshuffling event to liven up the
-// quiet first 5 minutes — and every 1–2 minutes after, even during a
+// quiet first 3 minutes — and every 1–2 minutes after, even during a
 // flood storm. Sequence: 10s warning (toast countdown + yellow circles
 // on the minimap for every target), then shadows appear one by one,
 // staggered, each shrinking from large to small, then impact.
@@ -2664,25 +2689,22 @@ function floodWaveReachesLand(cx, cy, dx, dy) {
 // shoreline without painting it flood. The sweep, by contrast, is
 // still a flood shot and still paints/claims.
 function floodFireWave() {
+  // v159 staggered: one shot per call, from a random south x, straight
+  // north — like a single rain column, not a border-wide row. Try up
+  // to 10 random columns and fire the first whose ray reaches land
+  // (floodWaveReachesLand culls rays that never reach land, e.g. a
+  // column that is all ocean/coast to the top), so the cadence stays
+  // close to floodWaveInterval() instead of skipping on ocean columns.
+  // Attack-only, as before (flood: false): no paint trail, bombs BLUE
+  // territory to EMPTY, dies on the first rock it hits.
   const W = cfg.cols, H = cfg.rows;
-  const fire = (cx, cy, x, y, vx, vy) => {
-    if (!floodWaveReachesLand(cx, cy, vx, vy)) return;
+  for (let k = 0; k < 10; k++) {
+    const x = Math.floor(Math.random() * W);
+    if (!floodWaveReachesLand(x, H - 1, 0, -1)) continue;
     const speed = FLOOD_SPEED * (1 + (Math.random() * 2 - 1) * FLOOD_WAVE_SPEED_JITTER);
-    S.projs.push({ x, y, vx: vx * speed, vy: vy * speed,
+    S.projs.push({ x: x + 0.5, y: H - 0.05, vx: 0, vy: -speed,
                    color: RED, dmg: FLOOD_DMG, flood: false, crit: false, dead: false });
-  };
-  const side = S.flood ? S.flood.starterDir : undefined;
-  if (side === 0 || side === undefined) {
-    for (let x = 0; x < W; x++) fire(x, 0, x + 0.5, 0.05, 0, 1); // north edge -> south
-  }
-  if (side === 1 || side === undefined) {
-    for (let x = 0; x < W; x++) fire(x, H - 1, x + 0.5, H - 0.05, 0, -1); // south edge -> north
-  }
-  if (side === 2 || side === undefined) {
-    for (let y = 0; y < H; y++) fire(0, y, 0.05, y + 0.5, 1, 0); // west edge -> east
-  }
-  if (side === 3 || side === undefined) {
-    for (let y = 0; y < H; y++) fire(W - 1, y, W - 0.05, y + 0.5, -1, 0); // east edge -> west
+    return;
   }
 }
 function floodTick(dt) {
@@ -2765,7 +2787,7 @@ function floodTick(dt) {
     f.sweep += FLOOD_SWEEP_RATE * dt;
   }
   f.waveT -= dt;
-  if (f.waveT <= 0) { f.waveT += FLOOD_WAVE_EVERY; floodFireWave(); }
+  if (f.waveT <= 0) { f.waveT += floodWaveInterval(); floodFireWave(); }
   if (f.timer <= 0) {
     // Storm passes: lull, and cycle to the NEXT storm's direction
     // now (v132: not a fresh random pick) so the minimap pulse can
@@ -2967,7 +2989,7 @@ function meteorImpact(tx, ty) {
   if (changed) computeFog();
 }
 
-// Debug only: jump the run clock to the end of grace (5:00) and start
+// Debug only: jump the run clock to the end of grace (3:00) and start
 // a storm immediately, mirroring the lull -> storm transition (fire
 // immediately, toast hidden, storm counted once). Run time only moves
 // forward, never backwards, so clicking mid-storm restarts that storm
@@ -3160,6 +3182,14 @@ function stepProjectile(p, dt) {
     p.x += sx; p.y += sy;
     const cx = Math.floor(p.x), cy = Math.floor(p.y);
     if (cx < 0 || cy < 0 || cx >= cfg.cols || cy >= cfg.rows) { p.dead = true; return; }
+    // v159: enemy projectiles reveal the fog as they fly — the cell
+    // the shot is in clears immediately and stays clear (see
+    // fogRevealed in computeFog). Player (BLUE) shots do not reveal.
+    if (p.color === RED) {
+      const ridx = cy * cfg.cols + cx;
+      if (S.fogRevealed) S.fogRevealed[ridx] = 1;
+      S.fog[ridx] = 0;
+    }
     // Turrets take priority: an enemy turret cell eats the shot.
     const t = turretAt(cx, cy);
     if (t && t.color !== p.color) {
@@ -5539,7 +5569,7 @@ function updateHud() {
   const tsec = Math.floor(S.time || 0);
   const timer = `${Math.floor(tsec / 60)}:${String(tsec % 60).padStart(2, '0')}`;
   // Threat countdown (survival, grace only): time until the flood cycle
-  // starts, counting down from the grace duration (5:00). Short + vague
+  // starts, counting down from the grace duration (3:00). Short + vague
   // on purpose ("threat", not "flood storm"), yellow, inside the XP bar
   // next to the run timer. Hidden once grace ends — lull/storm warnings
   // (minimap pulse + toast) take over from there.
