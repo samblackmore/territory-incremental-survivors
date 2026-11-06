@@ -167,7 +167,7 @@ function cannonDmgMaxed() {
 // costs extra, and the price climbs as your army grows. Tunable.
 // Early game is cheap on purpose: Outpost 2 (base expansion), Field 3
 // (early resources), Digger 4 (early exploration), Waypoint 5 (cannon
-// aiming) — the flood starts at 3 min, so you need cheap options before
+// aiming) — the flood starts at 1 min, so you need cheap options before
 // you can level the cannon.
 const UNIT_COST = { cannon: 10, mole: 4, bloom: 3, gather: 6, lantern: 2, wall: 2, laser: 20, waypoint: 5 };
 const UNIT_COST_STEP = 5;
@@ -2479,7 +2479,7 @@ function checkRunOver() {
 // The asymmetric enemy: not a base, but damage from a direction.
 // A flood controller fires single staggered shots from the south
 // edge (v166: no storms, no lulls, no waves — one continuous
-// attack from 3:00, ramping faster over time), and from 20:00 a
+// attack from 1:00, ramping faster over time), and from 20:00 a
 // sweeping cannon joins, also from the south. Flood shots damage
 // rock and player territory, and claim what they destroy as flood
 // territory (RED internally, blue on screen after the palette
@@ -2488,10 +2488,10 @@ function checkRunOver() {
 // No classes in this codebase (plain functions + S state), so the
 // flood is a controller object on S plus these functions.
 const SURVIVAL = true; // survival branch: player renders red, flood is blue, enemy base off
-const FLOOD_GRACE_DUR = 180;  // v159: 3 min grace before the attack starts (was 5 min) — Sam: five minutes of no threat feels too long. Prepare your base (XP-bar threat countdown gives the ETA; commander dialog disabled v126)
+const FLOOD_GRACE_DUR = 60;  // v167: 1 min grace before the attack starts (was 3 min — Sam: the immediate threat is good, make it more immediate). Prepare your base (XP-bar threat countdown gives the ETA; commander dialog disabled v126)
 const FLOOD_SWEEP_START = 1200; // 20 min run time: the sweeping cannon joins the attack (v137, v150: was 10 min, see floodTick)
 // Phases (v166, Sam, 2026-11-06 — waves/storms/lulls REMOVED):
-// 0–3 min grace, no attack; at 3:00 the attack starts and never
+// 0–1 min grace, no attack; at 1:00 the attack starts and never
 // stops — no storms, no lulls, no breather. Single staggered shots
 // from the south only (single columns at random x, like rain, not a
 // simultaneous row), at floodWaveInterval(), which ramps from 5s
@@ -2514,9 +2514,9 @@ const FLOOD_SWEEP_RATE = Math.PI / 2; // rad/s the sweep rotates (90 deg/s)
 // are single columns at random south x positions, staggered like rain
 // going bottom-up — not a simultaneous row across the whole border.
 // Interval starts long (one shot every 5s when the attack starts
-// at 3:00) and gets gradually faster as attack time grows: it
-// halves every 3 minutes of attack time (5s at 3:00, 2.5s at 6:00,
-// 1.25s at 9:00, 0.63s at 12:00, 0.31s at 15:00), floored at 0.2s
+// at 1:00) and gets gradually faster as attack time grows: it
+// halves every 3 minutes of attack time (5s at 1:00, 2.5s at 4:00,
+// 1.25s at 7:00, 0.63s at 10:00, 0.31s at 13:00), floored at 0.2s
 // (~5 shots/s). There is no breather anymore — the ramp is the
 // pressure.
 const FLOOD_WAVE_FIRST_INTERVAL = 5;
@@ -2555,7 +2555,7 @@ const CIV_STEP_DUR = 1.0; // seconds per civilian step — slow on purpose, like
 const CIV_PINK = '#f472b6'; // civilian blob + minimap ? + rescue burst, one pink everywhere
 const CIV_SETTLE_RADIUS = 2; // Manhattan distance from a base at which a civilian is collected (v113: settle spot; v165: collection trigger — same spot, the civilian flies away instead of staying)
 // Meteor shower (v116, v126 interval doubled in frequency): a periodic reshuffling event to liven up the
-// quiet first 3 minutes — and every 1–2 minutes after, even during
+// quiet first minute — and every 1–2 minutes after, even during
 // the attack. Sequence: 10s warning (toast countdown + yellow circles
 // on the minimap for every target), then shadows appear one by one,
 // staggered, each shrinking from large to small, then impact.
@@ -3054,7 +3054,7 @@ function meteorImpact(tx, ty) {
   if (changed) computeFog();
 }
 
-// Debug only: jump the run clock to the end of grace (3:00) and start
+// Debug only: jump the run clock to the end of grace (1:00) and start
 // the attack immediately (v166: no storms anymore — fire at once,
 // toast hidden, attack counted once). Run time only moves forward,
 // never backwards, so clicking mid-attack restarts it without
@@ -3263,10 +3263,27 @@ function stepProjectile(p, dt) {
     // v159: enemy projectiles reveal the fog as they fly — the cell
     // the shot is in clears immediately and stays clear (see
     // fogRevealed in computeFog). Player (BLUE) shots do not reveal.
+    // v167: one cell either side of the channel is half-fog (fog 1),
+    // like the fringe computeFog draws around discovered terrain —
+    // so the reveal reads as a soft corridor, not a hard 1-cell
+    // line. The fringe is set on the 4 orthogonal neighbours (the
+    // two on the line itself are already clear or about to be);
+    // neighbours are NOT marked fogRevealed, or the next computeFog
+    // would force them fully clear. Fog only ever clears (see the
+    // merge in computeFog), so the fringe sticks until a turret's
+    // own fog disc clears it properly.
     if (p.color === RED) {
       const ridx = cy * cfg.cols + cx;
       if (S.fogRevealed) S.fogRevealed[ridx] = 1;
       S.fog[ridx] = 0;
+      const W = cfg.cols, H = cfg.rows;
+      const fringe = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+      for (const [dx, dy] of fringe) {
+        const nx = cx + dx, ny = cy + dy;
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+        const nidx = ny * W + nx;
+        if (S.fog[nidx] === 2) S.fog[nidx] = 1;
+      }
     }
     // Turrets take priority: an enemy turret cell eats the shot.
     const t = turretAt(cx, cy);
@@ -5658,7 +5675,7 @@ function updateHud() {
   const tsec = Math.floor(S.time || 0);
   const timer = `${Math.floor(tsec / 60)}:${String(tsec % 60).padStart(2, '0')}`;
   // Threat countdown (survival, grace only): time until the attack
-  // starts, counting down from the grace duration (3:00). Short +
+  // starts, counting down from the grace duration (1:00). Short +
   // vague on purpose ("threat", not "flood"), yellow, inside the XP
   // bar next to the run timer. Hidden once grace ends — the attack
   // itself is visible from there, no warning needed.
@@ -6128,10 +6145,16 @@ function randomizeMapSize() {
     }
   } catch (e) { /* no URL API (harness): randomize both */ }
   // v163: vertical maps — narrow and tall, so the run is a climb.
-  // Cols 75–100, rows 140–200 (panel size; newGame still adds the
-  // bottom-ocean extra rows on top, so a real map is taller still).
-  // Biomes (see newGame) split the height into quarters.
-  if (!qCols) inCols.value = 75 + Math.floor(Math.random() * 26);
+  // v167: width is FIXED at 60 columns, no randomisation (was
+  // 75–100 random, average ~87, so 60 is ~70% of the old width —
+  // Sam: the map doesn't need to be so big, you're never going to
+  // explore all of it, and a narrower map caps how far out the
+  // camera can zoom and concentrates the enemy shots from below).
+  // Rows are still 140–200 random (panel size; newGame still adds
+  // the bottom-ocean extra rows on top, so a real map is taller
+  // still). Biomes (see newGame) split the height into quarters.
+  // ?cols= in the URL still overrides the fixed width.
+  if (!qCols) inCols.value = 60;
   if (!qRows) inRows.value = 140 + Math.floor(Math.random() * 61);
 }
 
