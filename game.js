@@ -934,12 +934,13 @@ function coastDepths(n, noise, u0) {
   return out;
 }
 function coastMask(cols, rows, seed) {
-  // Returns { ocean, beach, grass } masks. Per edge, total depth T is
-  // the coast depth for that edge position; ocean = T - 4, sand ends
-  // at T - 2, grass ends at T. Layer priority is outermost first:
-  // ocean beats sand beats grass, so a corner cell that is ocean via
-  // one edge and sand via another reads as ocean. Bottom/right use
-  // distance = (dim-1) - coord, so counts match top/left.
+  // Returns { ocean, beach, grass } masks. v163: bottom edge ONLY —
+  // no side coasts, no top coast (Sam, 2026-11-06). The bottom is
+  // the ocean + starter beach; land runs to the map edge on the
+  // other three sides, and the top is a beach biome, not a coast
+  // ring (see BIOME_* in newGame). Per bottom position, total depth
+  // T is the coast depth; ocean = T - 4, sand ends at T - 2, grass
+  // ends at T. Bottom uses distance = (dim-1) - coord.
   const ocean = new Uint8Array(cols * rows);
   const beach = new Uint8Array(cols * rows);
   const grass = new Uint8Array(cols * rows);
@@ -953,6 +954,10 @@ function coastMask(cols, rows, seed) {
   }
   const left = coastDepths(rows, noise, 0.29);
   const right = coastDepths(rows, noise, 0.87);
+  // v163: no side/top coasts — zero those depths out. The arrays
+  // are still computed so the noise stream (and therefore the
+  // bottom depths for a given seed) is unchanged.
+  top.fill(0); left.fill(0); right.fill(0);
   for (let y = 0; y < rows; y++) {
     for (let x = 0; x < cols; x++) {
       const i = y * cols + x;
@@ -2050,6 +2055,58 @@ function newGame() {
     for (let i = 0; i < n; i++) {
       if (!S.ocean[i] && !S.beach[i] && !S.grass[i]) continue;
       cells[i] = EMPTY; hp[i] = 0; maxhp[i] = 0; goldNug[i] = 0;
+    }
+  }
+
+  // v163 biomes (Sam, 2026-11-06): the map is four horizontal bands,
+  // each roughly a quarter of the height, bottom to top:
+  //   ocean — the bottom coast (already done above, 5x ocean + beach)
+  //   cliff — the starter area: beach at its southern edge, then the
+  //     existing cave-pockets-in-rock interior (untouched below)
+  //   grass — mostly open grass, with LARGE rock islands for mining
+  //   beach — a long extended beach at the top, with only SMALL
+  //     rock islands
+  // No side coasts: land runs to the left/right edges in every band.
+  // Grass and beach bands are applied here, after the cave/rock
+  // generation above and the coast override, so they replace it in
+  // their bands only. Rock islands keep HP from the same Perlin
+  // field (3–10, like cliff rock); open ground renders via the
+  // grass/beach flags, so the minimap and tiles read the biome too.
+  // Rescue note: grass/beach open ground is one big EMPTY component,
+  // so rescue sites may now sit in open ground there, not only in
+  // cliff caves — pickRescueSites' fallback already covers that.
+  if (SURVIVAL) {
+    const H = cfg.rows;
+    const grassRock = genCaves(cfg.cols, cfg.rows, 0.42, rng); // large blobs
+    const beachRock = genCaves(cfg.cols, cfg.rows, 0.25, rng); // small blobs
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < cfg.cols; x++) {
+        const i = y * cfg.cols + x;
+        // Coast wins: the deep bottom coast can reach up into the
+        // grass band (it is up to 60% of rows), so a coast cell must
+        // never become a biome rock island with its coast flag left
+        // on — that was a sand cell turned WHITE with S.beach set.
+        if (S.ocean[i] || S.beach[i] || S.grass[i]) continue;
+        if (y < H * 0.25) { // top beach biome
+          if (beachRock[i]) {
+            cells[i] = WHITE;
+            const m = 3 + Math.round(norm(raw[i]) * 7);
+            maxhp[i] = m; hp[i] = m; goldNug[i] = 0;
+          } else {
+            cells[i] = EMPTY; hp[i] = 0; maxhp[i] = 0; goldNug[i] = 0;
+            S.beach[i] = 1;
+          }
+        } else if (y < H * 0.50) { // grass biome
+          if (grassRock[i]) {
+            cells[i] = WHITE;
+            const m = 3 + Math.round(norm(raw[i]) * 7);
+            maxhp[i] = m; hp[i] = m; goldNug[i] = 0;
+          } else {
+            cells[i] = EMPTY; hp[i] = 0; maxhp[i] = 0; goldNug[i] = 0;
+            S.grass[i] = 1;
+          }
+        }
+      }
     }
   }
 
@@ -6056,8 +6113,12 @@ function randomizeMapSize() {
       qCols = q.has('cols'); qRows = q.has('rows');
     }
   } catch (e) { /* no URL API (harness): randomize both */ }
-  if (!qCols) inCols.value = 75 + Math.floor(Math.random() * 76);
-  if (!qRows) inRows.value = 75 + Math.floor(Math.random() * 76);
+  // v163: vertical maps — narrow and tall, so the run is a climb.
+  // Cols 75–100, rows 140–200 (panel size; newGame still adds the
+  // bottom-ocean extra rows on top, so a real map is taller still).
+  // Biomes (see newGame) split the height into quarters.
+  if (!qCols) inCols.value = 75 + Math.floor(Math.random() * 26);
+  if (!qRows) inRows.value = 140 + Math.floor(Math.random() * 61);
 }
 
 applyUrlParams();
