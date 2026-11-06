@@ -862,6 +862,13 @@ function fillCell(x, y) {
 // cell's old flat shade colour at TILE_TINT_ALPHA — texture shows
 // through, but the light/dark range is the old one. The ?v=160
 // on the file names busts the browser cache of the 128px tiles.
+// v162 (Sam, 2026-11-05): tiles are SHELVED — too distracting
+// right now, so the game is back to flat coloured squares. Nothing
+// is deleted: the tile files stay in assets/tiles/, the loading and
+// draw code stays, and the tint stays, all behind TILES_ENABLED.
+// Flip it to true, or open the game with ?tiles=1, to bring the
+// tiles back; a future sprite editor will paint these same files.
+let TILES_ENABLED = false; // shelved in v162; ?tiles=1 at boot re-enables
 const TILE_TINT_ALPHA = 0.5; // tint overlay alpha — the shade-range knob
 const TILE_NAMES = ['grass', 'sand', 'ocean', 'rock-brown', 'rock-grey', 'blue', 'red', 'soil'];
 const TILES = {};
@@ -874,6 +881,7 @@ if (typeof Image !== 'undefined') {
 }
 function tileReady(img) { return !!(img && img.complete && img.naturalWidth > 0); }
 function drawCellTile(img, x, y, shade, tint) {
+  if (!TILES_ENABLED) return false; // v162: tiles shelved, flat squares
   if (!tileReady(img)) return false;
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(img, x * CELL_PX - TILE_OVERDRAW, y * CELL_PX - TILE_OVERDRAW,
@@ -6053,6 +6061,15 @@ function randomizeMapSize() {
 }
 
 applyUrlParams();
+// v162: ?tiles=1 brings the shelved tiles back, ?tiles=0 keeps them
+// off — no code change needed to try them again later.
+try {
+  if (typeof location !== 'undefined' && location.search) {
+    const q = new URLSearchParams(location.search);
+    if (q.get('tiles') === '1') TILES_ENABLED = true;
+    if (q.get('tiles') === '0') TILES_ENABLED = false;
+  }
+} catch (e) { /* no URL API (harness): tiles stay shelved */ }
 randomizeMapSize();
 loadMeta();
 applyTeamColors(); // before first run: stored preference, else branch look (survival red, main blue)
