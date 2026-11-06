@@ -809,6 +809,37 @@ const COAST_MAX_DEPTH = 20; // fixed border: max total coast depth per edge, in 
 const COAST_SAND_CELLS = 2; // sand layer thickness, fixed (thin)
 const COAST_GRASS_CELLS = 2; // grass layer thickness, fixed (thin)
 const COAST_SEED_OFFSET = 77777; // own RNG stream: island generation (caves/noise/grey/nuggets) is untouched for a given seed
+// v157 bottom ocean (Sam, 2026-11-05): 5x the ocean at the bottom, so
+// the starter (on the bottom beach) sits further north in the map and
+// appears closer to the top of the screen at start, with a wide blue
+// band below it. Ocean = total - 4, so 5x ocean means total = 4 + 5x.
+// Capped at 60% of rows, so a small map can't become all ocean —
+// the interior is preserved, just shorter. Top/left/right are unchanged.
+const BOTTOM_OCEAN_MULT = 5;
+const BOTTOM_COAST_MAX_FRAC = 0.6;
+// v157 tile overdraw: each cell is drawn 0.5 world px larger on every
+// side, so neighbours overlap and seal the hairline seams that
+// fractional camera zoom leaves (black background showing through
+// between cells). Later cells paint over the overlap, so boundaries
+// stay where they were, to within half a world pixel.
+const TILE_OVERDRAW = 0.5;
+// Extra map rows added at the bottom for the 5x ocean (see newGame):
+// the ocean grows by 4x its original depth, so the map grows by
+// 4x the *largest* bottom ocean depth, and the interior north of the
+// beach keeps exactly its old size — the ocean eats no terrain.
+function bottomOceanExtraRows(seed, cols) {
+  const noise = makeNoise2D(mulberry32(seed + COAST_SEED_OFFSET));
+  const bottom = coastDepths(cols, noise, 0.71);
+  let maxOcean = 0;
+  for (let k = 0; k < bottom.length; k++) {
+    maxOcean = Math.max(maxOcean, bottom[k] - COAST_SAND_CELLS - COAST_GRASS_CELLS);
+  }
+  return Math.round((BOTTOM_OCEAN_MULT - 1) * maxOcean);
+}
+function fillCell(x, y) {
+  ctx.fillRect(x * CELL_PX - TILE_OVERDRAW, y * CELL_PX - TILE_OVERDRAW,
+               CELL_PX + 2 * TILE_OVERDRAW, CELL_PX + 2 * TILE_OVERDRAW);
+}
 const OCEAN_SHADES = [ // v123: lighter sky blue, centred on the XP orb
   // color (#7dd3fc, shade 2) — light -> dark, so water reads as water,
   // not as the player's deeper blue or the flood's blue
@@ -857,6 +888,11 @@ function coastMask(cols, rows, seed) {
   const noise = makeNoise2D(mulberry32(seed + COAST_SEED_OFFSET));
   const top = coastDepths(cols, noise, 0.13);
   const bottom = coastDepths(cols, noise, 0.71);
+  // v157: 5x bottom ocean, capped at 60% of rows (see constants above).
+  const bottomCap = Math.max(COAST_MAX_DEPTH, Math.floor(rows * BOTTOM_COAST_MAX_FRAC));
+  for (let k = 0; k < bottom.length; k++) {
+    bottom[k] = Math.min(4 + BOTTOM_OCEAN_MULT * (bottom[k] - COAST_SAND_CELLS - COAST_GRASS_CELLS), bottomCap);
+  }
   const left = coastDepths(rows, noise, 0.29);
   const right = coastDepths(rows, noise, 0.87);
   for (let y = 0; y < rows; y++) {
@@ -1792,6 +1828,14 @@ function newGame() {
   const seedStr = inSeed.value.trim();
   const seed = seedStr === '' ? (Math.random() * 1e9) | 0 : parseInt(seedStr, 10) || 0;
   const rng = mulberry32(seed);
+  // v157: grow the map southward for the 5x bottom ocean, before any
+  // cell array is allocated. cfg.rows is the *panel* size (inRows
+  // stays untouched, so the next run adds the same extra again —
+  // no runaway); the extra rows are all ocean, so the interior
+  // keeps its old size and the starter keeps its old distance from
+  // the top, while the map centre moves south and the starter
+  // appears closer to the top of the screen at start.
+  cfg.rows += bottomOceanExtraRows(seed, cfg.cols);
 
   const n = cfg.cols * cfg.rows;
   const cells = new Uint8Array(n);
@@ -1808,7 +1852,7 @@ function newGame() {
   S = { cells, hp, maxhp, hitBy, popT, popAmp, popCol, popDX, popDY, projs: [], xp: 0, level: 1, pending: 0,
         freqMult: 1, paused: false, frame: 0, seed, shade, goldNug, autoCam: prevAutoCam,
         // v154: which placement types are in the bottom bar. Start
-        // unlocked are Cannon/Outpost/Wall (if enabled on the start
+        // unlocked is Cannon only (v156, if enabled on the start
         // screen); the rest join when an XP unlock card is picked.
         unlocked: Object.fromEntries(PLACEBAR_TYPES.map(t => [t, START_UNLOCKED.includes(t) && !(meta && meta.enabled && meta.enabled[t] === false)])),
         coins: [], floaters: [], gold: 0, chipPulse: 0, time: 0, lastBanked: banked,
@@ -1956,16 +2000,16 @@ function newGame() {
     const beachCells = [];
     for (let i = 0; i < n; i++) if (S.beach[i]) beachCells.push(i);
     // v155 bottom-only: spawn is always on the bottom beach — a
-    // beach cell in the bottom coast band (last 20 rows, the max
-    // coast depth), with x at least SPAWN_CORNER_MARGIN from either
-    // side edge, so the starter sits mid-bottom, never in a corner.
-    // This collapses the v152 second-nearest-edge filter to an
-    // x-margin along the bottom only. Fallback: if filtering empties
-    // the list (tiny custom maps), use the full beach list — a
-    // corner spawn beats no spawn.
+    // beach cell in the bottom coast band, with x at least
+    // SPAWN_CORNER_MARGIN from either side edge, so the starter sits
+    // mid-bottom, never in a corner. v157: the bottom band is now
+    // up to 60% of rows (5x ocean), not the old last-20-rows band.
+    // Fallback: if filtering empties the list (tiny custom maps),
+    // use the full beach list — a corner spawn beats no spawn.
+    const bottomBand = Math.max(COAST_MAX_DEPTH, Math.floor(cfg.rows * BOTTOM_COAST_MAX_FRAC));
     const bottomCells = beachCells.filter(i => {
       const x = i % cfg.cols, y = Math.floor(i / cfg.cols);
-      return y >= cfg.rows - 20 && x >= SPAWN_CORNER_MARGIN && x <= cfg.cols - 1 - SPAWN_CORNER_MARGIN;
+      return y >= cfg.rows - bottomBand && x >= SPAWN_CORNER_MARGIN && x <= cfg.cols - 1 - SPAWN_CORNER_MARGIN;
     });
     const spawnCells = bottomCells.length ? bottomCells : beachCells;
     if (spawnCells.length) {
@@ -4810,7 +4854,7 @@ function drawRockCell(x, y) {
     const oy = y * CELL_PX + CELL_PX / 2 + S.popDY[i] * push;
     ctx.fillRect(ox - s / 2, oy - s / 2, s, s);
   } else {
-    ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX);
+    fillCell(x, y);
   }
   // Gold nugget: a single circle per cell so clusters read as a group
   // of cells, not a clump within one cell.
@@ -4861,7 +4905,7 @@ function render() {
           const b = Math.round(BLUE_RGB[2] + (255 - BLUE_RGB[2]) * k);
           ctx.fillStyle = `rgb(${r},${g},${b})`;
         }
-        ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX);
+        fillCell(x, y);
       }
       else if (st === RED) {
         if (SURVIVAL) {
@@ -4878,14 +4922,14 @@ function render() {
           const b = Math.round(RED_RGB[2] + (255 - RED_RGB[2]) * k);
           ctx.fillStyle = `rgb(${r},${g},${b})`;
         }
-        ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX);
+        fillCell(x, y);
       }
       else if (st === EMPTY) {
         const sh = (S.ocean && S.ocean[i]) ? OCEAN_SHADES[S.shade[i] || 0] :
           (S.beach && S.beach[i]) ? BEACH_SHADES[S.shade[i] || 0] :
           (S.grass && S.grass[i]) ? GRASS_SHADES[S.shade[i] || 0] : CAVE_SHADES[S.shade[i] || 0];
         ctx.fillStyle = `rgb(${sh[0]},${sh[1]},${sh[2]})`;
-        ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX);
+        fillCell(x, y);
       }
       else if (S.popT[i] < 0) drawRockCell(x, y); // popped cells draw in the pass below
     }
@@ -5182,8 +5226,8 @@ function render() {
   if (!fogHidden) for (let y = vy0; y <= vy1; y++) {
     for (let x = vx0; x <= vx1; x++) {
       const f = S.fog[y * cfg.cols + x];
-      if (f === 2) { ctx.fillStyle = '#000'; ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX); }
-      else if (f === 1) { ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX); }
+      if (f === 2) { ctx.fillStyle = '#000'; fillCell(x, y); }
+      else if (f === 1) { ctx.fillStyle = 'rgba(0,0,0,0.5)'; fillCell(x, y); }
     }
   }
   // World border (v120): after the fog, so it stays visible even where
