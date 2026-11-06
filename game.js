@@ -853,6 +853,9 @@ function fillCell(x, y) {
 // but unused yet — a future Field/plowed-ground tile.
 // v160 (Sam, 2026-11-05): tiles are 16x16 (was 128x128), so each
 // tile pixel is one cell pixel — chunky and pixelated, not smooth.
+// v161 (Sam, 2026-11-05): tiles are 8x8 — each tile pixel is two
+// cell pixels, even more pixelated. NEAREST sampling at 8x8 is
+// lossy, so some tiles read blotchier than at 16x16; try-it by feel.
 // And the shade range is back: a tile on its own is too flat, the
 // old flat squares ran from a light shade to a dark one (ocean
 // light sky blue to deep blue). So the tile is tinted with the
@@ -865,7 +868,7 @@ const TILES = {};
 if (typeof Image !== 'undefined') {
   for (const name of TILE_NAMES) {
     const img = new Image();
-    img.src = 'assets/tiles/' + name + '.png?v=160';
+    img.src = 'assets/tiles/' + name + '.png?v=161';
     TILES[name] = img;
   }
 }
