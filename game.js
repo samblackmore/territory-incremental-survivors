@@ -849,29 +849,41 @@ function fillCell(x, y) {
 // false and the caller falls back to the old flat-colour fillCell,
 // so the game never depends on the tiles being ready. Team toggle
 // is honoured: the player tile is red when PLAYER_RED, blue
-// otherwise, and the flood tile is the opposite. Elevation shading
-// is preserved as a black overlay (shade 0-7 -> up to 0.35 alpha),
-// so a hill still reads as a hill in tile form. Soil is loaded
+// otherwise, and the flood tile is the opposite. Soil is loaded
 // but unused yet — a future Field/plowed-ground tile.
+// v160 (Sam, 2026-11-05): tiles are 16x16 (was 128x128), so each
+// tile pixel is one cell pixel — chunky and pixelated, not smooth.
+// And the shade range is back: a tile on its own is too flat, the
+// old flat squares ran from a light shade to a dark one (ocean
+// light sky blue to deep blue). So the tile is tinted with the
+// cell's old flat shade colour at TILE_TINT_ALPHA — texture shows
+// through, but the light/dark range is the old one. The ?v=160
+// on the file names busts the browser cache of the 128px tiles.
+const TILE_TINT_ALPHA = 0.5; // tint overlay alpha — the shade-range knob
 const TILE_NAMES = ['grass', 'sand', 'ocean', 'rock-brown', 'rock-grey', 'blue', 'red', 'soil'];
 const TILES = {};
 if (typeof Image !== 'undefined') {
   for (const name of TILE_NAMES) {
     const img = new Image();
-    img.src = 'assets/tiles/' + name + '.png';
+    img.src = 'assets/tiles/' + name + '.png?v=160';
     TILES[name] = img;
   }
 }
 function tileReady(img) { return !!(img && img.complete && img.naturalWidth > 0); }
-function drawCellTile(img, x, y, shade) {
+function drawCellTile(img, x, y, shade, tint) {
   if (!tileReady(img)) return false;
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(img, x * CELL_PX - TILE_OVERDRAW, y * CELL_PX - TILE_OVERDRAW,
                 CELL_PX + 2 * TILE_OVERDRAW, CELL_PX + 2 * TILE_OVERDRAW);
-  const s = shade || 0;
-  if (s > 0) {
-    ctx.fillStyle = 'rgba(0,0,0,' + (s * 0.05).toFixed(3) + ')';
+  if (tint) {
+    ctx.fillStyle = `rgba(${tint[0]},${tint[1]},${tint[2]},${TILE_TINT_ALPHA})`;
     fillCell(x, y);
+  } else {
+    const s = shade || 0;
+    if (s > 0) {
+      ctx.fillStyle = 'rgba(0,0,0,' + (s * 0.05).toFixed(3) + ')';
+      fillCell(x, y);
+    }
   }
   return true;
 }
@@ -4920,19 +4932,12 @@ function drawRockCell(x, y) {
     ctx.fillRect(ox - s / 2, oy - s / 2, s, s);
   } else {
     // v158: rock tile instead of a flat square, when loaded (survival
-    // only — main is frozen). Damage tint toward the last hitter is
-    // kept as an overlay, so a chipped rock still reads as damaged.
+    // only — main is frozen).
     const rockTile = S.cells[i] === GREY ? TILES['rock-grey'] : TILES['rock-brown'];
-    if (!SURVIVAL || !drawCellTile(rockTile, x, y, S.shade[i] || 0)) fillCell(x, y);
-    else {
-      const max = S.maxhp[i] || 3, hpv = S.hp[i];
-      if (hpv < max) {
-        const ac = S.hitBy[i] === RED ? RED_RGB : BLUE_RGB;
-        const k = (1 - hpv / max) * 0.5;
-        ctx.fillStyle = `rgba(${ac[0]},${ac[1]},${ac[2]},${k.toFixed(3)})`;
-        fillCell(x, y);
-      }
-    }
+    // v160: tint with the cell's own flat colour (HP + damage tint
+    // already in c), so a chipped rock still reads as damaged and
+    // the light/dark HP range is back. No separate damage overlay.
+    if (!SURVIVAL || !drawCellTile(rockTile, x, y, S.shade[i] || 0, c)) fillCell(x, y);
   }
   // Gold nugget: a single circle per cell so clusters read as a group
   // of cells, not a clump within one cell.
@@ -4970,7 +4975,7 @@ function render() {
       if (st === BLUE) {
         // v158: player territory tile (red on survival, blue if the
         // team toggle is flipped); falls back to the flat colour.
-        if (SURVIVAL && drawCellTile(PLAYER_RED ? TILES.red : TILES.blue, x, y, S.shade[i] || 0)) continue;
+        if (SURVIVAL && drawCellTile(PLAYER_RED ? TILES.red : TILES.blue, x, y, S.shade[i] || 0, PLAYER_SHADES[S.shade[i] || 0])) continue;
         if (SURVIVAL) {
           // Painterly field: uniform player color in the cell's
           // elevation shade (same S.shade it had as grass). No
@@ -4990,7 +4995,7 @@ function render() {
       }
       else if (st === RED) {
         // v158: flood tile — the opposite hue to the player tile.
-        if (SURVIVAL && drawCellTile(PLAYER_RED ? TILES.blue : TILES.red, x, y, S.shade[i] || 0)) continue;
+        if (SURVIVAL && drawCellTile(PLAYER_RED ? TILES.blue : TILES.red, x, y, S.shade[i] || 0, FLOOD_SHADES[S.shade[i] || 0])) continue;
         if (SURVIVAL) {
           // Painterly flood: uniform flood color in the cell's
           // elevation shade. No HP gradient: flood has no HP anymore,
@@ -5013,7 +5018,10 @@ function render() {
         if (SURVIVAL) {
           const groundTile = (S.ocean && S.ocean[i]) ? TILES.ocean :
             (S.beach && S.beach[i]) ? TILES.sand : TILES.grass;
-          if (drawCellTile(groundTile, x, y, S.shade[i] || 0)) continue;
+          const groundTint = (S.ocean && S.ocean[i]) ? OCEAN_SHADES[S.shade[i] || 0] :
+            (S.beach && S.beach[i]) ? BEACH_SHADES[S.shade[i] || 0] :
+            (S.grass && S.grass[i]) ? GRASS_SHADES[S.shade[i] || 0] : CAVE_SHADES[S.shade[i] || 0];
+          if (drawCellTile(groundTile, x, y, S.shade[i] || 0, groundTint)) continue;
         }
         const sh = (S.ocean && S.ocean[i]) ? OCEAN_SHADES[S.shade[i] || 0] :
           (S.beach && S.beach[i]) ? BEACH_SHADES[S.shade[i] || 0] :
