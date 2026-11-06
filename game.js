@@ -2075,10 +2075,42 @@ function newGame() {
   // Rescue note: grass/beach open ground is one big EMPTY component,
   // so rescue sites may now sit in open ground there, not only in
   // cliff caves — pickRescueSites' fallback already covers that.
+  // v164 (Sam, 2026-11-06): three fixes from his screenshot —
+  // (1) grass islands are BIGGER: fill 0.42 -> 0.48, and any grass
+  // rock island smaller than BIOME_MIN_ISLAND cells is removed, so
+  // the speckle goes and the islands read as large;
+  // (2) the top beach gets islands too, at the size the grass ones
+  // were in v163 (fill 0.42) — small islands, fewer of them than
+  // the grass band has;
+  // (3) the biome edges are no longer straight horizontal lines:
+  // each boundary wanders by up to BIOME_EDGE_WANDER cells along x
+  // (Perlin), and inside a BIOME_TRANSITION-wide zone around it
+  // the two biomes are dithered by noise, so the edge is ragged
+  // with fingers of each biome crossing it instead of a hard line.
   if (SURVIVAL) {
     const H = cfg.rows;
-    const grassRock = genCaves(cfg.cols, cfg.rows, 0.42, rng); // large blobs
-    const beachRock = genCaves(cfg.cols, cfg.rows, 0.25, rng); // small blobs
+    const BIOME_GRASS_FILL = 0.45, BIOME_BEACH_FILL = 0.42;
+    const BIOME_EDGE_WANDER = 12, BIOME_TRANSITION = 8, BIOME_MIN_ISLAND = 6;
+    const grassRock = genCaves(cfg.cols, cfg.rows, BIOME_GRASS_FILL, rng);
+    const beachRock = genCaves(cfg.cols, cfg.rows, BIOME_BEACH_FILL, rng);
+    const edgeNoise = makeNoise2D(mulberry32(seed + 99991));
+    const ditherNoise = makeNoise2D(mulberry32(seed + 99992));
+    // Wander is capped so the two boundaries can never cross, even
+    // on a short map (bands are 0.25H tall).
+    const wander = Math.min(BIOME_EDGE_WANDER, H * 0.06);
+    const b1 = x => H * 0.25 + (edgeNoise(x * 0.06, 0.31) - 0.5) * 2 * wander;
+    const b2 = x => H * 0.50 + (edgeNoise(x * 0.06, 0.73) - 0.5) * 2 * wander;
+    const biomeAt = (x, y) => {
+      const t = BIOME_TRANSITION;
+      const dither = (d, lower, upper) => {
+        if (d < -t) return upper;
+        if (d > t) return lower;
+        const p = (d + t) / (2 * t); // 0 at top of zone, 1 at bottom
+        return ditherNoise(x * 0.25, y * 0.25) < p ? lower : upper;
+      };
+      if (dither(y - b1(x), 'grass', 'beach') === 'beach') return 'beach';
+      return dither(y - b2(x), 'cliff', 'grass');
+    };
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < cfg.cols; x++) {
         const i = y * cfg.cols + x;
@@ -2087,7 +2119,8 @@ function newGame() {
         // never become a biome rock island with its coast flag left
         // on — that was a sand cell turned WHITE with S.beach set.
         if (S.ocean[i] || S.beach[i] || S.grass[i]) continue;
-        if (y < H * 0.25) { // top beach biome
+        const band = biomeAt(x, y);
+        if (band === 'beach') { // top beach biome
           if (beachRock[i]) {
             cells[i] = WHITE;
             const m = 3 + Math.round(norm(raw[i]) * 7);
@@ -2096,7 +2129,7 @@ function newGame() {
             cells[i] = EMPTY; hp[i] = 0; maxhp[i] = 0; goldNug[i] = 0;
             S.beach[i] = 1;
           }
-        } else if (y < H * 0.50) { // grass biome
+        } else if (band === 'grass') { // grass biome
           if (grassRock[i]) {
             cells[i] = WHITE;
             const m = 3 + Math.round(norm(raw[i]) * 7);
@@ -2104,6 +2137,39 @@ function newGame() {
           } else {
             cells[i] = EMPTY; hp[i] = 0; maxhp[i] = 0; goldNug[i] = 0;
             S.grass[i] = 1;
+          }
+        }
+      }
+    }
+    // Grass speckle removal: flood-fill the WHITE cells in the grass
+    // band and delete any rock island smaller than BIOME_MIN_ISLAND
+    // cells, so the grass biome is open grass plus a few large
+    // islands. Beach islands are left alone — small is what Sam
+    // wants there.
+    {
+      const seen = new Uint8Array(n);
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < cfg.cols; x++) {
+          const i = y * cfg.cols + x;
+          if (seen[i] || cells[i] !== WHITE || S.ocean[i] || S.beach[i] || S.grass[i]) continue;
+          if (biomeAt(x, y) !== 'grass') continue;
+          const comp = [i]; seen[i] = 1;
+          for (let head = 0; head < comp.length; head++) {
+            const cur = comp[head], cx = cur % cfg.cols, cy = Math.floor(cur / cfg.cols);
+            for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+              const nx = cx + dx, ny = cy + dy;
+              if (nx < 0 || ny < 0 || nx >= cfg.cols || ny >= H) continue;
+              const ni = ny * cfg.cols + nx;
+              if (seen[ni] || cells[ni] !== WHITE || S.ocean[ni] || S.beach[ni] || S.grass[ni]) continue;
+              if (biomeAt(nx, ny) !== 'grass') continue;
+              seen[ni] = 1; comp.push(ni);
+            }
+          }
+          if (comp.length < BIOME_MIN_ISLAND) {
+            for (const ci of comp) {
+              cells[ci] = EMPTY; hp[ci] = 0; maxhp[ci] = 0; goldNug[ci] = 0;
+              S.grass[ci] = 1;
+            }
           }
         }
       }
