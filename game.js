@@ -541,12 +541,12 @@ const START_ZOOM_MULT = 3; // v119: start zoom = 3x the full-map zoom (tunable; 
 // level-up screen; placements live in an always-visible bottom bar,
 // gold-gated, tap icon then tap map. Units start unlocked or are
 // unlocked by an XP-row card (VS-style), then bought with gold.
-// Start unlocked, per Sam: Cannon (starter weapon), Outpost and Wall
-// from the very beginning; Field, Digger, Harvester, Laser, Waypoint
-// are unlock cards (Harvester is the nice-to-have). Start-screen
+// v156 (Sam, 2026-11-05): the start-unlocked special rule is removed —
+// you only start with the Cannon. Outpost and Wall are unlock cards
+// too, like Field, Digger, Harvester, Laser, Waypoint. Start-screen
 // toggles still filter the run: a toggled-off type never unlocks.
-const START_UNLOCKED = ['cannon', 'lantern', 'wall'];
-const UNLOCKABLE = ['bloom', 'mole', 'gather', 'laser', 'waypoint'];
+const START_UNLOCKED = ['cannon'];
+const UNLOCKABLE = ['lantern', 'wall', 'bloom', 'mole', 'gather', 'laser', 'waypoint'];
 const PLACEBAR_TYPES = ['cannon', 'lantern', 'wall', 'bloom', 'mole', 'gather', 'laser', 'waypoint'];
 // v153 auto-cam try-it (Sam, 2026-11-04): a toggleable, slow, north-only
 // follow camera. It never moves south, never changes zoom, never kills
