@@ -500,15 +500,20 @@ let dpr = 1;
 const cam = { x: 0, y: 0, zoom: 1 }; // x/y: world px at screen center; zoom: CSS px per world px
 
 function minZoom() {
-  // Outermost zoom: the whole map fits on screen (width binds on portrait
-  // phones, height on landscape). Portrait pays for the overview with bars
-  // above/below; pinch in for the cropped, bar-free view.
+  // v168: the outermost zoom is set by WIDTH only — the board
+  // exactly fills the screen width, no further out. The old rule
+  // (the whole map fits, min of width/height) let a portrait phone
+  // zoom out until the whole tall map fit vertically, leaving the
+  // board a narrow strip with black bars on the sides and far too
+  // much map on screen at once — you lose control of it. Now the
+  // board is always full-width and solid; you pan north/south to
+  // see the rest of the climb.
   if (!view.w || !view.h || !cfg.cols) return 1;
-  return Math.min(view.w / (cfg.cols * CELL_PX), view.h / (cfg.rows * CELL_PX));
+  return view.w / (cfg.cols * CELL_PX);
 }
 function resetCamera(zoomMult = 1, cx = null, cy = null) {
-  // Default (no args): fully zoomed out, whole map, centered — the
-  // finish-reveal and the harness camera tests use this.
+  // Default (no args): fully zoomed out, board fills the width,
+  // centered — the finish-reveal and the harness camera tests use this.
   // New games (v119) pass zoomMult = START_ZOOM_MULT with the starter's
   // world center, so the run starts zoomed in on the starting unit
   // instead of the full-map overview. clampCamera pins the center to
@@ -2495,7 +2500,7 @@ const FLOOD_SWEEP_START = 1200; // 20 min run time: the sweeping cannon joins th
 // stops — no storms, no lulls, no breather. Single staggered shots
 // from the south only (single columns at random x, like rain, not a
 // simultaneous row), at floodWaveInterval(), which ramps from 5s
-// and halves every 3 min of attack time, floored at 0.2s. From
+// and halves every 90s of attack time, floored at 0.1s. From
 // 20:00 the sweeping cannon joins, also from the south, also
 // continuous. The flood spread still creeps on its own clock the
 // whole time, storm or not — waiting it out never worked, and now
@@ -2515,13 +2520,25 @@ const FLOOD_SWEEP_RATE = Math.PI / 2; // rad/s the sweep rotates (90 deg/s)
 // going bottom-up — not a simultaneous row across the whole border.
 // Interval starts long (one shot every 5s when the attack starts
 // at 1:00) and gets gradually faster as attack time grows: it
-// halves every 3 minutes of attack time (5s at 1:00, 2.5s at 4:00,
-// 1.25s at 7:00, 0.63s at 10:00, 0.31s at 13:00), floored at 0.2s
-// (~5 shots/s). There is no breather anymore — the ramp is the
-// pressure.
+// halves every 90 seconds of attack time (v168: was 3 min — Sam:
+// keep the starting frequency, but ramp much faster, so it feels
+// like bullet hell by 7 minutes). 5s at 1:00, 2.5s at 2:30,
+// 1.25s at 4:00, 0.63s at 5:30, 0.31s at 7:00, 0.16s at 8:30,
+// floored at 0.1s (~10 shots/s) from about 9:30. There is no
+// breather anymore — the ramp is the pressure.
+// Napkin math (60-col board): a shot flies north at 8 cells/s and
+// dies on the first rock/turret/territory it hits — early on that
+// is the cliff after ~40 cells of open ocean/beach, so a shot lives
+// ~5s. Concurrent shots ≈ rate × lifetime: ~1 on screen at 1:00,
+// ~4 at 4:00, ~16 at 7:00, ~32 at 8:30, ~50 at 10:00 (and more
+// later, as dug channels and flood-painted ground let shots fly
+// further). At 10 shots/s over 60 columns, each column takes a
+// shot about every 6s. The old ramp (half-life 180s, floor 0.2s)
+// gave ~4 on screen at 7:00 and ~8 at 10:00 — that is why it
+// still felt gentle.
 const FLOOD_WAVE_FIRST_INTERVAL = 5;
-const FLOOD_WAVE_MIN_INTERVAL = 0.2;
-const FLOOD_WAVE_RAMP_HALF_LIFE = 180; // seconds of attack time to halve the interval
+const FLOOD_WAVE_MIN_INTERVAL = 0.1;
+const FLOOD_WAVE_RAMP_HALF_LIFE = 90; // seconds of attack time to halve the interval
 function floodWaveInterval() {
   const t = Math.max(0, S.time - FLOOD_GRACE_DUR);
   return Math.max(FLOOD_WAVE_MIN_INTERVAL,
