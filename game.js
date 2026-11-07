@@ -4012,9 +4012,13 @@ document.getElementById('diveagain').addEventListener('click', () => {
 // Placement: the chosen turret clears its own 1-cell pad and goes live.
 // Wall: a 2x2 defensive barrier (GREY terrain, not a turret). Flood
 // chews through it like rock (20 hits per cell at flood dmg 1), so it
-// slows the flood rather than stopping it forever. Flat 2 gold —
-// walls aren't turrets, so unitCost never escalates them.
-const WALL_HP = 200;
+// slows the flood rather than stopping it forever. v169: 200 -> 20
+// (Sam: at 200 HP a 2-gold wall cell absorbed 200 shots, so the
+// threat was trivially blocked — at 20 HP a cell lasts ~2 min of
+// fire in its column at the 10/s rate, so walls buy time, not
+// forever). Flat 2 gold — walls aren't turrets, so unitCost never
+// escalates them.
+const WALL_HP = 20;
 const WALL_SHADE = 3; // mid grey ([107,114,128]) — reads as stone, distinct from natural grey variation
 // Survival placement: units go near your base, not anywhere lit.
 // (Matches fogDist, so an outpost extends the placeable range by 6.)
