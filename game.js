@@ -2520,22 +2520,26 @@ const FLOOD_SWEEP_RATE = Math.PI / 2; // rad/s the sweep rotates (90 deg/s)
 // Interval starts long (one shot every 5s when the attack starts
 // at 1:00) and gets gradually faster as attack time grows: it
 // halves every 60 seconds of attack time (v170: was 90s in v168,
-// 180s before that — Sam: keep the starting frequency, but ramp
-// faster still, so it feels like bullet hell by 7 minutes). 5s at
-// 1:00, 2.5s at 2:00, 1.25s at 3:00, 0.63s at 4:00, 0.31s at
-// 5:00, 0.16s at 6:00, floored at 0.1s (~10 shots/s) from about
-// 6:40. There is no breather anymore — the ramp is the pressure.
+// 180s before that). 5s at 1:00, 2.5s at 2:00, 1.25s at 3:00,
+// 0.63s at 4:00, 0.31s at 5:00, 0.16s at 6:00, 0.078s at 7:00,
+// 0.039s at 8:00, floored at 0.01s (~100 shots/s) from about
+// 9:58 (v172: was 0.1s — Sam: walls only matter early, you can
+// burrow into a cave with a Digger and be safe far from the front,
+// so the threat has to come as bullet hell; go crazy). There is no
+// breather anymore — the ramp is the pressure.
 // Napkin math (60-col board): a shot flies north at 8 cells/s and
 // dies on the first rock/turret/territory it hits — early on that
 // is the cliff after ~40 cells of open ocean/beach, so a shot lives
 // ~5s. Concurrent shots ≈ rate × lifetime: ~1 on screen at 1:00,
 // ~2 at 2:00, ~4 at 3:00, ~8 at 4:00, ~16 at 5:00, ~32 at 6:00,
-// ~50 at 7:00 (and more later, as dug channels and flood-painted
-// ground let shots fly further). At 10 shots/s over 60 columns,
-// each column takes a shot about every 6s. The v168 ramp
-// (half-life 90s) gave ~16 on screen at 7:00 and ~50 at 10:00.
+// ~64 at 7:00, ~128 at 8:00, ~500 at 10:00 (and more later, as dug
+// channels and flood-painted ground let shots fly further). At
+// 100 shots/s over 60 columns, each column takes a shot about
+// every 0.6s, so a 20-HP wall cell lasts ~12s of fire in its
+// column at the cap. The 0.1s floor (v170) capped at ~50 on
+// screen from ~6:40.
 const FLOOD_WAVE_FIRST_INTERVAL = 5;
-const FLOOD_WAVE_MIN_INTERVAL = 0.1;
+const FLOOD_WAVE_MIN_INTERVAL = 0.01;
 const FLOOD_WAVE_RAMP_HALF_LIFE = 60; // seconds of attack time to halve the interval
 function floodWaveInterval() {
   const t = Math.max(0, S.time - FLOOD_GRACE_DUR);
@@ -2860,7 +2864,12 @@ function floodTick(dt) {
     f.sweep += FLOOD_SWEEP_RATE * dt;
   }
   f.waveT -= dt;
-  if (f.waveT <= 0) { f.waveT += floodWaveInterval(); floodFireWave(); }
+  // v172: while, not if — once the interval drops below one frame
+  // (~16.7ms at 60fps), a single shot per frame would cap the rate
+  // at ~60/s no matter how low the floor goes. The loop fires every
+  // shot the elapsed time owes, so the 0.01s floor really means
+  // ~100/s. At most ~5 shots per frame (dt clamps at 0.05s).
+  while (f.waveT <= 0) { f.waveT += floodWaveInterval(); floodFireWave(); }
 }
 
 // Meteor shower (v116): periodic terrain reshuffle, even during the
