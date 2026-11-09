@@ -334,6 +334,30 @@
   #levelup.mapview { background: transparent; pointer-events: none; }
   #levelup.mapview .cards { display: none; }
   #levelup.mapview #lvviewmap { pointer-events: auto; }
+  /* Rescue discovery celebration (v177): same dark overlay + rain as
+     the level-up screen, but civilian pink. Tap anywhere to continue. */
+  #rescueceleb {
+    position: fixed; inset: 0;
+    background: rgba(5, 8, 15, 0.78);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 20; cursor: pointer;
+  }
+  #rescueceleb.hidden { display: none; }
+  #rescuefx {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+  }
+  #rescueceleb .rescue-text { position: relative; z-index: 1; text-align: center; pointer-events: none; padding: 0 20px; }
+  #rescueceleb h2 {
+    color: #f472b6;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin: 0 0 14px;
+    text-shadow: 0 2px 12px rgba(244, 114, 182, .4);
+    font-size: 28px;
+  }
+  #rescueceleb p { color: var(--text); opacity: .8; font-size: 16px; margin: 0; }
   /* Pre-game start screen */
   #startscreen {
     position: fixed; inset: 0;
@@ -696,6 +720,16 @@
   </div>
 </div>
 
+<!-- Rescue discovery celebration (v177): dark overlay + pink confetti,
+     title "X / Y civilians rescued in Z biome", tap anywhere to continue. -->
+<div id="rescueceleb" class="hidden">
+  <canvas id="rescuefx"></canvas>
+  <div class="rescue-text">
+    <h2 id="rescuetitle"></h2>
+    <p id="rescuesub">tap to continue</p>
+  </div>
+</div>
+
 <div id="runover" class="hidden">
   <div class="cards">
     <h2>Run over</h2>
@@ -713,6 +747,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=176"></script>
+<script src="game.js?v=177"></script>
 </body>
 </html>

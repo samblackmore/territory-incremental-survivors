@@ -276,6 +276,13 @@ if (lvviewmap) lvviewmap.addEventListener('click', () => {
 });
 const lvfx = document.getElementById('lvfx');
 const lvctx = lvfx ? lvfx.getContext('2d') : null;
+// Rescue discovery celebration (v177): dark overlay + pink confetti.
+const rescueOverlay = document.getElementById('rescueceleb');
+const rescueFx = document.getElementById('rescuefx');
+const rescueCtx = rescueFx ? rescueFx.getContext('2d') : null;
+const rescueTitle = document.getElementById('rescuetitle');
+// Tap anywhere on the celebration overlay to continue (closes it).
+if (rescueOverlay) rescueOverlay.addEventListener('click', closeRescueCelebration);
 // Minimap: black + one pixel per red/blue bloom cell, top-right.
 const minimap = document.getElementById('minimap');
 const mmctx = minimap ? minimap.getContext('2d') : null;
@@ -435,34 +442,47 @@ function drawMinimap() {
   if (mmRed) mmRed.textContent = Math.round((PLAYER_RED ? blue : red) / total * 100) + '%';
 }
 // Celebration particles pouring down from the XP bar while cards show.
+// Celebration particles: spawn from the top strip and rain down with
+// gravity, fading out. Shared by the level-up screen (blue rain) and
+// the rescue discovery celebration (civilian pink rain, v177).
 const lvParticles = [];
-function stepLvParticles(dt) {
-  if (!lvctx || overlay.classList.contains('hidden')) { lvParticles.length = 0; return; }
-  const w = lvfx.width = (typeof innerWidth !== 'undefined' ? innerWidth : 800),
-        h = lvfx.height = (typeof innerHeight !== 'undefined' ? innerHeight : 600);
+const rescueParticles = [];
+function stepFxParticles(list, fctx, fcanvas, visible, colors, dt) {
+  if (!fctx || !visible) { list.length = 0; return; }
+  const w = fcanvas.width = (typeof innerWidth !== 'undefined' ? innerWidth : 800),
+        h = fcanvas.height = (typeof innerHeight !== 'undefined' ? innerHeight : 600);
   // Spawn: ~90/s from the XP bar strip at the top.
   const spawn = Math.round(90 * dt);
   for (let k = 0; k < spawn; k++) {
-    lvParticles.push({
+    list.push({
       x: Math.random() * w, y: 30 + Math.random() * 8,
       vx: (Math.random() - 0.5) * 40, vy: 30 + Math.random() * 60,
       r: 1.5 + Math.random() * 2.5, life: 0, max: 1.2 + Math.random() * 0.8,
-      col: ['#5aa2ff', '#7dd3fc', '#2f6fe4', '#a5d8ff'][Math.floor(Math.random() * 4)],
+      col: colors[Math.floor(Math.random() * colors.length)],
     });
   }
-  lvctx.clearRect(0, 0, w, h);
-  for (let i = lvParticles.length - 1; i >= 0; i--) {
-    const p = lvParticles[i];
+  fctx.clearRect(0, 0, w, h);
+  for (let i = list.length - 1; i >= 0; i--) {
+    const p = list[i];
     p.life += dt;
-    if (p.life >= p.max || p.y > h) { lvParticles.splice(i, 1); continue; }
+    if (p.life >= p.max || p.y > h) { list.splice(i, 1); continue; }
     p.vy += 120 * dt; // gravity
     p.x += p.vx * dt; p.y += p.vy * dt;
     const a = 1 - p.life / p.max;
-    lvctx.globalAlpha = a;
-    lvctx.fillStyle = p.col;
-    lvctx.beginPath(); lvctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); lvctx.fill();
+    fctx.globalAlpha = a;
+    fctx.fillStyle = p.col;
+    fctx.beginPath(); fctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); fctx.fill();
   }
-  lvctx.globalAlpha = 1;
+  fctx.globalAlpha = 1;
+}
+function stepLvParticles(dt) {
+  stepFxParticles(lvParticles, lvctx, lvfx, !overlay.classList.contains('hidden'),
+                  ['#5aa2ff', '#7dd3fc', '#2f6fe4', '#a5d8ff'], dt);
+}
+function stepRescueParticles(dt) {
+  stepFxParticles(rescueParticles, rescueCtx, rescueFx,
+                  !!(rescueOverlay && !rescueOverlay.classList.contains('hidden')),
+                  ['#f472b6', '#ec4899', '#f9a8d4', '#be185d'], dt);
 }
 const placebanner = document.getElementById('placebanner');
 const placeswap = document.getElementById('placeswap');
@@ -826,6 +846,15 @@ function bottomOceanExtraRows(seed, cols) {
 function fillCell(x, y) {
   ctx.fillRect(x * CELL_PX - TILE_OVERDRAW, y * CELL_PX - TILE_OVERDRAW,
                CELL_PX + 2 * TILE_OVERDRAW, CELL_PX + 2 * TILE_OVERDRAW);
+}
+// v177: exact-size fill (no overdraw) — for the half-fog overlay only.
+// The 50% black of adjacent half-fog cells overlaps by a pixel each
+// side, and the overlap composites darker (0.75), drawing a grid over
+// every half-fogged edge. Exact squares tile with no overlap, so the
+// half-fog reads as one flat dim. Full fog stays overdrawn (opaque
+// black: the overlap is invisible and it still seals the seams).
+function fillCellExact(x, y) {
+  ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX, CELL_PX);
 }
 // v158 terrain tiles (Sam, 2026-11-05): pixel-art tiles in the style
 // of his reference image, generated as a clean 4x2 sheet and cropped
@@ -1492,12 +1521,28 @@ function flagValid(t) {
   return true;
 }
 // ---- Rescue sites (survival only) ----
-// Pick RESCUE_SITES pockets, 1-5 civilians each (capped by pocket size).
-// One site per separate pocket first (spread across the map), then extra
-// sites in already-used pockets, then home-pocket cells as a last resort
-// — so a run always has 3 sites, even on a map with no separate pockets.
-// Uses the map-gen rng (same seed -> same sites); cells themselves are
-// untouched, so the map stays identical to main for the same seed.
+// Biome of a cell, for rescue sites (v177). Beach/grass come from
+// the biome flags; unflagged land is cliff; ocean is water. The
+// bottom coast's sand/grass ring carries the same flags as the
+// biome bands, so a row split separates them: the beach band ends
+// ~0.31H down and the coast starts ~0.4H down, so beach cells are
+// above 0.36H and grass-band cells above 0.4H; anything flagged
+// below that is coast, never a rescue biome.
+function rescueBiomeAt(x, y) {
+  const i = y * cfg.cols + x;
+  if (S.ocean && S.ocean[i]) return 'ocean';
+  if (S.beach && S.beach[i]) return y < cfg.rows * 0.36 ? 'beach' : 'coast';
+  if (S.grass && S.grass[i]) return y < cfg.rows * 0.4 ? 'grass' : 'coast';
+  return 'cliff';
+}
+// Pick RESCUE_SITES_PER_BIOME sites per biome (cliff, grass, beach),
+// 1-5 civilians each (capped by pocket size). One site per separate
+// pocket-in-biome first (spread across the biome), then extra sites
+// in already-used pockets, then home-pocket cells as a last resort —
+// so a run always has up to 9 sites, even on a map with few separate
+// pockets. Uses the map-gen rng (same seed -> same sites); cells
+// themselves are untouched, so the map stays identical to main for
+// the same seed.
 function pickRescueSites(rng) {
   if (!SURVIVAL || !S || !S.cells) return;
   const W = cfg.cols, H = cfg.rows, n = W * H;
@@ -1538,18 +1583,9 @@ function pickRescueSites(rng) {
     if (!pockets.has(comp[i])) pockets.set(comp[i], []);
     pockets.get(comp[i]).push(i);
   }
-  const separate = [];
-  for (const [ci, cellsList] of pockets) {
-    if (ci !== homeComp) separate.push(cellsList);
-  }
-  // Shuffle pockets with the map rng (same seed -> same sites).
-  for (let i = separate.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    [separate[i], separate[j]] = [separate[j], separate[i]];
-  }
   const used = new Set(); // cell indices already holding a civilian
   const sites = [];
-  const addSite = (cellList) => {
+  const addSite = (cellList, biome) => {
     const avail = cellList.filter(i => !used.has(i));
     if (!avail.length) return false;
     for (let i = avail.length - 1; i > 0; i--) {
@@ -1566,30 +1602,60 @@ function pickRescueSites(rng) {
                                moveT: 1, stepT: 0, state: 'waiting', site: siteIdx,
                                counted: false, baseX: -1, baseY: -1 });
     }
-    sites.push({ x: anchor % W, y: Math.floor(anchor / W) });
+    // celebrated: set by newGame after computeFog — a site whose
+    // anchor is already clear at spawn was never hidden, so there
+    // is no discovery to celebrate.
+    sites.push({ x: anchor % W, y: Math.floor(anchor / W), biome, celebrated: false });
     return true;
   };
-  // One site per separate pocket first (spread across the map).
-  for (const pocket of separate) {
-    if (sites.length >= RESCUE_SITES) break;
-    addSite(pocket);
-  }
-  // Fallback: extra sites in already-used pockets (different cells),
-  // then home pocket cells, until we have 3 sites or run out of cells.
-  if (sites.length < RESCUE_SITES) {
-    for (const pocket of separate) {
-      if (sites.length >= RESCUE_SITES) break;
-      addSite(pocket);
+  // Per biome: pockets scoped to that biome's cells (a pocket can
+  // span a boundary, so each pocket contributes its cells-in-biome
+  // separately). Coast/ocean cells are never a rescue biome.
+  for (const biome of RESCUE_BIOMES) {
+    const inBiome = [];
+    for (const [ci, cellsList] of pockets) {
+      if (ci === homeComp) continue;
+      const sub = cellsList.filter(i => rescueBiomeAt(i % W, Math.floor(i / W)) === biome);
+      if (sub.length) inBiome.push(sub);
     }
-  }
-  if (sites.length < RESCUE_SITES && homeComp >= 0 && pockets.has(homeComp)) {
-    while (sites.length < RESCUE_SITES) {
-      if (!addSite(pockets.get(homeComp))) break;
+    // Shuffle pockets with the map rng (same seed -> same sites).
+    for (let i = inBiome.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      [inBiome[i], inBiome[j]] = [inBiome[j], inBiome[i]];
+    }
+    const biomeStart = sites.length;
+    // One site per separate pocket-in-biome first (spread across the biome).
+    for (const pocket of inBiome) {
+      if (sites.length - biomeStart >= RESCUE_SITES_PER_BIOME) break;
+      addSite(pocket, biome);
+    }
+    // Fallback: extra sites in already-used pockets (different cells),
+    // then home pocket cells in this biome, until we have 3 sites in
+    // this biome or run out of cells.
+    if (sites.length - biomeStart < RESCUE_SITES_PER_BIOME) {
+      for (const pocket of inBiome) {
+        if (sites.length - biomeStart >= RESCUE_SITES_PER_BIOME) break;
+        addSite(pocket, biome);
+      }
+    }
+    if (sites.length - biomeStart < RESCUE_SITES_PER_BIOME && homeComp >= 0 && pockets.has(homeComp)) {
+      const homeInBiome = pockets.get(homeComp).filter(i => rescueBiomeAt(i % W, Math.floor(i / W)) === biome);
+      while (sites.length - biomeStart < RESCUE_SITES_PER_BIOME) {
+        if (!addSite(homeInBiome, biome)) break;
+      }
     }
   }
   S.rescue.sites = sites;
   S.rescue.total = S.rescue.civilians.length;
   S.rescue.rescued = 0;
+  // Spawn totals per biome (for the discovery message's Y — the
+  // total number of civilians in that biome this run).
+  S.rescue.byBiome = {};
+  for (const b of RESCUE_BIOMES) S.rescue.byBiome[b] = 0;
+  for (const c of S.rescue.civilians) {
+    const b = (sites[c.site] || {}).biome;
+    if (b && S.rescue.byBiome[b] !== undefined) S.rescue.byBiome[b]++;
+  }
 }
 // Rescue target: a living BLUE Cannon or Outpost counts as base (Field,
 // Harvester, Digger, Laser do not — Sam's spec: cannon or outpost for
@@ -1656,6 +1722,70 @@ function rescueArrow() {
   const ty = dy !== 0 ? (dy > 0 ? (view.h - m - cy) / dy : (m - cy) / dy) : Infinity;
   const t = Math.min(tx, ty);
   return { x: cx + dx * t, y: cy + dy * t, angle: Math.atan2(dy, dx) };
+}
+// Rescue discovery celebration (v177): when a site's fog first clears
+// while civilians still wait there, make it a moment — pause the game,
+// lerp the camera to the cave, then show the dark overlay with pink
+// confetti and "X / Y civilians rescued in Z biome". Tap anywhere to
+// continue. One celebration per site (site.celebrated); sites whose
+// anchor was already clear at spawn are marked celebrated in newGame
+// and never celebrate.
+function siteBiome(si) {
+  const site = S.rescue && S.rescue.sites ? S.rescue.sites[si] : null;
+  if (!site) return 'cliff';
+  if (site.biome) return site.biome;
+  return rescueBiomeAt(site.x, site.y); // synthetic/legacy sites without a biome
+}
+function checkRescueDiscovery() {
+  if (!SURVIVAL || !S || !S.rescue || !S.rescue.sites || S.paused || S.runOver) return;
+  if (fogHidden) return; // x-ray debug: nothing is really discovered
+  if (S.rescueCeleb) return; // already celebrating one
+  for (let si = 0; si < S.rescue.sites.length; si++) {
+    const site = S.rescue.sites[si];
+    if (site.celebrated) continue;
+    const remaining = (S.rescue.civilians || []).some(c => c.site === si);
+    if (!remaining) { site.celebrated = true; continue; }
+    if (S.fog[site.y * cfg.cols + site.x] !== 0) continue; // still fogged
+    startRescueCelebration(si);
+    return; // one at a time; the next undiscovered site fires after this one closes
+  }
+}
+function startRescueCelebration(si) {
+  const site = S.rescue.sites[si];
+  site.celebrated = true;
+  const biome = siteBiome(si);
+  const inCave = (S.rescue.civilians || []).filter(c => c.site === si).length;
+  const inBiome = (S.rescue.byBiome && S.rescue.byBiome[biome] !== undefined)
+    ? S.rescue.byBiome[biome]
+    : (S.rescue.civilians || []).filter(c => siteBiome(c.site) === biome).length;
+  if (rescueTitle) rescueTitle.textContent =
+    `${inCave} / ${inBiome} civilians rescued in ${BIOME_NAMES[biome] || biome} biome`;
+  S.paused = true;
+  S.rescueCeleb = {
+    si, phase: 'lerp', t: 0, dur: 0.8,
+    x0: cam.x, y0: cam.y,
+    x1: (site.x + 0.5) * CELL_PX, y1: (site.y + 0.5) * CELL_PX,
+  };
+}
+function stepRescueCeleb(dt) {
+  const celeb = S && S.rescueCeleb;
+  if (!celeb || celeb.phase !== 'lerp') return;
+  celeb.t += dt;
+  const k = Math.min(celeb.t / celeb.dur, 1);
+  const e = k * k * (3 - 2 * k); // smoothstep: gentle start and stop
+  cam.x = celeb.x0 + (celeb.x1 - celeb.x0) * e;
+  cam.y = celeb.y0 + (celeb.y1 - celeb.y0) * e;
+  clampCamera();
+  if (k >= 1) {
+    celeb.phase = 'show';
+    if (rescueOverlay) rescueOverlay.classList.remove('hidden');
+  }
+}
+function closeRescueCelebration() {
+  if (!S || !S.rescueCeleb) return;
+  if (rescueOverlay) rescueOverlay.classList.add('hidden');
+  S.rescueCeleb = null;
+  S.paused = false;
 }
 // BFS next step toward the nearest base-adjacent cell (see isBaseAdjacent),
 // over EMPTY / own BLUE, turret cells blocked. Returns a direction index
@@ -1957,7 +2087,11 @@ function newGame() {
         placing: null, runOver: false,
         // rescue (survival only, populated by pickRescueSites below):
         // sites = anchor cells for the minimap ?, civilians walk home.
-        rescue: { sites: [], civilians: [], rescued: 0, total: 0 },
+        // byBiome = spawn totals per biome (for the discovery message).
+        rescue: { sites: [], civilians: [], rescued: 0, total: 0, byBiome: {} },
+        // Rescue discovery celebration (v177): camera lerp + overlay
+        // while a site is being celebrated; null otherwise.
+        rescueCeleb: null,
         // waypoints (survival shop only): gold aim markers, not turrets —
         // cannons orient to the nearest one (see cannon update).
         waypoints: [],
@@ -2347,9 +2481,15 @@ function newGame() {
       S.redBloomSpawned = true;
     }
   }
-  if (SURVIVAL) pickRescueSites(rng); // 3 cave pockets, 1-5 civilians each (see pickRescueSites)
+  if (SURVIVAL) pickRescueSites(rng); // 3 sites per biome, 1-5 civilians each (see pickRescueSites)
   startWave(1);
   computeFog();   // fog of war: fogDist on open ground, 3 into rock, around player units
+  // v177: a site whose anchor is already fog-clear at spawn was never
+  // hidden, so there is no discovery to celebrate — mark it celebrated
+  // so the rescue celebration never fires for it.
+  if (SURVIVAL && S.rescue) for (const site of S.rescue.sites) {
+    if (S.fog[site.y * cfg.cols + site.x] === 0) site.celebrated = true;
+  }
 
   resize();       // backing store = viewport x devicePixelRatio
   // v119: start zoomed in on the starting unit, not fully zoomed out.
@@ -2620,7 +2760,12 @@ const FLOOD_DIRS = ['north', 'south', 'west', 'east']; // edge the flood comes F
 // per second (Harvester pace) to the nearest Cannon or Outpost. They
 // never die in v112 (flood can trap them, painting them back out frees
 // them) — death/stakes are a later tuning call, not a v112 mechanic.
-const RESCUE_SITES = 3;
+// v177: 3 rescue sites per biome (cliff, grass, beach) — 9 total —
+// so a run forces you to climb through every biome to find them all.
+// Ocean/coast cells never hold a site.
+const RESCUE_SITES_PER_BIOME = 3;
+const RESCUE_BIOMES = ['cliff', 'grass', 'beach'];
+const BIOME_NAMES = { cliff: 'Cliff', grass: 'Grass', beach: 'Beach' };
 const CIV_MIN = 1;
 const CIV_MAX = 5;
 const CIV_STEP_DUR = 1.0; // seconds per civilian step — slow on purpose, like Harvester
@@ -5468,7 +5613,7 @@ function render() {
     for (let x = vx0; x <= vx1; x++) {
       const f = S.fog[y * cfg.cols + x];
       if (f === 2) { ctx.fillStyle = '#000'; fillCell(x, y); }
-      else if (f === 1) { ctx.fillStyle = 'rgba(0,0,0,0.5)'; fillCell(x, y); }
+      else if (f === 1) { ctx.fillStyle = 'rgba(0,0,0,0.5)'; fillCellExact(x, y); }
     }
   }
   // World border (v120): after the fog, so it stays visible even where
@@ -5924,12 +6069,15 @@ function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   if (!S.paused) update(dt);
+  stepRescueCeleb(dt); // camera swoop to a discovered cave (runs while paused)
+  checkRescueDiscovery(); // first fog-clear over a waiting site starts one
   render();
   S.frame++;
   if (S.frame % 2 === 0 || S.paused) updateHud(); // XP bar stays live
   if (S.frame % 6 === 0) drawMinimap(); // territory map, throttled
   if (S.frame % 30 === 0) checkWin(); // win check, throttled
   stepLvParticles(dt); // celebration rain while cards show (also when paused)
+  stepRescueParticles(dt); // pink rain while the rescue overlay shows
   requestAnimationFrame(frame);
 }
 
