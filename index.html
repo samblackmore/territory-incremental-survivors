@@ -388,8 +388,9 @@
     text-shadow: 0 2px 12px rgba(255, 215, 94, .35);
   }
   .cardrow { display: flex; gap: 12px; justify-content: center; }
-  /* Compact level-up cards: 3 per row on a phone (110px cards + 12px
-     gaps = 354px, fits even 360px-wide phones). Titles may wrap. */
+  /* Compact level-up cards: 4 in a row on desktop (110px cards + 12px
+     gaps = 476px); on phones they wrap 2x2 (130px cards, see the
+     max-width: 720px rule). Titles may wrap. */
   .card {
     width: 110px; height: 150px;
     background: linear-gradient(180deg, #27314d, #1a2138);
@@ -653,6 +654,7 @@
       <button class="card xpcard"></button>
       <button class="card xpcard"></button>
       <button class="card xpcard"></button>
+      <button class="card xpcard"></button>
     </div>
     <div class="shoplabel" id="shoplabel">Shop</div>
     <div class="cardrow" id="shoprow">
@@ -685,6 +687,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=170"></script>
+<script src="game.js?v=171"></script>
 </body>
 </html>

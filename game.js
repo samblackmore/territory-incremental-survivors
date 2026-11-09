@@ -46,7 +46,8 @@ const GATHER_COOLDOWN = 6;           // seconds between pulls (legacy interval f
 const OUTPOST_RANGE = 4;             // vacuum pull range in cells (Euclidean)
 const OUTPOST_PULL_COUNT = 3;        // pickups per pull (nearest first)
 const OUTPOST_PULL_EVERY = 4;        // seconds between pulls
-const OUTPOST_FLASH_DUR = 1.5;       // range ring flash duration on pull (s, same as original Gather)
+// v171: the pull range ring flash is gone (Sam) — no more circle
+// indicator on every Field/Outpost pull. The coins still fly in.
 // Field pull (v136, revived from the old Gather vacuum, now on Field):
 // pull up to pullCount nearest idle pickups within pullRadius cells
 // toward the Field itself, so it banks its own harvest. Base radius 3
@@ -1199,9 +1200,7 @@ function mkTurret(x, y, color, type) {
   }
   if (type === 'lantern') {
     // Outpost: stationary vacuum (see update loop lantern branch).
-    // coolT is the pull timer (already 0 above); showRange is the
-    // range-flash timer, fading after each pull.
-    t.showRange = 0;
+    // coolT is the pull timer (already 0 above).
   }
   return t;
 }
@@ -1909,7 +1908,7 @@ function newGame() {
         // waypoints (survival shop only): gold aim markers, not turrets —
         // cannons orient to the nearest one (see cannon update).
         waypoints: [],
-        // meteor shower (v116): idle -> warn (10s toast + minimap rings)
+        // meteor shower (v116): idle -> warn (10s minimap rings)
         // -> shower (staggered shrinking shadows -> impact) -> idle.
         // First warning starts 1–2 minutes in (v126: was 2–4), so the
         // first minute stays quiet for levelling, then showers break in.
@@ -2591,11 +2590,12 @@ const CIV_SETTLE_RADIUS = 2; // Manhattan distance from a base at which a civili
 //   Civilian cell -> skipped entirely (civilians never die, never buried).
 //   EMPTY cell with an idle coin -> skipped (coin would be buried and
 //     uncollectible; it stays, the cluster just has a gap there).
-// Toast shares wavebanner with the flood toast: meteorTick runs after
-// floodTick in update(), so during the 10s warning the meteor countdown
-// wins, and the flood toast returns the next frame after the warning
-// ends (meteorTick never hides wavebanner outside the warning phase).
-const METEOR_WARN_DUR = 10; // seconds of toast + minimap markers before the shower
+// v171: no toast anymore (Sam: the banner countdown was noise) — the
+// warning is the minimap rings for the full 10s, and the main-map
+// rings only in the last 5s (METEOR_WORLD_WARN_DUR), so the map stays
+// readable until impact is near. meteorTick never touches wavebanner.
+const METEOR_WARN_DUR = 10; // seconds of minimap markers before the shower
+const METEOR_WORLD_WARN_DUR = 5; // seconds before impact the main-map rings appear
 const METEOR_INTERVAL_MIN = 60; // 1 minute, random up to (v126: was 2 min — Sam wanted showers more frequent)
 const METEOR_INTERVAL_MAX = 120; // 2 minutes between showers (warning start to warning start)
 const METEOR_STAGGER = 0.7; // seconds between shadow appearances, one by one
@@ -2605,7 +2605,7 @@ const METEOR_SHADOW_R1 = 0.4; // cells, final shadow radius at impact
 const METEOR_CLUSTER_R2 = 4; // squared radius: dx*dx + dy*dy <= 4 (radius 2, 13 cells)
 const METEOR_TERRAIN_DMG = 10;
 const METEOR_UNIT_DMG = 3;
-const METEOR_ROCK_HP = 80;
+const METEOR_ROCK_HP = 20; // v171: was 80 — a landed rock took 80 cannon/flood hits to clear, like the old 200-HP walls; Sam: same as walls now (20)
 const METEOR_ROCK_SHADE = 5;
 // dir: 0 = from top, 1 = from bottom, 2 = from left, 3 = from right.
 // The emitter is a single point just outside the map on that edge —
@@ -2864,27 +2864,28 @@ function floodTick(dt) {
 }
 
 // Meteor shower (v116): periodic terrain reshuffle, even during the
-// attack. Runs after floodTick in update(), so the 10s warning
-// countdown wins over the wavebanner while it lasts (v166: there is
-// no flood toast anymore, so the banner is the meteor countdown's
-// alone during the warning).
+// attack. Runs after floodTick in update(). The 10s warning is
+// minimap rings only (v171: the banner countdown toast is gone),
+// and the main-map rings join in the last 5s.
 // Paused/finished runs freeze it (update() only runs when playing).
 function meteorNextInterval() {
   return METEOR_INTERVAL_MIN + Math.random() * (METEOR_INTERVAL_MAX - METEOR_INTERVAL_MIN);
 }
 function meteorTargets() {
-  // Count scales with map area: 3–5 per 1728 cells (v129: halved
-  // from 7–10, Sam: reduce density, keep shower frequency), so
-  // 7–11 on the default 75x50 (3750 cells),
-  // fewer on tiny maps, more on huge ones. Positions are uniform —
-  // anywhere, including fog, starter area, and flood territory —
-  // except the ocean (v166, Sam: a meteor ADD in the ocean drops
-  // an 80-HP rock that blocks the flood shots coming from the
-  // south, gutting the threat — and meteors are strong early).
+  // Count scales with map area: 2–3 per 1728 cells (v171: was 3–5
+  // since v129 — but maps are now ~12k cells, not the 3750-cell
+  // 75x50 the old density was tuned for, so showers had grown to
+  // 20–45 meteors; Sam: reduce a bit, keep it density-based so it
+  // scales with map size). Now ~14–27 on a current map, 4–7 on the
+  // old 75x50. Positions are uniform — anywhere, including fog,
+  // starter area, and flood territory — except the ocean (v166,
+  // Sam: a meteor ADD in the ocean drops a rock that blocks the
+  // flood shots coming from the south, gutting the threat — and
+  // meteors are strong early).
   // Retry up to 20 times for a non-ocean cell; if the map is
   // (nearly) all ocean, that target is skipped.
   const area = cfg.cols * cfg.rows;
-  const base = 3 + Math.floor(Math.random() * 3); // 3, 4, or 5
+  const base = 2 + Math.floor(Math.random() * 2); // 2 or 3
   const n = Math.max(1, Math.round(area / 1728 * base));
   const out = [];
   for (let k = 0; k < n; k++) {
@@ -2915,8 +2916,9 @@ function meteorTick(dt) {
   }
   if (m.phase === 'warn') {
     m.timer -= dt;
-    wavebanner.textContent = 'METEOR SHOWER IN ' + Math.max(1, Math.ceil(m.timer)) + 's';
-    wavebanner.classList.remove('hidden');
+    // v171: no toast — the warning is minimap rings (full 10s) plus
+    // main-map rings in the last 5s (see render). Nothing writes
+    // wavebanner here anymore.
     if (m.timer <= 0) {
       m.phase = 'shower';
       m.idx = 0; m.stagger = 0;
@@ -2925,9 +2927,6 @@ function meteorTick(dt) {
       // would rain for over 2 minutes. Fallback to the fixed stagger
       // when a shower object was built directly (harness).
       m.staggerDur = Math.min(METEOR_STAGGER, 21 / Math.max(1, m.targets.length));
-      // Do NOT hide wavebanner here: floodTick already set it this
-      // frame (flood toast or hidden), and meteorTick only writes it
-      // during the warning phase, so the flood state returns cleanly.
     }
     return;
   }
@@ -2965,7 +2964,7 @@ function meteorTick(dt) {
 // (radius 2, 13 cells, in-bounds only) by cell state — EMPTY vs
 // WHITE/GREY/BLUE/RED, regardless of turret/civilian/coin on top.
 // Mostly empty (empty > non-empty, tie goes to carve) -> ADD: the
-// whole area becomes landed rock (GREY, 80 HP, shade 5, clearable
+// whole area becomes landed rock (GREY, 20 HP, shade 5, clearable
 // later for normal grey rewards). Mostly not empty -> CARVE: every
 // non-empty cell is removed to EMPTY, and no rock is placed anywhere
 // in the cluster. Protections from before are kept in both modes,
@@ -3678,7 +3677,7 @@ function offerCards() {
   // previous View map toggle must not carry over to the next level.
   overlay.classList.remove('mapview');
   if (lvviewmap) lvviewmap.textContent = 'View map';
-  // XP row: 3 free cards, weighted draw without replacement. Gold Ore
+  // XP row: 4 free cards (v171: was 3), weighted draw without replacement. Gold Ore
   // counts three-quarters (weight 0.75 vs 1 for everything else) — it's
   // uncapped, so without a discount it would crowd out real upgrades
   // as stats max out, but early on you're craving gold.
@@ -4578,11 +4577,10 @@ function update(dt) {
       // -4s per interval pick, down to 8s at level 12.
       // v148: halved — 10s at level 0, -2s per pick, down to 4s.
       if (t.color === BLUE) {
-        if (t.showRange > 0) t.showRange -= dt;
         t.pullT = (t.pullT || 0) + dt;
         if (t.pullT >= bloomPullInterval(S.weapons.bloom)) {
           t.pullT = 0;
-          t.showRange = OUTPOST_FLASH_DUR; // flash pull range on every pull, like Outpost
+          // v171: no range ring flash on pull anymore.
           const w = S.weapons.bloom;
           const r = bloomPullRadius(w), n = bloomPullCount(w), r2 = r * r;
           const inRange = [];
@@ -4613,11 +4611,10 @@ function update(dt) {
       // quickly (Harvester BFS ignores non-idle), so Harvester stays
       // on field pickups back home — as long as Outpost keeps up.
       if (t.color === BLUE) {
-        if (t.showRange > 0) t.showRange -= dt;
         t.coolT += dt;
         if (t.coolT >= OUTPOST_PULL_EVERY) {
           t.coolT = 0;
-          t.showRange = OUTPOST_FLASH_DUR; // flash vacuum range on every pull
+          // v171: no range ring flash on pull anymore.
           const r2 = OUTPOST_RANGE * OUTPOST_RANGE;
           const inRange = [];
           for (const c of S.coins) {
@@ -5297,21 +5294,6 @@ function render() {
       ctx.beginPath(); ctx.arc(0, 1, 3, 0, Math.PI * 2); ctx.fill();
     }
     ctx.restore();
-    // Outpost / Field vacuum range flash: on every pull, a fading
-    // dashed gold ring shows the vacuum radius (original Gather flash,
-    // revived; Field uses its own pull radius, v136).
-    if ((t.type === 'lantern' || t.type === 'bloom') && t.showRange > 0) {
-      const fade = Math.min(1, t.showRange / OUTPOST_FLASH_DUR);
-      const rr = t.type === 'lantern' ? OUTPOST_RANGE : bloomPullRadius(S.weapons.bloom);
-      ctx.save();
-      ctx.strokeStyle = `rgba(250, 204, 21, ${0.6 * fade})`;
-      ctx.lineWidth = 2;
-      ctx.setLineDash([6, 6]);
-      ctx.beginPath();
-      ctx.arc(px, py, rr * CELL_PX, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
-    }
     // Teleport rings: pick stage = dashed gold ring on every movable
     // Cannon (BLUE) so you see the candidates; destination stage =
     // solid gold ring on the selected Cannon only. v139: Cannon only.
@@ -5430,9 +5412,12 @@ function render() {
   // after the fog, like pickups and flags, so fogged targets still
   // warn. Ring radius = 2 cells, the actual impact cluster radius, so
   // the ring shows the danger zone, not just the centre point; a dot
-  // marks the centre. Shown during the 10s warning and for targets
-  // not yet impacted during the shower, disappearing as each lands.
-  if (SURVIVAL && S.meteor && (S.meteor.phase === 'warn' || S.meteor.phase === 'shower')) {
+  // marks the centre. v171: only in the last 5s of the warning (the
+  // minimap carries the full 10s), and for targets not yet impacted
+  // during the shower, disappearing as each lands.
+  const showWorldRings = S.meteor && (S.meteor.phase === 'shower' ||
+    (S.meteor.phase === 'warn' && S.meteor.timer <= METEOR_WORLD_WARN_DUR));
+  if (SURVIVAL && showWorldRings) {
     const a = 0.55 + 0.25 * Math.sin(S.time * Math.PI * 2 / 2.2);
     ctx.strokeStyle = `rgba(255, 215, 94, ${a})`;
     ctx.fillStyle = `rgba(255, 215, 94, ${a})`;
