@@ -5749,7 +5749,28 @@ function initPlaceBar() {
     const btn = placeBtns[t];
     if (!btn) continue;
     const entry = CARD_POOL.find(c => c.kind === 'turret' && c.type === t);
-    btn.innerHTML = `<span class="picon">${entry ? entry.icon : ''}</span><span class="pcost"></span>`;
+    // v175: build the button's spans ONCE and keep references to them.
+    // updatePlaceBar used to rewrite btn.innerHTML on every HUD refresh
+    // (~30x/s), destroying the icon/cost spans under the pointer mid-tap
+    // — a real tap then lost its click (the pointerdown target was gone
+    // before pointerup) while a synthetic .click() still worked, which
+    // is exactly the v174 bar-tap bug. Now only the cost number and the
+    // classes change; the spans themselves never move.
+    const picon = document.createElement('span');
+    picon.className = 'picon';
+    picon.innerHTML = entry ? entry.icon : '';
+    const pcost = document.createElement('span');
+    pcost.className = 'pcost';
+    const costNum = document.createElement('span');
+    costNum.className = 'pcost-num';
+    const coin = document.createElement('span');
+    coin.className = 'coin';
+    pcost.appendChild(costNum);
+    pcost.appendChild(coin);
+    btn.appendChild(picon);
+    btn.appendChild(pcost);
+    btn._picon = picon;
+    btn._costNum = costNum;
     btn.addEventListener('click', () => onPlaceBtn(t));
   }
   updatePlaceBar();
@@ -5823,7 +5844,11 @@ function updatePlaceBar() {
     btn.classList.toggle('hidden', !unlocked);
     if (!unlocked) continue;
     const cost = unitCost(t);
-    btn.innerHTML = `<span class="picon">${(CARD_POOL.find(c => c.kind === 'turret' && c.type === t) || {}).icon || ''}</span><span class="pcost">${cost}<span class="coin"></span></span>`;
+    // v175: never rewrite innerHTML here (see initPlaceBar) — only the
+    // cost number changes. The old rewrite is kept as a fallback for a
+    // button whose spans were never built (defensive; init covers all).
+    if (btn._costNum) btn._costNum.textContent = String(cost);
+    else btn.innerHTML = `<span class="picon">${(CARD_POOL.find(c => c.kind === 'turret' && c.type === t) || {}).icon || ''}</span><span class="pcost">${cost}<span class="coin"></span></span>`;
     btn.classList.toggle('unaffordable', S.gold < cost);
     btn.classList.toggle('active', !!(S.placing && S.placing.type === t));
   }
