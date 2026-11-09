@@ -144,16 +144,12 @@
   /* v154: shop row is gone from the level-up screen — placements live
      in the place bar now. Keep the elements (harness + code), hide them. */
   #shoprow, #shoplabel { display: none !important; }
-  /* Minimap: territory coverage, top-right under the XP bar */
-  #minimap-wrap {
-    position: fixed;
-    top: 38px; right: 12px;
-    z-index: 7;
-    background: rgba(10, 13, 22, 0.85);
-    border: 1px solid #2a3145;
-    border-radius: 8px;
-    padding: 6px;
-  }
+  /* Minimap: hidden since v173 (Sam: not bringing much value) — the
+     wrap is display:none but the canvas stays in the DOM and
+     drawMinimap still runs every 6th frame, so the % stats stay live
+     and the map can come back. The double-tap fog x-ray toggle on the
+     canvas is unreachable while hidden. */
+  #minimap-wrap { display: none; }
   #minimap { display: block; background: #000; border-radius: 4px; touch-action: none;
     /* v128: canvas is 2px per cell internally, so a 150-cell map would
        be 300px wide and eat the phone screen. Cap the DISPLAY size
@@ -161,8 +157,17 @@
        the browser just scales the canvas down to fit.
        v154: 150px was nearly half a phone screen wide; 100px instead. */
     max-width: 100px; max-height: 100px; width: auto; height: auto; }
+  /* Territory % (v173): was under the minimap top-right; now top-left,
+     right of the gold + civilians chips (chips end ~163px). */
   #minimap-stats {
-    display: flex; gap: 12px; margin-top: 5px;
+    position: fixed;
+    top: 38px; left: 172px;
+    z-index: 7;
+    display: flex; gap: 12px;
+    background: rgba(10, 13, 22, 0.85);
+    border: 1px solid #2a3145;
+    border-radius: 8px;
+    padding: 6px 8px;
     font-size: 12px; font-weight: 700; color: #fff;
   }
   #minimap-stats .dot {
@@ -536,10 +541,10 @@
   </div>
   <div id="minimap-wrap">
     <canvas id="minimap"></canvas>
-    <div id="minimap-stats">
-      <div><span class="dot blue"></span><span id="minimap-blue">0%</span></div>
-      <div><span class="dot red"></span><span id="minimap-red">0%</span></div>
-    </div>
+  </div>
+  <div id="minimap-stats">
+    <div><span class="dot blue"></span><span id="minimap-blue">0%</span></div>
+    <div><span class="dot red"></span><span id="minimap-red">0%</span></div>
   </div>
   <button id="finishbtn" class="hidden">Finish Round</button>
   <div id="victory" class="hidden">
@@ -687,6 +692,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=172"></script>
+<script src="game.js?v=173"></script>
 </body>
 </html>

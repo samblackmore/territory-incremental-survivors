@@ -400,10 +400,8 @@ function drawMinimap() {
       mmctx.fillRect(c.x * px, c.y * px, px, px);
     }
     for (let si = 0; si < (S.rescue.sites || []).length; si++) {
+      if (!rescueSiteUndiscovered(si)) continue; // discovered: no ? needed
       const site = S.rescue.sites[si];
-      const remaining = (S.rescue.civilians || []).some(c => c.site === si);
-      if (!remaining) continue;
-      if (S.fog[site.y * cols + site.x] === 0) continue; // discovered: no ? needed
       mmctx.fillStyle = CIV_PINK;
       mmctx.font = 'bold 10px sans-serif';
       mmctx.textAlign = 'center';
@@ -1603,6 +1601,61 @@ function isBaseAdjacent(cx, cy) {
     if (t && !t.dead && t.color === BLUE && (t.type === 'cannon' || t.type === 'lantern')) return true;
   }
   return false;
+}
+// Rescue markers (v173): the minimap ? and the world ? share one rule —
+// a site counts as undiscovered while it still has civilians and its
+// anchor cell is fogged. Once the fog clears you can see the blobs on
+// the main map, so no ? is needed anywhere.
+function rescueSiteUndiscovered(si) {
+  if (!SURVIVAL || !S.rescue || !S.rescue.sites || !S.rescue.sites[si]) return false;
+  const site = S.rescue.sites[si];
+  const remaining = (S.rescue.civilians || []).some(c => c.site === si);
+  if (!remaining) return false;
+  if (fogHidden) return false; // x-ray debug: everything reads as clear
+  return S.fog[site.y * cfg.cols + site.x] !== 0;
+}
+// Nearest cave with civilians still waiting there, measured to the
+// player's base (nearest living BLUE Cannon/Outpost — the same base
+// definition rescue uses). Moving civilians don't count: they're
+// already walking home. Null when no cave has waiting civilians.
+function nearestRescueSite() {
+  if (!SURVIVAL || !S.rescue || !S.rescue.sites) return null;
+  let best = null, bestD = Infinity;
+  for (let si = 0; si < S.rescue.sites.length; si++) {
+    const site = S.rescue.sites[si];
+    const waiting = (S.rescue.civilians || []).some(c => c.site === si && c.state === 'waiting');
+    if (!waiting) continue;
+    let d = Infinity;
+    for (const t of S.turrets) {
+      if (t.dead || t.color !== BLUE || (t.type !== 'cannon' && t.type !== 'lantern')) continue;
+      const dd = (t.x - site.x) * (t.x - site.x) + (t.y - site.y) * (t.y - site.y);
+      if (dd < d) d = dd;
+    }
+    if (d === Infinity) d = 0; // no base units left: all sites tie, take the first
+    if (d < bestD) { bestD = d; best = site; }
+  }
+  return best;
+}
+// Vampire-Survivors-style edge arrow to the nearest waiting cave.
+// Null when there is no target, or when the target is on screen
+// (you can see the cave — or its ? if fogged — so no arrow).
+// Otherwise returns the screen position (edge-clamped) and angle.
+function rescueArrow() {
+  const site = nearestRescueSite();
+  if (!site) return null;
+  const sx = (site.x + 0.5) * CELL_PX, sy = (site.y + 0.5) * CELL_PX;
+  const px = view.w / 2 + (sx - cam.x) * cam.zoom;
+  const py = view.h / 2 + (sy - cam.y) * cam.zoom;
+  if (px >= 0 && px <= view.w && py >= 0 && py <= view.h) return null; // in view: hide
+  const m = 30; // arrow sits this far inside the screen edge
+  const cx = view.w / 2, cy = view.h / 2;
+  let dx = px - cx, dy = py - cy;
+  const len = Math.hypot(dx, dy) || 1;
+  dx /= len; dy /= len;
+  const tx = dx !== 0 ? (dx > 0 ? (view.w - m - cx) / dx : (m - cx) / dx) : Infinity;
+  const ty = dy !== 0 ? (dy > 0 ? (view.h - m - cy) / dy : (m - cy) / dy) : Infinity;
+  const t = Math.min(tx, ty);
+  return { x: cx + dx * t, y: cy + dy * t, angle: Math.atan2(dy, dx) };
 }
 // BFS next step toward the nearest base-adjacent cell (see isBaseAdjacent),
 // over EMPTY / own BLUE, turret cells blocked. Returns a direction index
@@ -5444,6 +5497,30 @@ function render() {
       ctx.fill();
     }
   }
+  // Rescue ? in the world (v173): the same undiscovered-site rule as
+  // the minimap ?, but on the map itself, so you don't have to look
+  // at the minimap to find the caves. Drawn after the fog, like the
+  // meteor rings, so a fogged site still shows. Disappears once the
+  // fog clears — the pink blobs are visible on the main map then.
+  if (SURVIVAL && S.rescue) {
+    const pulse = 0.8 + 0.2 * Math.sin(S.time * Math.PI * 2 / 1.6);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold 16px system-ui, sans-serif';
+    for (let si = 0; si < (S.rescue.sites || []).length; si++) {
+      if (!rescueSiteUndiscovered(si)) continue;
+      const site = S.rescue.sites[si];
+      const px = (site.x + 0.5) * CELL_PX, py = (site.y + 0.5) * CELL_PX;
+      ctx.globalAlpha = pulse;
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(11,14,22,0.9)';
+      ctx.strokeText('?', px, py);
+      ctx.fillStyle = CIV_PINK;
+      ctx.fillText('?', px, py);
+      ctx.globalAlpha = 1;
+    }
+    ctx.textAlign = 'start';
+  }
   // Pickups (XP orbs + gold coins): idle ones pulse gently so they
   // beg to be tapped — but only on fog-clear cells (v166: a fogged
   // coin is invisible until the fog lifts; flying/gathering coins
@@ -5522,6 +5599,25 @@ function render() {
     ctx.closePath(); ctx.fill(); ctx.stroke();
   }
   ctx.restore(); // ---- end world pass; screen pass below (chip, floaters) ----
+  // Rescue arrow (v173, survival only): Vampire-Survivors-style edge
+  // arrow to the nearest cave with waiting civilians. Hidden when the
+  // cave is on screen; the world ? covers the fogged case.
+  if (SURVIVAL) {
+    const ar = rescueArrow();
+    if (ar) {
+      const pulse = 0.75 + 0.25 * Math.sin(S.time * 4);
+      ctx.save();
+      ctx.translate(ar.x, ar.y);
+      ctx.rotate(ar.angle);
+      ctx.globalAlpha = pulse;
+      ctx.fillStyle = CIV_PINK;
+      ctx.beginPath();
+      ctx.moveTo(14, 0); ctx.lineTo(-10, -11); ctx.lineTo(-4, 0); ctx.lineTo(-10, 11);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+  }
   // Coin-counter chip, top-left: the zip target. Pops on collect.
   const pulse = S.chipPulse;
   const chw = 76, chh = 26;
