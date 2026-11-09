@@ -141,6 +141,27 @@
   .placebtn.unaffordable { opacity: 0.45; }
   .placebtn.active { border-color: #ffd75e; background: rgba(255, 215, 94, 0.12); }
   .placebtn.hidden { display: none; }
+  /* v174: unlock fly — the unit's icon zips from the picked card to its
+     place-bar button (same 0.45s accelerating lerp as the coin zip).
+     Positioned by left/top, centred on the point by the negative margin. */
+  .unlock-fly {
+    position: fixed;
+    z-index: 40;
+    width: 46px; height: 46px;
+    margin: -23px 0 0 -23px;
+    display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(180deg, #27314d, #1a2138);
+    border: 2px solid #ffd75e;
+    border-radius: 10px;
+    pointer-events: none;
+  }
+  .unlock-fly svg { width: 26px; height: 26px; }
+  .placebtn.just-unlocked { animation: unlockpop 0.6s ease; }
+  @keyframes unlockpop {
+    0% { transform: scale(1); }
+    40% { transform: scale(1.25); }
+    100% { transform: scale(1); }
+  }
   /* v154: shop row is gone from the level-up screen — placements live
      in the place bar now. Keep the elements (harness + code), hide them. */
   #shoprow, #shoplabel { display: none !important; }
@@ -692,6 +713,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=173"></script>
+<script src="game.js?v=174"></script>
 </body>
 </html>

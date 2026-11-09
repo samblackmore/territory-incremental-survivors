@@ -3977,19 +3977,25 @@ document.querySelectorAll('#levelup .card').forEach(card => {
       return;
     }
     if (kind === 'unlock') {
-      // v154: unlocks the type for the bottom bar and places one for
-      // free, VS-style. Mole bundle: if a Digger weapon already exists,
-      // the free placement also carries the +1 dig upgrade, like the
-      // old shop bundle did.
+      // v174: unlocks the type for the bottom bar — and that's it. No
+      // free placement anymore: the unit is now available down there,
+      // gated by gold, and a fly animation (card icon -> bar button)
+      // shows you where it went. A Digger bought from the bar later
+      // still carries the +1 dig bundle (see onPlaceBtn).
       const type = card.dataset.type;
+      const from = cardIconCenter(card); // before the overlay hides
       if (S.unlocked) S.unlocked[type] = true;
       S.pending--;
-      overlay.classList.add('hidden');
       updateHud(); updatePlaceBar();
-      enterPlacement(type);
-      // v154: free placement; Mole dig is applied at placement time
-      // (payForPlacement), not here, so it can't double-count.
-      if (S.placing) { S.placing.cost = 0; S.placing.moleBundle = type === 'mole'; S.placing.free = true; }
+      if (S.pending <= 0) {
+        S.pending = 0;
+        S.paused = false;
+        overlay.classList.add('hidden');
+        startUnlockFly(type, from); // only when the bar is visible
+      } else {
+        offerCards();
+        overlay.classList.remove('hidden');
+      }
       return;
     }
     if (kind === 'teleport') {
@@ -4535,6 +4541,7 @@ function updateSparkles(dt) {
 }
 function update(dt) {
   updateAutoCam(dt); // v153 try-it: slow north-only follow, toggleable, never south/zoom/death
+  updateUnlockFlies(dt); // v174: card -> bar icon flight after an unlock pick
   const arcRad = (cfg.arc * Math.PI) / 180;
   const turnRate = (cfg.turnRate * Math.PI) / 180; // rad/s
   // XP bar animates toward the true XP (full bar in ~0.6s); the level-up
@@ -5746,6 +5753,66 @@ function initPlaceBar() {
     btn.addEventListener('click', () => onPlaceBtn(t));
   }
   updatePlaceBar();
+}
+// Unlock fly (v174): when a unit is unlocked for the first time, its
+// icon flies from the picked card to its button in the bottom bar —
+// the same accelerating lerp as the coin zip (e = k*k, same 0.45s),
+// so you learn where the unit lives now. Driven by update(dt), like
+// the coin flies. Every DOM touch is guarded: in environments without
+// real geometry (the harness stubs) the animation just doesn't run,
+// and the unlock itself is unaffected.
+const unlockFlies = [];
+function cardIconCenter(card) {
+  // Centre of the card's icon, in viewport px — captured before the
+  // overlay hides. Falls back to the card centre, then null when the
+  // DOM gives no geometry.
+  try {
+    const icon = card && card.querySelector ? card.querySelector('.icon') : null;
+    const el = icon || card;
+    if (!el || typeof el.getBoundingClientRect !== 'function') return null;
+    const r = el.getBoundingClientRect();
+    if (!r || !r.width) return null;
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  } catch (e) { return null; }
+}
+function startUnlockFly(type, from) {
+  if (!from) return;
+  const btn = placeBtns[type];
+  if (!btn || typeof btn.getBoundingClientRect !== 'function') return;
+  if (typeof document === 'undefined' || !document.body || typeof document.createElement !== 'function') return;
+  const r = btn.getBoundingClientRect();
+  if (!r || !r.width) return;
+  const to = { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  const icon = (CARD_POOL.find(c => c.kind === 'turret' && c.type === type) || {}).icon || '';
+  const el = document.createElement('div');
+  el.className = 'unlock-fly';
+  el.innerHTML = `<span class="picon">${icon}</span>`;
+  el.style.left = from.x + 'px';
+  el.style.top = from.y + 'px';
+  document.body.appendChild(el);
+  unlockFlies.push({ el, btn, x0: from.x, y0: from.y, x1: to.x, y1: to.y, t: 0 });
+}
+function updateUnlockFlies(dt) {
+  for (let i = unlockFlies.length - 1; i >= 0; i--) {
+    const f = unlockFlies[i];
+    f.t += dt;
+    const k = Math.min(1, f.t / COIN_FLY_DUR);
+    const e = k * k; // same accelerating lerp as the coin zip
+    const x = f.x0 + (f.x1 - f.x0) * e, y = f.y0 + (f.y1 - f.y0) * e;
+    if (f.el && f.el.style) { f.el.style.left = x + 'px'; f.el.style.top = y + 'px'; }
+    if (k >= 1) {
+      unlockFlies.splice(i, 1);
+      if (f.el) {
+        if (typeof f.el.remove === 'function') f.el.remove();
+        else if (f.el.parentNode && typeof f.el.parentNode.removeChild === 'function') f.el.parentNode.removeChild(f.el);
+      }
+      // Land: pop the bar button so the eye catches where it went.
+      if (f.btn && f.btn.classList) {
+        f.btn.classList.add('just-unlocked');
+        setTimeout(() => { if (f.btn && f.btn.classList) f.btn.classList.remove('just-unlocked'); }, 600);
+      }
+    }
+  }
 }
 function updatePlaceBar() {
   if (!S || !S.unlocked) return;
