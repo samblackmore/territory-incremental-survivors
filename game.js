@@ -3774,16 +3774,17 @@ function offerCards() {
     const lv = p.kind === 'passive' ? S.passives[p.passive] : 0;
     let title = p.title, sub = p.sub, newTag = '', priceHtml = '', evoLine = '';
     const icon = `<div class="icon">${p.icon || ''}</div>`;
-    // VS-style: first time bringing it into the run gets a yellow "New!" tag,
-    // separate from the name.
-    if (p.kind === 'passive' && lv === 0) newTag = '<span class="newtag">New!</span>';
-    else if (p.kind === 'passive' && lv > 0) {
+    // v176: "New!" means first time picking up a unit — only unlock cards
+    // carry it (below). Stat, passive and hybrid first picks are upgrades
+    // to something you already own, so they never get the tag.
+    if (p.kind === 'passive' && lv > 0) {
       title = `${p.title} <span class="lv">Lv${lv + 1}</span>`;
     }
     else if (p.kind === 'stat') {
       // One stat, one chip: title is the stat + its NEW level, sub the effect.
       // The weapon icon says which weapon it belongs to.
-      // First pick of a stat (level 0 → 1) gets the yellow New! tag.
+      // v176: no New! tag here — a first stat pick is an upgrade to a
+      // weapon you already own, not a new unit (only unlocks get New!).
       // v115: cannon Damage/Rate cards (the only tracks with Evos) get
       // a little gold Evo line — icon + the word EVO, no Evo name —
       // so you can see at a glance that this track evolves. Other
@@ -3797,13 +3798,14 @@ function offerCards() {
       if (p.weapon === 'bloom' && p.stat === 'field') sub = bloomFieldNextEffect(cur);
       el.dataset.weapon = p.weapon;
       el.dataset.stat = p.stat;
-      if (cur === 0) newTag = '<span class="newtag">New!</span>';
       if (p.weapon === 'cannon' && p.stat === 'dmg') evoLine = `<span class="evoline">${ICONS.evoPaint} EVO</span>`;
       if (p.weapon === 'cannon' && p.stat === 'rate') evoLine = `<span class="evoline">${ICONS.evoSpray} EVO</span>`;
     }
     else if (p.kind === 'unlock') {
       // v154: unlocks a placement type for the bottom bar, and the
       // pick itself places one for free (VS-style: you get the weapon).
+      // v176: this is the ONLY place a New! tag is set — picking up a
+      // unit for the first time.
       title = p.title;
       sub = p.sub || 'Unlocks in the bottom bar — place one now, free.';
       newTag = '<span class="newtag">New!</span>';
@@ -3828,7 +3830,7 @@ function offerCards() {
       // the price like a shop card. v133: availableCards already
       // hides it when unaffordable, so the unaffordable class below
       // is only a safety net (click handler's cost guard covers rest).
-      // First projectile pick gets New! like any other first stat.
+      // v176: no New! — it's a Cannon upgrade, not a new unit.
       const w = S.weapons.cannon;
       const lv = w && w.stats ? (w.stats.proj || 0) : 0;
       title = `Projectiles <span class="lv">Lv${lv + 1}</span>`;
@@ -3838,7 +3840,6 @@ function offerCards() {
       el.dataset.cost = String(p.cost);
       priceHtml = `<div class="price">${p.cost}<span class="coin"></span></div>`;
       if (S.gold < p.cost) el.classList.add('unaffordable');
-      if (lv === 0) newTag = '<span class="newtag">New!</span>';
     }
     else if (p.kind === 'pen') {
       // Hybrid (survival, v133): Penetration, gold-gated like
@@ -3852,7 +3853,7 @@ function offerCards() {
       el.dataset.cost = String(p.cost);
       priceHtml = `<div class="price">${p.cost}<span class="coin"></span></div>`;
       if (S.gold < p.cost) el.classList.add('unaffordable');
-      if (lv === 0) newTag = '<span class="newtag">New!</span>';
+      // v176: no New! — it's a Cannon upgrade, not a new unit.
     }
     el.innerHTML = priceHtml + icon + newTag + '<b>' + title + '</b><span>' + sub + '</span>' + evoLine;
     // Staggered deal: cards appear one by one (prevents accidental taps).
