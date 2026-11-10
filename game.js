@@ -819,10 +819,14 @@ const COAST_SEED_OFFSET = 77777; // own RNG stream: island generation (caves/noi
 // v157 bottom ocean (Sam, 2026-11-05): 5x the ocean at the bottom, so
 // the starter (on the bottom beach) sits further north in the map and
 // appears closer to the top of the screen at start, with a wide blue
-// band below it. Ocean = total - 4, so 5x ocean means total = 4 + 5x.
-// Capped at 60% of rows, so a small map can't become all ocean —
-// the interior is preserved, just shorter. Top/left/right are unchanged.
-const BOTTOM_OCEAN_MULT = 5;
+// band below it. Ocean = total - 4, so Nx ocean means total = 4 + Nx.
+// v179 (Sam, 2026-11-09): 3x, down from 5x — the 5x coast swung
+// 34–84 cells deep, so the shoreline ran near-vertical and the
+// cannon's wide shots flew out over water; 3x swings 22–52, ~40%
+// gentler slopes, shorter inlets. Capped at 60% of rows, so a small
+// map can't become all ocean — the interior is preserved, just
+// shorter. Top/left/right are unchanged.
+const BOTTOM_OCEAN_MULT = 3;
 const BOTTOM_COAST_MAX_FRAC = 0.6;
 // v157 tile overdraw: each cell is drawn 0.5 world px larger on every
 // side, so neighbours overlap and seal the hairline seams that
@@ -830,9 +834,9 @@ const BOTTOM_COAST_MAX_FRAC = 0.6;
 // between cells). Later cells paint over the overlap, so boundaries
 // stay where they were, to within half a world pixel.
 const TILE_OVERDRAW = 0.5;
-// Extra map rows added at the bottom for the 5x ocean (see newGame):
-// the ocean grows by 4x its original depth, so the map grows by
-// 4x the *largest* bottom ocean depth, and the interior north of the
+// Extra map rows added at the bottom for the 3x ocean (see newGame):
+// the ocean grows by 2x its original depth, so the map grows by
+// 2x the *largest* bottom ocean depth, and the interior north of the
 // beach keeps exactly its old size — the ocean eats no terrain.
 function bottomOceanExtraRows(seed, cols) {
   const noise = makeNoise2D(mulberry32(seed + COAST_SEED_OFFSET));
@@ -963,7 +967,7 @@ function coastMask(cols, rows, seed) {
   const noise = makeNoise2D(mulberry32(seed + COAST_SEED_OFFSET));
   const top = coastDepths(cols, noise, 0.13);
   const bottom = coastDepths(cols, noise, 0.71);
-  // v157: 5x bottom ocean, capped at 60% of rows (see constants above).
+  // v157: 3x bottom ocean (v179, was 5x), capped at 60% of rows (see constants above).
   const bottomCap = Math.max(COAST_MAX_DEPTH, Math.floor(rows * BOTTOM_COAST_MAX_FRAC));
   for (let k = 0; k < bottom.length; k++) {
     bottom[k] = Math.min(4 + BOTTOM_OCEAN_MULT * (bottom[k] - COAST_SAND_CELLS - COAST_GRASS_CELLS), bottomCap);
@@ -2035,7 +2039,7 @@ function newGame() {
   const seedStr = inSeed.value.trim();
   const seed = seedStr === '' ? (Math.random() * 1e9) | 0 : parseInt(seedStr, 10) || 0;
   const rng = mulberry32(seed);
-  // v157: grow the map southward for the 5x bottom ocean, before any
+  // v157: grow the map southward for the 3x bottom ocean (v179, was 5x), before any
   // cell array is allocated. cfg.rows is the *panel* size (inRows
   // stays untouched, so the next run adds the same extra again —
   // no runaway); the extra rows are all ocean, so the interior
@@ -2174,7 +2178,8 @@ function newGame() {
     }
   }
   const vspan = (vmax - vmin) || 1; // degenerate map guard
-  const norm = v => (v - vmin) / vspan;
+  let norm = v => (v - vmin) / vspan; // v179: reassigned after the
+  // biome pass (below), once the final rock set is known
   for (let y = 0; y < cfg.rows; y++) {
     for (let x = 0; x < cfg.cols; x++) {
       const i = y * cfg.cols + x;
@@ -2208,7 +2213,7 @@ function newGame() {
 
   // v163 biomes (Sam, 2026-11-06): the map is four horizontal bands,
   // each roughly a quarter of the height, bottom to top:
-  //   ocean — the bottom coast (already done above, 5x ocean + beach)
+  //   ocean — the bottom coast (already done above, 3x ocean + beach)
   //   cliff — the starter area: beach at its southern edge, then the
   //     existing cave-pockets-in-rock interior (untouched below)
   //   grass — mostly open grass, with LARGE rock islands for mining
@@ -2324,6 +2329,29 @@ function newGame() {
     }
   }
 
+  // v179: re-stretch the brown HP field over the FINAL white cells.
+  // The first normalization (above) ran before the biome pass, and
+  // the biome pass can turn the extreme cells into open ground, so
+  // HP 10 (or 3) could vanish on some seeds — the "all 8 levels
+  // every seed" guarantee only holds if the stretch is measured on
+  // the cells that stay rock. Grey runs after this and reuses norm,
+  // so it keeps the same full 30–100 stretch.
+  {
+    let vmin2 = 1, vmax2 = 0;
+    for (let i = 0; i < n; i++) {
+      if (cells[i] !== WHITE) continue;
+      if (raw[i] < vmin2) vmin2 = raw[i];
+      if (raw[i] > vmax2) vmax2 = raw[i];
+    }
+    const vspan2 = (vmax2 - vmin2) || 1;
+    norm = v => (v - vmin2) / vspan2;
+    for (let i = 0; i < n; i++) {
+      if (cells[i] !== WHITE) continue;
+      const m = 3 + Math.round(norm(raw[i]) * 7);
+      maxhp[i] = m; hp[i] = m;
+    }
+  }
+
   // The player's Cannon spawns: survival = anywhere on the beach
   // (random beach cell, own RNG stream so the island RNG is untouched
   // — same seed still builds the same island, and the same beach
@@ -2338,7 +2366,7 @@ function newGame() {
     // beach cell in the bottom coast band, with x at least
     // SPAWN_CORNER_MARGIN from either side edge, so the starter sits
     // mid-bottom, never in a corner. v157: the bottom band is now
-    // up to 60% of rows (5x ocean), not the old last-20-rows band.
+    // up to 60% of rows (3x ocean, v179 was 5x), not the old last-20-rows band.
     // Fallback: if filtering empties the list (tiny custom maps),
     // use the full beach list — a corner spawn beats no spawn.
     const bottomBand = Math.max(COAST_MAX_DEPTH, Math.floor(cfg.rows * BOTTOM_COAST_MAX_FRAC));
@@ -2726,15 +2754,15 @@ const FLOOD_SWEEP_RATE = Math.PI / 2; // rad/s the sweep rotates (90 deg/s)
 // burrow into a cave with a Digger and be safe far from the front,
 // so the threat has to come as bullet hell; go crazy). There is no
 // breather anymore — the ramp is the pressure.
-// Napkin math (60-col board): a shot flies north at 8 cells/s and
+// Napkin math (75-col board): a shot flies north at 8 cells/s and
 // dies on the first rock/turret/territory it hits — early on that
 // is the cliff after ~40 cells of open ocean/beach, so a shot lives
 // ~5s. Concurrent shots ≈ rate × lifetime: ~1 on screen at 1:00,
 // ~2 at 2:00, ~4 at 3:00, ~8 at 4:00, ~16 at 5:00, ~32 at 6:00,
 // ~64 at 7:00, ~128 at 8:00, ~500 at 10:00 (and more later, as dug
 // channels and flood-painted ground let shots fly further). At
-// 100 shots/s over 60 columns, each column takes a shot about
-// every 0.6s, so a 20-HP wall cell lasts ~12s of fire in its
+// 100 shots/s over 75 columns, each column takes a shot about
+// every 0.75s, so a 20-HP wall cell lasts ~15s of fire in its
 // column at the cap. The 0.1s floor (v170) capped at ~50 on
 // screen from ~6:40.
 const FLOOD_WAVE_FIRST_INTERVAL = 5;
@@ -6502,16 +6530,18 @@ function randomizeMapSize() {
     }
   } catch (e) { /* no URL API (harness): randomize both */ }
   // v163: vertical maps — narrow and tall, so the run is a climb.
-  // v167: width is FIXED at 60 columns, no randomisation (was
-  // 75–100 random, average ~87, so 60 is ~70% of the old width —
-  // Sam: the map doesn't need to be so big, you're never going to
-  // explore all of it, and a narrower map caps how far out the
-  // camera can zoom and concentrates the enemy shots from below).
+  // v167: width was FIXED at 60 columns, no randomisation (was
+  // 75–100 random, average ~87 — Sam: the map doesn't need to be so
+  // big, you're never going to explore all of it, and a narrower map
+  // caps how far out the camera can zoom and concentrates the enemy
+  // shots from below). v179 (Sam, 2026-11-09): 75 columns — wider
+  // again, so the coast has room to breathe and the shoreline slopes
+  // can run longer. Still narrower than the old ~87 average.
   // Rows are still 140–200 random (panel size; newGame still adds
   // the bottom-ocean extra rows on top, so a real map is taller
   // still). Biomes (see newGame) split the height into quarters.
   // ?cols= in the URL still overrides the fixed width.
-  if (!qCols) inCols.value = 60;
+  if (!qCols) inCols.value = 75;
   if (!qRows) inRows.value = 140 + Math.floor(Math.random() * 61);
 }
 
