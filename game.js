@@ -182,7 +182,7 @@ function cannonDmgMaxed() {
 // costs extra, and the price climbs as your army grows. Tunable.
 // Early game is cheap on purpose: Outpost 2 (base expansion), Field 3
 // (early resources), Digger 4 (early exploration), Waypoint 5 (cannon
-// aiming) — the flood starts at 1 min, so you need cheap options before
+// aiming) — the flood starts at 3 min, so you need cheap options before
 // you can level the cannon.
 const UNIT_COST = { cannon: 10, mole: 4, bloom: 3, gather: 6, lantern: 2, wall: 2, laser: 20, waypoint: 5 };
 const UNIT_COST_STEP = 5;
@@ -2719,7 +2719,7 @@ function checkRunOver() {
 // The asymmetric enemy: not a base, but damage from a direction.
 // A flood controller fires single staggered shots from the south
 // edge (v166: no storms, no lulls, no waves — one continuous
-// attack from 1:00, ramping faster over time), and from 20:00 a
+// attack from 3:00, ramping faster over time), and from 20:00 a
 // sweeping cannon joins, also from the south. Flood shots damage
 // rock and player territory, and claim what they destroy as flood
 // territory (RED internally, blue on screen after the palette
@@ -2728,10 +2728,10 @@ function checkRunOver() {
 // No classes in this codebase (plain functions + S state), so the
 // flood is a controller object on S plus these functions.
 const SURVIVAL = true; // survival branch: player renders red, flood is blue, enemy base off
-const FLOOD_GRACE_DUR = 60;  // v167: 1 min grace before the attack starts (was 3 min — Sam: the immediate threat is good, make it more immediate). Prepare your base (XP-bar threat countdown gives the ETA; commander dialog disabled v126)
+const FLOOD_GRACE_DUR = 180; // v183: 3 min grace before the attack starts (was 1 min in v167 — Sam then: the immediate threat is good, make it more immediate; now back to 3 min, Sam 2026-11-10). Prepare your base (XP-bar threat countdown gives the ETA; commander dialog disabled v126)
 const FLOOD_SWEEP_START = 1200; // 20 min run time: the sweeping cannon joins the attack (v137, v150: was 10 min, see floodTick)
 // Phases (v166, Sam, 2026-11-06 — waves/storms/lulls REMOVED):
-// 0–1 min grace, no attack; at 1:00 the attack starts and never
+// 0–3 min grace, no attack; at 3:00 the attack starts and never
 // stops — no storms, no lulls, no breather. Single staggered shots
 // from the south only (single columns at random x, like rain, not a
 // simultaneous row), at floodWaveInterval(), which ramps from 5s
@@ -2754,21 +2754,21 @@ const FLOOD_SWEEP_RATE = Math.PI / 2; // rad/s the sweep rotates (90 deg/s)
 // are single columns at random south x positions, staggered like rain
 // going bottom-up — not a simultaneous row across the whole border.
 // Interval starts long (one shot every 5s when the attack starts
-// at 1:00) and gets gradually faster as attack time grows: it
+// at 3:00) and gets gradually faster as attack time grows: it
 // halves every 60 seconds of attack time (v170: was 90s in v168,
-// 180s before that). 5s at 1:00, 2.5s at 2:00, 1.25s at 3:00,
-// 0.63s at 4:00, 0.31s at 5:00, 0.16s at 6:00, 0.078s at 7:00,
-// 0.039s at 8:00, floored at 0.01s (~100 shots/s) from about
-// 9:58 (v172: was 0.1s — Sam: walls only matter early, you can
+// 180s before that). 5s at 3:00, 2.5s at 4:00, 1.25s at 5:00,
+// 0.63s at 6:00, 0.31s at 7:00, 0.16s at 8:00, 0.078s at 9:00,
+// 0.039s at 10:00, floored at 0.01s (~100 shots/s) from about
+// 11:58 (v172: was 0.1s — Sam: walls only matter early, you can
 // burrow into a cave with a Digger and be safe far from the front,
 // so the threat has to come as bullet hell; go crazy). There is no
 // breather anymore — the ramp is the pressure.
 // Napkin math (75-col board): a shot flies north at 8 cells/s and
 // dies on the first rock/turret/territory it hits — early on that
 // is the cliff after ~40 cells of open ocean/beach, so a shot lives
-// ~5s. Concurrent shots ≈ rate × lifetime: ~1 on screen at 1:00,
-// ~2 at 2:00, ~4 at 3:00, ~8 at 4:00, ~16 at 5:00, ~32 at 6:00,
-// ~64 at 7:00, ~128 at 8:00, ~500 at 10:00 (and more later, as dug
+// ~5s. Concurrent shots ≈ rate × lifetime: ~1 on screen at 3:00,
+// ~2 at 4:00, ~4 at 5:00, ~8 at 6:00, ~16 at 7:00, ~32 at 8:00,
+// ~64 at 9:00, ~128 at 10:00, ~500 at 12:00 (and more later, as dug
 // channels and flood-painted ground let shots fly further). At
 // 100 shots/s over 75 columns, each column takes a shot about
 // every 0.75s, so a 20-HP wall cell lasts ~15s of fire in its
@@ -3319,7 +3319,7 @@ function meteorImpact(tx, ty) {
   if (changed) computeFog();
 }
 
-// Debug only: jump the run clock to the end of grace (1:00) and start
+// Debug only: jump the run clock to the end of grace (3:00) and start
 // the attack immediately (v166: no storms anymore — fire at once,
 // toast hidden, attack counted once). Run time only moves forward,
 // never backwards, so clicking mid-attack restarts it without
@@ -6086,7 +6086,7 @@ function updateHud() {
   const tsec = Math.floor(S.time || 0);
   const timer = `${Math.floor(tsec / 60)}:${String(tsec % 60).padStart(2, '0')}`;
   // Threat countdown (survival, grace only): time until the attack
-  // starts, counting down from the grace duration (1:00). Short +
+  // starts, counting down from the grace duration (3:00). Short +
   // vague on purpose ("threat", not "flood"), yellow, inside the XP
   // bar next to the run timer. Hidden once grace ends — the attack
   // itself is visible from there, no warning needed.
