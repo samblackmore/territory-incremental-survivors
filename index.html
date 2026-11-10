@@ -168,9 +168,36 @@
   /* Minimap: hidden since v173 (Sam: not bringing much value) — the
      wrap is display:none but the canvas stays in the DOM and
      drawMinimap still runs every 6th frame, so the % stats stay live
-     and the map can come back. The double-tap fog x-ray toggle on the
-     canvas is unreachable while hidden. */
-  #minimap-wrap { display: none; }
+     and the map can come back. v180: a Map button (top-right) shows
+     it again, with a minimize button in its corner to hide it — the
+     double-tap fog x-ray toggle on the canvas works again while shown. */
+  #minimap-wrap { display: none; position: fixed; top: 76px; right: 8px; z-index: 7; }
+  /* v180 minimap toggle: same pill style as the CAM button. */
+  #mapbtn {
+    position: fixed;
+    right: 8px; top: 36px;
+    z-index: 7;
+    padding: 10px 14px;
+    background: var(--panel);
+    border: 1px solid #2a3145;
+    border-radius: 999px;
+    color: var(--accent);
+    font-size: 13px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+    cursor: pointer;
+    box-shadow: 0 4px 16px rgba(0,0,0,.4);
+  }
+  #mapmin {
+    position: absolute;
+    top: -10px; right: -10px;
+    width: 24px; height: 24px;
+    border-radius: 50%;
+    background: var(--panel);
+    border: 1px solid #2a3145;
+    color: #fff;
+    font-size: 14px; font-weight: 700; line-height: 1;
+    cursor: pointer;
+    box-shadow: 0 4px 16px rgba(0,0,0,.4);
+  }
   #minimap { display: block; background: #000; border-radius: 4px; touch-action: none;
     /* v128: canvas is 2px per cell internally, so a 150-cell map would
        be 300px wide and eat the phone screen. Cap the DISPLAY size
@@ -584,8 +611,10 @@
     <button class="placebtn" id="pb-laser" data-type="laser" title="Laser"></button>
     <button class="placebtn" id="pb-waypoint" data-type="waypoint" title="Waypoint"></button>
   </div>
+  <button id="mapbtn" title="Show minimap">Map</button>
   <div id="minimap-wrap">
     <canvas id="minimap"></canvas>
+    <button id="mapmin" title="Hide minimap">×</button>
   </div>
   <div id="minimap-stats">
     <div><span class="dot blue"></span><span id="minimap-blue">0%</span></div>
@@ -747,6 +776,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=179"></script>
+<script src="game.js?v=180"></script>
 </body>
 </html>

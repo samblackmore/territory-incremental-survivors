@@ -1198,12 +1198,17 @@ function inlandAngle(x, y) {
 }
 function mkTurret(x, y, color, type) {
   const spec = TURRET[type];
-  // Base aim is fixed at placement: blue aims map-center, red aims at blue's
-  // corner. Nobody tracks anybody — the patterns do the fighting.
-  // Exception (v144, survival only): the starter cannon, set in newGame,
-  // faces inland instead — see inlandAngle above.
+  // Base aim is fixed at placement: blue aims straight up on survival
+  // (v180), map-center on main; red aims at blue's corner. Nobody
+  // tracks anybody — the patterns do the fighting. A waypoint
+  // overrides a blue cannon's base while placed (see update loop).
+  // inlandAngle is kept for the harness; nothing uses it anymore.
+  // v180: on survival every BLUE cannon aims straight up (-PI/2) —
+  // levels are vertical, so up is always the way to go, unless a
+  // waypoint re-aims it (see the update loop). Main keeps map-centre
+  // aim; red keeps aiming at blue's corner.
   const base = color === BLUE
-    ? Math.atan2(cfg.rows / 2 - y, cfg.cols / 2 - x)
+    ? (SURVIVAL ? -Math.PI / 2 : Math.atan2(cfg.rows / 2 - y, cfg.cols / 2 - x))
     : Math.atan2(cfg.rows * 0.85 - y, cfg.cols * 0.15 - x);
   // Red gets tankier every wave so the escalation is real.
   const hpScale = color === RED ? 1 + 0.2 * (S.wave - 1) : 1;
@@ -1736,7 +1741,9 @@ function rescueArrow() {
 // Rescue discovery celebration (v177): when a site's fog first clears
 // while civilians still wait there, make it a moment — pause the game,
 // lerp the camera to the cave, then show the dark overlay with pink
-// confetti and "X / Y civilians rescued in Z biome". Tap anywhere to
+// confetti and "X / Y civilians discovered in Z biome" — discovered,
+// not rescued: they only count as rescued when they reach your base.
+// Tap anywhere to
 // continue. One celebration per site (site.celebrated); sites whose
 // anchor was already clear at spawn are marked celebrated in newGame
 // and never celebrate.
@@ -1769,7 +1776,7 @@ function startRescueCelebration(si) {
     ? S.rescue.byBiome[biome]
     : (S.rescue.civilians || []).filter(c => siteBiome(c.site) === biome).length;
   if (rescueTitle) rescueTitle.textContent =
-    `${inCave} / ${inBiome} civilians rescued in ${BIOME_NAMES[biome] || biome} biome`;
+    `${inCave} / ${inBiome} civilians discovered in ${BIOME_NAMES[biome] || biome} biome`;
   S.paused = true;
   S.rescueCeleb = {
     si, phase: 'lerp', t: 0, dur: 0.8,
@@ -2399,11 +2406,11 @@ function newGame() {
   // The starter is always Cannon; the shop only gates mid-run drafts.
   // v155 bottom-only (supersedes v144 inland aim): the starter always
   // faces straight up (-PI/2, north), because the spawn is always on
-  // the bottom beach and the run always goes up. Every later BLUE
-  // cannon keeps the map-centre base from mkTurret. A waypoint
+  // the bottom beach and the run always goes up. v180: every later
+  // BLUE cannon aims straight up too, from mkTurret. A waypoint
   // overrides it while placed, and teleport clears the starter flag
-  // (see completeTeleport), so an escaped starter aims at map centre
-  // like any placed cannon. inlandAngle() is kept for the harness,
+  // (see completeTeleport) — a teleported cannon still aims straight
+  // up like any placed cannon. inlandAngle() is kept for the harness,
   // but no longer used for the starter.
   const starterT = mkTurret(pc.x, pc.y, BLUE, 'cannon');
   if (SURVIVAL) {
@@ -4269,9 +4276,25 @@ const WALL_SHADE = 3; // mid grey ([107,114,128]) — reads as stone, distinct f
 // Survival placement: units go near your base, not anywhere lit.
 // (Matches fogDist, so an outpost extends the placeable range by 6.)
 const PLACE_RADIUS = 6;
-function nearBase(cx, cy) {
+const OUTPOST_PLACE_RADIUS = PLACE_RADIUS * 3; // v180: outposts anchor
+// within 3x the normal radius (18 cells) — the old anywhere-in-cleared-
+// fog rule is gone (Sam: it felt cheaty once half the map was uncovered).
+function nearBase(cx, cy, r) {
+  if (r === undefined) r = PLACE_RADIUS;
   for (const t of S.turrets) {
     if (t.dead || t.color !== BLUE) continue;
+    const dx = t.x - cx, dy = t.y - cy;
+    if (dx * dx + dy * dy <= r * r) return true;
+  }
+  return false;
+}
+// v180: teleport bases — only a living BLUE Cannon or Outpost counts
+// as a base for teleport destinations (Sam: you can't teleport next
+// to a Digger). Placement's nearBase still counts any living unit.
+function nearTeleportBase(cx, cy) {
+  for (const t of S.turrets) {
+    if (t.dead || t.color !== BLUE) continue;
+    if (t.type !== 'cannon' && t.type !== 'lantern') continue;
     const dx = t.x - cx, dy = t.y - cy;
     if (dx * dx + dy * dy <= PLACE_RADIUS * PLACE_RADIUS) return true;
   }
@@ -4468,12 +4491,14 @@ function placeTurretAt(sx, sy) {
   const pi = cy * cfg.cols + cx;
   if (SURVIVAL) {
     if (type === 'lantern') {
-      // Outpost exception: near base it sits on any ground (as before);
-      // far from base it can still go anywhere that's open ground and
-      // clear of fog. That's how you extend past the build discs: drop
-      // an outpost at the edge of the revealed area, and it becomes a
-      // new anchor for the next units.
-      if (!nearBase(cx, cy) && !(S.cells[pi] === EMPTY && S.fog[pi] === 0)) {
+      // Outpost (v180, Sam): no more anywhere-in-cleared-fog — it must
+      // land within 3x the normal radius of a living BLUE unit, on any
+      // visible ground (fog-clear; near-base cells are clear by
+      // construction, at 3x the check matters). That's how you extend
+      // past the build discs, but bounded: drop an outpost at the edge
+      // of the revealed area and it becomes a new anchor for the next
+      // units — it just can't leap halfway across a half-cleared map.
+      if (!nearBase(cx, cy, OUTPOST_PLACE_RADIUS) || S.fog[pi] !== 0) {
         S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
         return;
       }
@@ -4551,11 +4576,12 @@ function placeTurretAt(sx, sy) {
 //      instantly (no glide), re-aims at map centre, fog recomputed,
 //      then pending handling mirrors placement (more picks -> re-offer,
 //      else unpause).
-// Destination rule mirrors placement per branch: survival = nearBase
-// (inside a PLACE_RADIUS disc around any living BLUE turret, including
-// the moving unit itself — so it can hop up to 6 cells from its old
-// spot, or jump to any Outpost anchor); main = fog-clear (no discs,
-// fog is the visualization, like placement).
+// Destination rule mirrors placement per branch: survival =
+// nearTeleportBase (inside a PLACE_RADIUS disc around a living BLUE
+// Cannon or Outpost — v180, Diggers/Harvesters/Lasers/Fields don't
+// count — including the moving unit itself, so it can hop up to 6
+// cells from its old spot, or jump to an Outpost anchor); main =
+// fog-clear (no discs, fog is the visualization, like placement).
 // Tapping another Cannon in 'dest' switches selection; tapping the
 // selected Cannon itself keeps it; any other occupied cell or invalid
 // ground shows a red ring and stays in the current stage.
@@ -4601,7 +4627,7 @@ function handleTeleportTap(sx, sy) {
   if (civilianAt(cx, cy)) { teleportRedRing(cx, cy); return; } // civilian crowd: can't land on them
   const pi = cy * cfg.cols + cx;
   const okGround = S.cells[pi] === EMPTY &&
-    (SURVIVAL ? nearBase(cx, cy) : S.fog[pi] === 0);
+    (SURVIVAL ? nearTeleportBase(cx, cy) : S.fog[pi] === 0);
   if (!okGround) { teleportRedRing(cx, cy); return; }
   completeTeleport(tp.unit, cx, cy);
 }
@@ -4609,11 +4635,12 @@ function completeTeleport(t, cx, cy) {
   const ox = t.x, oy = t.y;
   spawnBurst(ox + 0.5, oy + 0.5, CELL_COLORS[BLUE]); // leave: burst at origin
   t.x = cx; t.y = cy; t.rx = cx; t.ry = cy; t.moveT = 1; // instant, no glide
-  // Re-aim at map centre from the new spot (BLUE weapons aim centre).
-  // v144: teleport clears the starter flag — a teleported starter is
-  // now a placed cannon, so it keeps centre aim thereafter (including
-  // on waypoint removal) instead of snapping back to the coast.
-  t.base = Math.atan2(cfg.rows / 2 - cy, cfg.cols / 2 - cx);
+  // Re-aim from the new spot: straight up on survival (v180: all
+  // cannons aim up), map centre on main. v144: teleport clears the
+  // starter flag — a teleported starter is now a placed cannon, so
+  // it keeps up aim thereafter (including on waypoint removal)
+  // instead of snapping back to the coast.
+  t.base = SURVIVAL ? -Math.PI / 2 : Math.atan2(cfg.rows / 2 - cy, cfg.cols / 2 - cx);
   t.angle = t.base;
   t.isStarter = false;
   spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[BLUE]); // arrive: burst at destination
@@ -4768,8 +4795,9 @@ function update(dt) {
       // centre re-aims at the nearest waypoint each frame (so a
       // teleported cannon re-aims from its new spot automatically).
       // Arc, sweep, and turn rate are unchanged — only the centre
-      // moves. No waypoints = base untouched (map-centre aim, as set
-      // at placement / teleport). Red cannons never use waypoints.
+      // moves. No waypoints = base untouched (straight-up aim on
+      // survival, as set at placement / teleport). Red cannons never
+      // use waypoints.
       if (t.color === BLUE && S.waypoints && S.waypoints.length) {
         let best = null, bd = Infinity;
         for (const w of S.waypoints) {
@@ -5601,21 +5629,25 @@ function render() {
   // Build range (survival, proximity-gated units): while placing, show
   // the discs around your base units that a new unit must land inside.
   // A tap outside every disc is why the red ring rejects it. Outpost
-  // gets no discs — it can also go outside them on clear open ground
-  // (see the outpost exception in placeTurretAt). Main has no
-  // proximity rule (fog shows where you can place), so no discs there.
-  // Teleport shows the same discs, but only in its destination stage
-  // (after a weapon is picked) — pick stage shows unit rings instead.
-  if (SURVIVAL && ((S.placing && S.placing.type !== 'lantern') ||
-      (S.teleporting && S.teleporting.stage === 'dest'))) {
+  // shows wider discs (OUTPOST_PLACE_RADIUS, v180) around the same
+  // units. Teleport shows the same discs, but only in its destination
+  // stage (after a weapon is picked) — pick stage shows unit rings
+  // instead — and only around Cannons and Outposts, the only teleport
+  // bases (v180). Main has no proximity rule (fog shows where you can
+  // place), so no discs there.
+  let discR = 0, discTeleport = false;
+  if (SURVIVAL && S.placing) discR = S.placing.type === 'lantern' ? OUTPOST_PLACE_RADIUS : PLACE_RADIUS;
+  else if (SURVIVAL && S.teleporting && S.teleporting.stage === 'dest') { discR = PLACE_RADIUS; discTeleport = true; }
+  if (discR > 0) {
     ctx.save();
     ctx.fillStyle = 'rgba(250, 204, 21, 0.07)';
     ctx.strokeStyle = 'rgba(250, 204, 21, 0.45)';
     ctx.lineWidth = 2;
     for (const t of S.turrets) {
       if (t.dead || t.color !== BLUE) continue;
+      if (discTeleport && t.type !== 'cannon' && t.type !== 'lantern') continue;
       ctx.beginPath();
-      ctx.arc((t.x + 0.5) * CELL_PX, (t.y + 0.5) * CELL_PX, PLACE_RADIUS * CELL_PX, 0, Math.PI * 2);
+      ctx.arc((t.x + 0.5) * CELL_PX, (t.y + 0.5) * CELL_PX, discR * CELL_PX, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
     }
@@ -6145,9 +6177,9 @@ function tapCoin(sx, sy) {
 // waypoint cell during normal play to remove it, free. Placement taps
 // never remove (they refuse duplicates with a red ring instead), so
 // removal never charges gold. Last removal reverts BLUE cannons to
-// map-centre aim (placement formula, so aim returns exactly) — except
-// a v144 starter, which reverts to its inland aim, so placing and
-// removing a waypoint does not silently kill the starter's cliff aim.
+// straight-up aim on survival (v180: all cannons aim up), map-centre
+// on main — so placing and removing a waypoint does not silently
+// change a cannon's aim.
 function tryWaypointRemove(sx, sy) {
   if (!S.waypoints || !S.waypoints.length) return false;
   const wpt = screenToWorld(sx, sy);
@@ -6159,7 +6191,10 @@ function tryWaypointRemove(sx, sy) {
   if (!S.waypoints.length) {
     for (const t of S.turrets) {
       if (!t.dead && t.color === BLUE && t.type === 'cannon') {
-        t.base = (t.isStarter && SURVIVAL) ? -Math.PI / 2 // v155: starter faces up, not inlandAngle
+        // v180: all cannons revert to straight up on survival (the
+        // starter is no longer special — every cannon aims up);
+        // map-centre aim on main, as at placement.
+        t.base = SURVIVAL ? -Math.PI / 2
           : Math.atan2(cfg.rows / 2 - t.y, cfg.cols / 2 - t.x);
       }
     }
@@ -6278,6 +6313,28 @@ if (cambtn) {
     if (!S) return;
     S.autoCam = !S.autoCam;
     syncCamBtn();
+  });
+}
+
+// ---- Minimap toggle (v180): hidden since v173, back as a button ----
+// Map (top-right) shows the minimap; the × in its corner hides it
+// again and brings the Map button back. The % stats stay top-left
+// either way; the canvas keeps drawing while hidden, so showing it
+// is instant. The double-tap fog x-ray on the canvas works again
+// while it is shown.
+const mapbtn = document.getElementById('mapbtn');
+const mapmin = document.getElementById('mapmin');
+const minimapWrap = document.getElementById('minimap-wrap');
+if (mapbtn && minimapWrap) {
+  mapbtn.addEventListener('click', () => {
+    minimapWrap.style.display = 'block';
+    mapbtn.style.display = 'none';
+  });
+}
+if (mapmin && minimapWrap) {
+  mapmin.addEventListener('click', () => {
+    minimapWrap.style.display = 'none';
+    if (mapbtn) mapbtn.style.display = '';
   });
 }
 
