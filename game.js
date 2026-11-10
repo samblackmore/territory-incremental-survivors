@@ -35,38 +35,55 @@ const HARVEST_EVERY = 8;           // territory: seconds between pickups per cel
 // Turret roster: distinct damage patterns, no homing except the missile's
 // steering (which is deliberately dumb: limited turn rate, walls win).
 const GATHER_COOLDOWN = 6;           // seconds between pulls (legacy interval field, unused by the moving harvester)
-// Outpost vacuum (original Gather mechanic, pre-Harvester, revived v107):
-// a stationary Outpost pulls nearby idle pickups toward itself every
-// few seconds, nearest first, lerp to Outpost, grant on arrival (same
-// 'gather' coin state as original Gather, still in the coin update).
-// Starting values are buffed vs the original Gather base (range 3,
-// 1 per pull, 6s cooldown — no upgrades, so it must keep up with cannon
-// fire on the frontier): range 4, 3 per pull, every 4s. Tunable.
-// Harvester unchanged (roams, same-cell only, Count per stop).
-const OUTPOST_RANGE = 4;             // vacuum pull range in cells (Euclidean)
-const OUTPOST_PULL_COUNT = 3;        // pickups per pull (nearest first)
-const OUTPOST_PULL_EVERY = 4;        // seconds between pulls
-// v171: the pull range ring flash is gone (Sam) — no more circle
-// indicator on every Field/Outpost pull. The coins still fly in.
-// Field pull (v136, revived from the old Gather vacuum, now on Field):
-// pull up to pullCount nearest idle pickups within pullRadius cells
-// toward the Field itself, so it banks its own harvest. Base radius 3
-// (including its own cell) and count 1, upgraded by the combined Field
-// track (see STAT_DEFS bloom): radius 3 -> 6, count 1 -> 4.
-// v138 (Sam: pull was OP): pull interval starts 5x slower — 20s, not
-// 4s — and interval joins the track as its fourth rotating stat, so
-// picks can speed it back up but never to the old 4s: interval
-// 20 -> 16 -> 12 -> 8s at max, i.e. maxed throughput 4 per 8s (0.5/s)
-// vs the old 4 per 4s (1/s), and base throughput 1 per 20s (0.05/s)
-// vs the old 1 per 4s (0.25/s).
-// v148 (Sam: v138 nerfed too hard): frequency doubled at every level
-// — base and step both halved, so interval 10 -> 8 -> 6 -> 4s:
-// base throughput 1 per 10s (0.1/s), maxed 4 per 4s (1/s, back to
-// the pre-nerf max, but base is still 2.5x slower than pre-nerf).
-const FIELD_PULL_EVERY = 10;         // seconds between Field pulls at level 0 (v138: 20, v148: halved)
-const FIELD_PULL_INTERVAL_STEP = 2;  // seconds shaved per interval pick (10 -> 8 -> 6 -> 4)
-const FIELD_PULL_RADIUS_BASE = 3;    // pull radius at Field level 0, in cells (Euclidean, own cell included)
-const FIELD_PULL_COUNT_BASE = 1;     // pickups per pull at Field level 0
+// Magnet (v181, Sam: global pull passive): every living BLUE unit pulls
+// nearby idle pickups toward itself — nearest first, lerp to the unit,
+// grant on arrival (same 'gather' coin state as the old Field/Outpost
+// vacuums, still in the coin update). Level 0 = no pull: Field and
+// Outpost no longer pull by default (Field is purely growth, Outpost
+// purely base expansion + teleport anchor). Each Magnet pick improves
+// all three: +1 radius, -0.5s interval, +1 count every 2 levels.
+// Level 1: radius 3, every 4s, 1 per pull. Level 8 (max): radius 10,
+// every 1s, 4 per pull. Tunable. Harvester speed unchanged — it just
+// pulls while it drives now.
+// v171 note: the pull range ring flash is gone — no circle indicator
+// on any pull. The coins still fly in.
+const MAGNET_RADIUS_BASE = 2;        // pull radius = base + level (3 at Lv1, 10 at Lv8)
+const MAGNET_INTERVAL_BASE = 4.5;    // seconds between pulls at Lv0 (4 at Lv1, 1 at Lv7+, floored)
+const MAGNET_INTERVAL_STEP = 0.5;    // seconds shaved per level
+const MAGNET_INTERVAL_MIN = 1;       // fastest pull interval, in seconds
+const MAGNET_COUNT_STEP = 2;         // +1 pickup per pull every 2 levels (1 at Lv1-2, 4 at Lv7-8)
+function magnetLevel() { return (S.passives && S.passives.magnet) || 0; }
+function magnetRadius() { return MAGNET_RADIUS_BASE + magnetLevel(); }
+function magnetInterval() { return Math.max(MAGNET_INTERVAL_MIN, MAGNET_INTERVAL_BASE - MAGNET_INTERVAL_STEP * magnetLevel()); }
+function magnetCount() { return 1 + Math.floor((magnetLevel() - 1) / MAGNET_COUNT_STEP); }
+// What the NEXT Magnet pick (level n+1) does, for the card sub.
+function magnetNextEffect(n) {
+  const lv = n + 1;
+  const r = MAGNET_RADIUS_BASE + lv;
+  const iv = Math.max(MAGNET_INTERVAL_MIN, MAGNET_INTERVAL_BASE - MAGNET_INTERVAL_STEP * lv);
+  const c = 1 + Math.floor((lv - 1) / MAGNET_COUNT_STEP);
+  return `Radius ${r} · every ${iv}s · ${c} per pull`;
+}
+// Magnet pull: pull up to `count` nearest idle pickups within `radius`
+// cells toward the unit (state 'gather', lerp to the unit, grant on
+// arrival). Fogged coins are not collectible (v166).
+function pullCoinsTo(t, radius, count) {
+  const r2 = radius * radius;
+  const inRange = [];
+  for (const c of S.coins) {
+    if (c.state !== 'idle') continue;
+    if (coinFogged(c)) continue;
+    const dx = c.x - (t.x + 0.5), dy = c.y - (t.y + 0.5);
+    const d2 = dx * dx + dy * dy;
+    if (d2 <= r2) inRange.push({ c, d2 });
+  }
+  inRange.sort((a, b) => a.d2 - b.d2);
+  const take = Math.min(count, inRange.length);
+  for (let k = 0; k < take; k++) {
+    const c = inRange[k].c;
+    c.state = 'gather'; c.sx = c.x; c.sy = c.y; c.gx = t.x + 0.5; c.gy = t.y + 0.5; c.t = 0;
+  }
+}
 // Cannon split stat tracks (v114): each weapon stat levels independently
 // (chips top-left), one card per stat boost — no more bundled tracks.
 // Caps are 5 for cannon (v114, down from 8 — a 30-minute round never
@@ -97,20 +114,12 @@ const STAT_DEFS = {
     { key: 'pen', name: 'Penetration', cap: 5, effect: '+1 pierce depth (chance of continuing)', shopOnly: true },
   ],
   bloom: [
-    // v136: one combined Field track, cap 9, cycling growth / pull
-    // radius / pull count in that order, 3 cycles: Lv1 growth, Lv2
-    // radius, Lv3 count, Lv4 growth, Lv5 radius, Lv6 count, Lv7
-    // growth, Lv8 radius, Lv9 count. Max: growth 1.2^3 = 1.73x,
-    // pull radius 3 -> 6, pull count 1 -> 4. The card shows the next
-    // level's specific effect (see offerCards), so the rotation reads.
-    // v138: interval joins as a fourth rotating stat, cap 12:
-    // Lv1 growth, Lv2 radius, Lv3 count, Lv4 interval, repeat.
-    // Max unchanged for growth/radius/count (1.73x, 6, 4), plus
-    // interval 20 -> 16 -> 12 -> 8s (v148: 10 -> 8 -> 6 -> 4s).
-    // Red Field level (below) moves
-    // 7 -> 9 so its growth head start stays 1.73x (growth picks at
-    // levels 1, 5, 9 under the 4-stat rotation).
-    { key: 'field', name: 'Field', cap: 12, effect: 'Growth, pull radius, pull count and pull interval, in rotation' },
+    // v181: growth only — pull left the Field track for the global
+    // Magnet passive, so Field is purely growth now. Cap 3, each pick
+    // +20% growth, max 1.73x (same max as the old 12-level rotation,
+    // whose growth picks landed at levels 1, 5, 9). Red Field level
+    // (below) moves 9 -> 3 to keep its 1.73x head start.
+    { key: 'field', name: 'Field', cap: 3, effect: '+20% growth speed' },
   ],
   gather: [
     { key: 'count', name: 'Count', cap: 8, effect: '+1 pickup per pull' },
@@ -136,14 +145,10 @@ function applyStat(w, weapon, st) {
     else if (st === 'pen') w.penDepth = 1 + n; // max penetration depth: base 1 + 1 per level (rock hits + flood paints, each step 50% chance v106)
   } else if (weapon === 'bloom') {
     if (st === 'field') {
-      // Combined Field track (v136, v138 4-stat rotation): growth on
-      // levels 1,5,9; pull radius on 2,6,10; pull count on 3,7,11;
-      // pull interval on 4,8,12.
+      // v181: growth only — pull left the Field track for the global
+      // Magnet passive. Each pick is +20% growth; cap 3 = 1.73x max.
       const n = w.stats.field || 0;
-      w.rateMult = Math.pow(1.2, Math.floor((n + 3) / 4));
-      w.pullRadius = FIELD_PULL_RADIUS_BASE + Math.floor((n + 2) / 4);
-      w.pullCount = FIELD_PULL_COUNT_BASE + Math.floor((n + 1) / 4);
-      w.pullInterval = FIELD_PULL_EVERY - FIELD_PULL_INTERVAL_STEP * Math.floor(n / 4);
+      w.rateMult = Math.pow(1.2, n);
     }
   }
   // gather count derives from stats (gatherCount); mole
@@ -213,6 +218,8 @@ const ICONS_ORIG = {
   // only when you reach the Evo, not on the base stat card).
   evoSpray: '<svg viewBox="0 0 24 24" width="36" height="36"><circle cx="6" cy="12" r="2.5" fill="#ef4444"/><path d="M9 10 L19 5 M9 12 L20 12 M9 14 L19 19" stroke="#ef4444" stroke-width="2.5" stroke-linecap="round" fill="none"/></svg>',
   evoPaint: '<svg viewBox="0 0 24 24" width="36" height="36"><path d="M12 3 L14 7 L19 6 L17 11 L21 13 L16 15 L18 20 L12 17 L6 20 L8 15 L3 13 L7 11 L5 6 L10 7 Z" fill="#ef4444"/><circle cx="20" cy="4" r="1.5" fill="#ef4444"/><circle cx="4" cy="19" r="1.2" fill="#ef4444"/></svg>',
+  // Magnet (v181): horseshoe magnet — U body in team color, pale pole tips.
+  magnet: '<svg viewBox="0 0 24 24" width="36" height="36"><path d="M6 3 h4 v8 a2 2 0 0 0 4 0 V3 h4 v8 a6 6 0 0 1 -12 0 Z" fill="#ef4444"/><rect x="6" y="3" width="4" height="3.5" fill="#f5f5f5"/><rect x="14" y="3" width="4" height="3.5" fill="#f5f5f5"/></svg>',
 };
 function buildIcons(playerHex) {
   const o = {};
@@ -225,7 +232,7 @@ const TURRET = {
   rocket: { name: 'Rocket', hp: 6, interval: 2.5, dmg: 3 },
   laser:  { name: 'Laser',  hp: 5, interval: 2.0, dmg: 2 },
   bloom:  { name: 'Field',  hp: 4, interval: GROW_INTERVAL, dmg: 0 },
-  lantern:{ name: 'Outpost',hp: 4, interval: 0, dmg: 0 }, // fog light + vacuum collector, no firing (display rename v107, internal type still 'lantern', like Field/Digger/Harvester)
+  lantern:{ name: 'Outpost',hp: 4, interval: 0, dmg: 0 }, // fog light + base anchor, no firing (display rename v107, internal type still 'lantern', like Field/Digger/Harvester; v181: vacuum moved to the Magnet passive)
   gather: { name: 'Harvester', hp: 5, interval: GATHER_COOLDOWN, dmg: 0 }, // roams for pickups, anywhere, slowly
   mole:   { name: 'Digger', hp: 6, interval: 1.0, dmg: 1 }, // digs through rock, then dies
   wall:   { name: 'Wall',   hp: 20, interval: 0, dmg: 0 }, // terrain, not a turret (see placeTurretAt wall branch)
@@ -1004,11 +1011,12 @@ const MOLE_NUGGET_BIAS = 0.7; // blue mole: 70% toward nearest nugget, 30% rando
 // mole). Up to RED_MOLE_MAX alive — the cost, not a timer, is the
 // limiter, so the enemy has to earn its army from its own fields.
 const RED_MOLE_MAX = 3;
-// Enemy bloom head start: Field level 9 (growth at levels 1,5,9 =
-// 1.2^3 = 1.73x) vs the player's fresh Field at level 0 — the early
-// overwhelmed feeling, same rules. (v136: was level 7 on the 3-stat
-// track; v138 4-stat rotation moves the third growth pick to 9.)
-const RED_BLOOM_FIELD = 9;
+// Enemy bloom head start: Field level 3 (1.2^3 = 1.73x growth) vs
+// the player's fresh Field at level 0 — the early overwhelmed
+// feeling, same rules. (v181: was level 9 on the old 4-stat rotation,
+// whose growth picks landed at levels 1, 5, 9; Field is growth-only
+// now, so level 3 gives the same 1.73x.)
+const RED_BLOOM_FIELD = 3;
 // Territory harvest: a cell glows over HARVEST_EVERY seconds, then has
 // this chance to produce (same as the rock XP surprise, not a salary).
 const BLOOM_HARVEST_CHANCE = 0.3;
@@ -1235,8 +1243,8 @@ function mkTurret(x, y, color, type) {
     t.rx = x; t.ry = y; t.moveT = 1; t.stepT = 0;
   }
   if (type === 'lantern') {
-    // Outpost: stationary vacuum (see update loop lantern branch).
-    // coolT is the pull timer (already 0 above).
+    // Outpost: stationary base anchor (v181: the vacuum left with the
+    // Magnet passive; the Outpost itself does nothing per-frame).
   }
   return t;
 }
@@ -1245,31 +1253,9 @@ function gatherCount() {
   const w = S.weapons.gather;
   return 1 + (w && w.stats ? (w.stats.count || 0) : 0);
 }
-// Field pull radius / count / interval, derived from the combined
-// Field track (v136, v138 4-stat rotation) so level 0 works without
-// any pick, and test objects that set stats manually still read
-// correctly. w is a weapons entry (blue or red); red Fields don't
-// pull (pull code checks BLUE), but their values still derive the
-// same way for completeness.
-function bloomPullRadius(w) {
-  const n = (w && w.stats ? (w.stats.field || 0) : 0);
-  return FIELD_PULL_RADIUS_BASE + Math.floor((n + 2) / 4);
-}
-function bloomPullCount(w) {
-  const n = (w && w.stats ? (w.stats.field || 0) : 0);
-  return FIELD_PULL_COUNT_BASE + Math.floor((n + 1) / 4);
-}
-function bloomPullInterval(w) {
-  const n = (w && w.stats ? (w.stats.field || 0) : 0);
-  return FIELD_PULL_EVERY - FIELD_PULL_INTERVAL_STEP * Math.floor(n / 4);
-}
-function bloomFieldNextEffect(n) {
-  // What the NEXT Field pick (level n+1) does, for the card sub.
-  if (n % 4 === 0) return '+20% growth speed';
-  if (n % 4 === 1) return '+1 pull radius';
-  if (n % 4 === 2) return '+1 pull count';
-  return '-2s pull interval';
-}
+// v181: the Field pull helpers are gone with the Field pull itself —
+// pull now lives on the global Magnet passive (see magnetRadius /
+// magnetInterval / magnetCount above), and Field is growth only.
 // Harvester pathing: BFS (not A* — we just need the nearest reachable
 // pickup, and BFS guarantees it avoids walls). From the Harvester's cell,
 // over open ground (EMPTY or own BLUE territory, never rock/grey/red,
@@ -2094,9 +2080,10 @@ function newGame() {
         // effect. See updateSparkles / render.
         sparkles: [], sparkleT: 0.8,
         destroyed: 0, destroyedBlue: 0,
-        // passives (VS-style): none currently — Bounce removed v106,
-        // replaced by Penetration (forward, not random ricochet).
-        // Future passives go here with initial level 0.
+        // passives (VS-style): Magnet (v181) is the first since
+        // Bounce was removed v106, replaced by Penetration (forward,
+        // not random ricochet). Future passives go here with initial
+        // level 0; unset passives read as 0 everywhere (|| 0).
         passives: {},
         // auto-battler state
         turrets: [], missiles: [], beams: [],
@@ -3764,15 +3751,15 @@ function checkLevel() {
 // draws from stat cards (one per weapon stat), Gold Ore, and steer.
 // `needs` gates an upgrade on owning a turret it actually affects — no
 // steering card before you've got a rocket.
-// No passives currently: Bounce was removed in v106, replaced by
-// Penetration — forward pierce fits the fantasy better than a random
-// ricochet back at your own cannon.
+// Passives: Magnet (v181) is the first since Bounce was removed in
+// v106, replaced by Penetration — forward pierce fits the fantasy
+// better than a random ricochet back at your own cannon.
 function buildCardPool() { return [
   { kind: 'turret', type: 'cannon', title: 'Cannon', icon: ICONS.cannon, sub: 'Sweeps shots in an arc, blasting rock.' },
   { kind: 'turret', type: 'rocket', title: 'Rocket', icon: ICONS.rocket, sub: 'Fires homing missiles that crash and splash-dig.' },
   { kind: 'turret', type: 'laser', title: 'Laser', icon: ICONS.laser, sub: 'Waits for flood, then paints it.' },
-  { kind: 'turret', type: 'bloom', title: 'Field', icon: ICONS.bloom, sub: 'Grows territory that harvests, and pulls in nearby pickups.' },
-  { kind: 'turret', type: 'lantern', title: 'Outpost', icon: ICONS.lantern, sub: 'Pushes back fog and pulls in nearby pickups.' },
+  { kind: 'turret', type: 'bloom', title: 'Field', icon: ICONS.bloom, sub: 'Grows territory that harvests.' },
+  { kind: 'turret', type: 'lantern', title: 'Outpost', icon: ICONS.lantern, sub: 'Pushes back fog and anchors your base.' },
   { kind: 'turret', type: 'gather', title: 'Harvester', icon: ICONS.gather, sub: 'Steps onto pickups to collect them, slowly.' },
   { kind: 'turret', type: 'mole', title: 'Digger', icon: ICONS.mole, sub: 'Digs tunnels through rock.' },
   { kind: 'turret', type: 'wall', title: 'Wall', icon: ICONS.wall, sub: '2x2 defensive barrier.' },
@@ -3785,6 +3772,11 @@ function buildCardPool() { return [
       kind: 'stat', weapon, stat: d.key, cap: d.cap,
       title: d.name, icon: ICONS[weapon], effect: d.effect,
     }))),
+  // Magnet (v181): the global pull passive. Every living BLUE unit
+  // pulls in nearby pickups; each pick grows the radius, speeds the
+  // pull up, and adds count. Field and Outpost no longer pull by
+  // default — this is the only pull there is.
+  { kind: 'passive', passive: 'magnet', title: 'Magnet', icon: ICONS.magnet, sub: 'All units pull in nearby pickups.' },
   // Gold Ore: the XP-for-gold exchange. A free XP-row pick that grants
   // run gold — the bridge to a shop unit you can see but can't afford yet.
   // Amount rolls at deal time (3–5): you see what you get before picking.
@@ -3833,7 +3825,7 @@ function availableCards() {
       if (!w || !w.stats) return false;
       return (w.stats[c.stat] || 0) < c.cap;
     }
-    if (c.kind === 'passive') return S.passives[c.passive] < 8;
+    if (c.kind === 'passive') return (S.passives[c.passive] || 0) < 8;
     if (c.kind === 'teleport') return hasTeleportTarget();
     return (!c.needs || hasTurretTypes(c.needs));
   });
@@ -3957,7 +3949,7 @@ function offerCards() {
     el.dataset.stat = '';
     el.dataset.cost = '';
     el.dataset.weapon = '';
-    const lv = p.kind === 'passive' ? S.passives[p.passive] : 0;
+    const lv = p.kind === 'passive' ? (S.passives[p.passive] || 0) : 0;
     let title = p.title, sub = p.sub, newTag = '', priceHtml = '', evoLine = '';
     const icon = `<div class="icon">${p.icon || ''}</div>`;
     // v176: "New!" means first time picking up a unit — only unlock cards
@@ -3966,6 +3958,9 @@ function offerCards() {
     if (p.kind === 'passive' && lv > 0) {
       title = `${p.title} <span class="lv">Lv${lv + 1}</span>`;
     }
+    // v181: Magnet shows what the NEXT pick actually does, like the
+    // old Field rotation card did — radius, interval, count.
+    if (p.kind === 'passive' && p.passive === 'magnet') sub = magnetNextEffect(lv);
     else if (p.kind === 'stat') {
       // One stat, one chip: title is the stat + its NEW level, sub the effect.
       // The weapon icon says which weapon it belongs to.
@@ -3979,9 +3974,6 @@ function offerCards() {
       const cur = w && w.stats ? (w.stats[p.stat] || 0) : 0;
       title = `${p.title} <span class="lv">Lv${cur + 1}</span>`;
       sub = p.effect;
-      // v136: Field is a rotating track, so the card shows what the
-      // NEXT pick actually does, not the generic rotation text.
-      if (p.weapon === 'bloom' && p.stat === 'field') sub = bloomFieldNextEffect(cur);
       el.dataset.weapon = p.weapon;
       el.dataset.stat = p.stat;
       if (p.weapon === 'cannon' && p.stat === 'dmg') evoLine = `<span class="evoline">${ICONS.evoPaint} EVO</span>`;
@@ -4234,8 +4226,9 @@ document.querySelectorAll('#levelup .card').forEach(card => {
       }
     } else if (kind === 'passive') {
       const p = card.dataset.passive;
-      if (S.passives[p] < 8) {
-        S.passives[p]++;
+      const cur = S.passives[p] || 0;
+      if (cur < 8) {
+        S.passives[p] = cur + 1;
       }
     } else if (kind === 'steer') {
       S.steerMult *= parseFloat(card.dataset.mult);
@@ -4846,69 +4839,11 @@ function update(dt) {
     } else if (t.type === 'bloom') {
       t.cd -= dt;
       if (t.cd <= 0) { t.cd = TURRET.bloom.interval / rateMult * S.bloomMult; bloomGrowth(t); }
-      // Field pull (v136, blue only): pull up to pullCount nearest
-      // idle pickups within pullRadius cells toward itself, so a
-      // Field banks its own harvest. Same 'gather' coin state as
-      // the Outpost vacuum, grant on arrival. Red Fields grow only.
-      // v138: interval is bloomPullInterval(w) — 20s at level 0,
-      // -4s per interval pick, down to 8s at level 12.
-      // v148: halved — 10s at level 0, -2s per pick, down to 4s.
-      if (t.color === BLUE) {
-        t.pullT = (t.pullT || 0) + dt;
-        if (t.pullT >= bloomPullInterval(S.weapons.bloom)) {
-          t.pullT = 0;
-          // v171: no range ring flash on pull anymore.
-          const w = S.weapons.bloom;
-          const r = bloomPullRadius(w), n = bloomPullCount(w), r2 = r * r;
-          const inRange = [];
-          for (const c of S.coins) {
-            if (c.state !== 'idle') continue;
-            if (coinFogged(c)) continue; // v166: fogged coins are not collectible
-            const dx = c.x - (t.x + 0.5), dy = c.y - (t.y + 0.5);
-            const d2 = dx * dx + dy * dy;
-            if (d2 <= r2) inRange.push({ c, d2 });
-          }
-          inRange.sort((a, b) => a.d2 - b.d2);
-          const take = Math.min(n, inRange.length);
-          for (let k = 0; k < take; k++) {
-            const c = inRange[k].c;
-            c.state = 'gather'; c.sx = c.x; c.sy = c.y; c.gx = t.x + 0.5; c.gy = t.y + 0.5; c.t = 0;
-          }
-        }
-      }
-    } else if (t.type === 'lantern') {
-      // Outpost: fog light + stationary vacuum (original Gather
-      // mechanic, pre-Harvester, revived v107). Every OUTPOST_PULL_EVERY
-      // seconds, pull up to OUTPOST_PULL_COUNT nearest idle pickups
-      // within OUTPOST_RANGE cells toward itself (state 'gather', lerp
-      // to Outpost, grant on arrival — same coin handler as original
-      // Gather). Blue only; red lanterns (none in game) don't vacuum.
-      // Harvester unchanged (roams, same-cell only). Division is
-      // natural, not hard-zoned: Outpost claims frontier pickups
-      // quickly (Harvester BFS ignores non-idle), so Harvester stays
-      // on field pickups back home — as long as Outpost keeps up.
-      if (t.color === BLUE) {
-        t.coolT += dt;
-        if (t.coolT >= OUTPOST_PULL_EVERY) {
-          t.coolT = 0;
-          // v171: no range ring flash on pull anymore.
-          const r2 = OUTPOST_RANGE * OUTPOST_RANGE;
-          const inRange = [];
-          for (const c of S.coins) {
-            if (c.state !== 'idle') continue;
-            if (coinFogged(c)) continue; // v166: fogged coins are not collectible
-            const dx = c.x - (t.x + 0.5), dy = c.y - (t.y + 0.5);
-            const d2 = dx * dx + dy * dy;
-            if (d2 <= r2) inRange.push({ c, d2 });
-          }
-          inRange.sort((a, b) => a.d2 - b.d2);
-          const n = Math.min(OUTPOST_PULL_COUNT, inRange.length);
-          for (let k = 0; k < n; k++) {
-            const c = inRange[k].c;
-            c.state = 'gather'; c.sx = c.x; c.sy = c.y; c.gx = t.x + 0.5; c.gy = t.y + 0.5; c.t = 0;
-          }
-        }
-      }
+      // v181: Field no longer pulls — it is purely growth now. Pull
+      // lives on the global Magnet passive (see the block after the
+      // type chain below). Red Fields grow only, as before.
+      // (The lantern branch is gone too: v181 moved the Outpost
+      // vacuum to Magnet as well, so Outposts have no per-frame work.)
     } else if (t.type === 'mole') {
       // Digger: chews through rock, dies after its lifetime (cells dug).
       // Red turns toward the nearest blue turret (encroachment) and opens
@@ -4989,6 +4924,18 @@ function update(dt) {
         // After each dig step (moved, walked, or waited): a blue
         // Digger picks up idle coins within 1 cell (v135).
         if (!t.dead) collectAtMole(t);
+      }
+    }
+    // Magnet (v181, global pull): every living BLUE unit pulls nearby
+    // idle pickups toward itself. Level 0 = no pull. This runs for
+    // every type — Cannon, Digger, Field, Harvester (pulls while it
+    // drives, speed unchanged), Outpost, Laser — because it sits
+    // outside the type chain, after it. Red never pulls.
+    if (t.color === BLUE && !t.dead && magnetLevel() > 0) {
+      t.pullT = (t.pullT || 0) + dt;
+      if (t.pullT >= magnetInterval()) {
+        t.pullT = 0;
+        pullCoinsTo(t, magnetRadius(), magnetCount());
       }
     }
   }
