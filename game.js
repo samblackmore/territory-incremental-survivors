@@ -127,6 +127,15 @@ const STAT_DEFS = {
   mole: [
     { key: 'dig', name: 'Dig', cap: 8, effect: '+1 dig damage' },
   ],
+  wall: [
+    // v182: Wall upgrade track (Sam: HP and Size, so defenses scale
+    // with the threat). HP: +10 per cell per level, cap 5 (20 -> 70).
+    // Size: the wall block grows a cell per level, cap 3 (2x2 -> 5x5);
+    // gold cost scales with area (see wallCost), so a bigger wall
+    // costs proportionally more, not the same flat 2.
+    { key: 'hp', name: 'Wall HP', cap: 5, effect: '+10 wall HP' },
+    { key: 'size', name: 'Wall Size', cap: 3, effect: '+1 wall size' },
+  ],
 };
 // Fresh per-stat levels for a weapon type (0 = base value, cap = maxed).
 function initWeaponStats(type) {
@@ -179,6 +188,7 @@ const UNIT_COST = { cannon: 10, mole: 4, bloom: 3, gather: 6, lantern: 2, wall: 
 const UNIT_COST_STEP = 5;
 const LANTERN_COST_STEP = 1; // outposts stay cheap so chaining them to extend the base is affordable
 function unitCost(type) {
+  if (type === 'wall') return wallCost(); // v182: scales with Size (area)
   let count = 0;
   for (const t of S.turrets) {
     if (!t.dead && t.color === BLUE && t.type === type) count++;
@@ -2410,6 +2420,11 @@ function newGame() {
   }
   S.turrets.push(starterT);
   S.weapons.cannon = { stats: initWeaponStats('cannon'), rateMult: 1, dmgBonus: 0, critChance: 0, proj: 0, evo: false, evoPaint: false };
+  // v182: the wall track lives here (walls have no turret entry, so
+  // placement never creates it). The cards are gated on
+  // S.unlocked.wall, so the levels sit at 0 until the Wall is
+  // unlocked and picked.
+  S.weapons.wall = { stats: initWeaponStats('wall'), rateMult: 1, dmgBonus: 0, critChance: 0, proj: 0, evo: false };
   // Perma base: cannon starts at the perma levels (not 0), and in-run
   // picks stack on top (same track, same cap 5 total). Starter is always
   // placed even if cannon is toggled off on the start screen — the toggle
@@ -3764,10 +3779,12 @@ function buildCardPool() { return [
   { kind: 'turret', type: 'mole', title: 'Digger', icon: ICONS.mole, sub: 'Digs tunnels through rock.' },
   { kind: 'turret', type: 'wall', title: 'Wall', icon: ICONS.wall, sub: '2x2 defensive barrier.' },
   { kind: 'turret', type: 'waypoint', title: 'Waypoint', icon: ICONS.waypoint, sub: 'Cannons aim at the nearest waypoint.' },
-  // Stat cards, generated from STAT_DEFS (cannon/bloom/gather only — mole
-  // dig advances via the shop bundle, never as a free XP pick; shopOnly
-  // stats like projectiles are bought with gold, not XP).
-  ...['cannon', 'bloom', 'gather'].flatMap(weapon =>
+  // Stat cards, generated from STAT_DEFS (cannon/bloom/gather/wall —
+  // mole dig advances via the shop bundle, never as a free XP pick;
+  // shopOnly stats like projectiles are bought with gold, not XP).
+  // Wall stats are gated on the Wall being unlocked (see
+  // availableCards), so they never appear before you can place one.
+  ...['cannon', 'bloom', 'gather', 'wall'].flatMap(weapon =>
     STAT_DEFS[weapon].filter(d => !d.shopOnly).map(d => ({
       kind: 'stat', weapon, stat: d.key, cap: d.cap,
       title: d.name, icon: ICONS[weapon], effect: d.effect,
@@ -3823,6 +3840,9 @@ function availableCards() {
     if (c.kind === 'stat') {
       const w = S.weapons[c.weapon];
       if (!w || !w.stats) return false;
+      // v182: wall stats only once the Wall is unlocked — they make
+      // no sense before you can place one.
+      if (c.weapon === 'wall' && !(S.unlocked && S.unlocked.wall)) return false;
       return (w.stats[c.stat] || 0) < c.cap;
     }
     if (c.kind === 'passive') return (S.passives[c.passive] || 0) < 8;
@@ -4262,9 +4282,27 @@ document.getElementById('diveagain').addEventListener('click', () => {
 // (Sam: at 200 HP a 2-gold wall cell absorbed 200 shots, so the
 // threat was trivially blocked — at 20 HP a cell lasts ~2 min of
 // fire in its column at the 10/s rate, so walls buy time, not
-// forever). Flat 2 gold — walls aren't turrets, so unitCost never
-// escalates them.
+// forever). v182: HP and Size are upgradeable tracks (see STAT_DEFS
+// wall); gold cost scales with Size via wallCost, so a bigger wall
+// costs proportionally more, not the same flat 2.
 const WALL_HP = 20;
+const WALL_HP_PER_LEVEL = 10; // v182: +10 HP per Wall HP pick
+const WALL_SIZE_BASE = 2;     // v182: wall block dimension at Size 0
+// v182: wall stat levels (0 until the Wall is unlocked and picked).
+// Walls have no turret entry, so the track lives in S.weapons.wall,
+// created in newGame; the cards are gated on S.unlocked.wall.
+// Existing walls keep the HP they were placed with — the upgrade
+// only affects new placements.
+function wallHpLevel() { const w = S.weapons.wall; return (w && w.stats && w.stats.hp) || 0; }
+function wallSizeLevel() { const w = S.weapons.wall; return (w && w.stats && w.stats.size) || 0; }
+function wallHp() { return WALL_HP + WALL_HP_PER_LEVEL * wallHpLevel(); }
+function wallSize() { return WALL_SIZE_BASE + wallSizeLevel(); }
+// v182: wall gold cost scales with the block's area (per-cell cost
+// stays ~0.5 gold): 2x2 = 2, 3x3 = 5, 4x4 = 8, 5x5 = 13.
+function wallCost() {
+  const n = wallSize();
+  return Math.round(UNIT_COST.wall * n * n / (WALL_SIZE_BASE * WALL_SIZE_BASE));
+}
 const WALL_SHADE = 3; // mid grey ([107,114,128]) — reads as stone, distinct from natural grey variation
 // Survival placement: units go near your base, not anywhere lit.
 // (Matches fogDist, so an outpost extends the placeable range by 6.)
@@ -4383,18 +4421,21 @@ function placeTurretAt(sx, sy) {
   cx = Math.max(0, Math.min(cfg.cols - 1, cx));
   cy = Math.max(0, Math.min(cfg.rows - 1, cy));
   if (type === 'wall') {
-    // 2x2 wall: anchor + right + down + diagonal must all be in bounds,
-    // unoccupied, and EMPTY or a color cell (BLUE or RED, v134: you
-    // can wall your own territory — walling it stops its harvest —
-    // and you can wall flood, destroying that color and cutting the
-    // flood off. Rock/grey still refuse, so a wall into flood needs
-    // a 2x2 patch of flood/empty/own, not rock).
-    if (cx + 1 >= cfg.cols || cy + 1 >= cfg.rows) {
+    // v182: the wall block is wallSize() x wallSize() (2x2 base, +1
+    // per Size pick, up to 5x5). Every cell of the block must be in
+    // bounds, unoccupied, and EMPTY or a color cell (BLUE or RED,
+    // v134: you can wall your own territory — walling it stops its
+    // harvest — and you can wall flood, destroying that color and
+    // cutting the flood off. Rock/grey still refuse, so a wall into
+    // flood needs an NxN patch of flood/empty/own, not rock).
+    const n = wallSize();
+    if (cx + n - 1 >= cfg.cols || cy + n - 1 >= cfg.rows) {
       S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
       return;
     }
-    const cells2x2 = [[cx, cy], [cx + 1, cy], [cx, cy + 1], [cx + 1, cy + 1]];
-    for (const [wx, wy] of cells2x2) {
+    const cellsN = [];
+    for (let dy = 0; dy < n; dy++) for (let dx = 0; dx < n; dx++) cellsN.push([cx + dx, cy + dy]);
+    for (const [wx, wy] of cellsN) {
       const wi = wy * cfg.cols + wx;
       if (turretAt(wx, wy) || civilianAt(wx, wy) || (S.cells[wi] !== EMPTY && S.cells[wi] !== BLUE && S.cells[wi] !== RED)) {
         S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
@@ -4410,18 +4451,20 @@ function placeTurretAt(sx, sy) {
       S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
       return;
     }
-    // Convert all 4 cells to GREY wall: this destroys any color
+    // Convert all N*N cells to GREY wall: this destroys any color
     // there (own or flood) and clears any growth in progress, so
     // flood growing on an EMPTY cell is removed, not just completed flood.
-    for (const [wx, wy] of cells2x2) {
+    const hp = wallHp();
+    for (const [wx, wy] of cellsN) {
       const wi = wy * cfg.cols + wx;
       S.cells[wi] = GREY;
-      S.hp[wi] = WALL_HP; S.maxhp[wi] = WALL_HP; S.shade[wi] = WALL_SHADE;
+      S.hp[wi] = hp; S.maxhp[wi] = hp; S.shade[wi] = WALL_SHADE;
       S.growN[wi] = 0; S.growBy[wi] = 0; S.harvT[wi] = 0; S.goldNug[wi] = 0; S.popT[wi] = -1;
       if (S.noHarvest) S.noHarvest[wi] = 0;
     }
-    spawnBurst(cx + 1, cy + 1, '#9ca3af'); // center of the 2x2 block
-    // No turret, no weapon entry — walls are terrain. (So the shop card
+    spawnBurst(cx + n / 2, cy + n / 2, '#9ca3af'); // center of the NxN block
+    // No turret entry — walls are terrain. (The stat track lives in
+    // S.weapons.wall, but no turret is ever created, so the shop card
     // keeps showing New! + the description every time, which is fine:
     // each wall IS new.)
     const wallPlacing = S.placing;
@@ -5836,8 +5879,8 @@ function render() {
   // A stat with no picks yet (level 0) hides its row entirely — the
   // corner only shows stats you've actually invested in, and a stat
   // card shows New! on its first pick (see offerCards).
-  const STAT_LABEL = { dmg: 'DAMG', proj: 'PROJ', rate: 'RATE', pen: 'PENE', growth: 'GROW', field: 'FLD', count: 'CNTS', dig: 'DIGS' };
-  for (const type of ['cannon', 'bloom', 'gather', 'mole']) {
+  const STAT_LABEL = { dmg: 'DAMG', proj: 'PROJ', rate: 'RATE', pen: 'PENE', growth: 'GROW', field: 'FLD', count: 'CNTS', dig: 'DIGS', hp: 'HP', size: 'SIZE' };
+  for (const type of ['cannon', 'bloom', 'gather', 'mole', 'wall']) {
     const w = S.weapons[type];
     if (!w || !w.stats) continue;
     for (const d of (STAT_DEFS[type] || [])) {
@@ -5866,6 +5909,13 @@ function render() {
         ctx.beginPath(); ctx.ellipse(20, iy + 1, 5, 3.5, 0, 0, Math.PI * 2); ctx.fill();
         ctx.fillStyle = '#d4a574';
         ctx.beginPath(); ctx.arc(20, iy - 1.5, 2, 0, Math.PI * 2); ctx.fill();
+      } else if (type === 'wall') {
+        // v182: small grey wall block (two stacked bricks).
+        ctx.fillStyle = '#9ca3af';
+        ctx.fillRect(14, iy - 5, 12, 10);
+        ctx.strokeStyle = '#4b5563'; ctx.lineWidth = 1;
+        ctx.strokeRect(14, iy - 5, 12, 10);
+        ctx.beginPath(); ctx.moveTo(20, iy - 5); ctx.lineTo(20, iy + 5); ctx.moveTo(14, iy); ctx.lineTo(26, iy); ctx.stroke();
       }
       ctx.fillStyle = '#dfe5f2';
       ctx.font = 'bold 10px system-ui, sans-serif';
