@@ -1714,12 +1714,18 @@ function rescueArrow() {
   const py = view.h / 2 + (sy - cam.y) * cam.zoom;
   if (px >= 0 && px <= view.w && py >= 0 && py <= view.h) return null; // in view: hide
   const m = 30; // arrow sits this far inside the screen edge
+  // Top edge: below the HUD, not the screen edge. The XP bar (30px),
+  // the gold/civilians chips (bottom 61) and the % stats (bottom ~66)
+  // all live up there, and the chevron's tip reaches 14px above its
+  // centre when it points straight up — so the centre clamps to 88,
+  // clearing the HUD with a small gap. Sides and bottom keep m.
+  const mTop = 88;
   const cx = view.w / 2, cy = view.h / 2;
   let dx = px - cx, dy = py - cy;
   const len = Math.hypot(dx, dy) || 1;
   dx /= len; dy /= len;
   const tx = dx !== 0 ? (dx > 0 ? (view.w - m - cx) / dx : (m - cx) / dx) : Infinity;
-  const ty = dy !== 0 ? (dy > 0 ? (view.h - m - cy) / dy : (m - cy) / dy) : Infinity;
+  const ty = dy !== 0 ? (dy > 0 ? (view.h - m - cy) / dy : (mTop - cy) / dy) : Infinity;
   const t = Math.min(tx, ty);
   return { x: cx + dx * t, y: cy + dy * t, angle: Math.atan2(dy, dx) };
 }
