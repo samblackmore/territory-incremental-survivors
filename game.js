@@ -53,16 +53,25 @@ const MAGNET_INTERVAL_STEP = 0.5;    // seconds shaved per level
 const MAGNET_INTERVAL_MIN = 1;       // fastest pull interval, in seconds
 const MAGNET_COUNT_STEP = 2;         // +1 pickup per pull every 2 levels (1 at Lv1-2, 4 at Lv7-8)
 function magnetLevel() { return (S.passives && S.passives.magnet) || 0; }
-function magnetRadius() { return MAGNET_RADIUS_BASE + magnetLevel(); }
-function magnetInterval() { return Math.max(MAGNET_INTERVAL_MIN, MAGNET_INTERVAL_BASE - MAGNET_INTERVAL_STEP * magnetLevel()); }
-function magnetCount() { return 1 + Math.floor((magnetLevel() - 1) / MAGNET_COUNT_STEP); }
-// What the NEXT Magnet pick (level n+1) does, for the card sub.
+function magnetRadiusAt(lv) { return MAGNET_RADIUS_BASE + lv; }
+function magnetIntervalAt(lv) { return Math.max(MAGNET_INTERVAL_MIN, MAGNET_INTERVAL_BASE - MAGNET_INTERVAL_STEP * lv); }
+function magnetCountAt(lv) { return 1 + Math.floor((lv - 1) / MAGNET_COUNT_STEP); }
+function magnetRadius() { return magnetRadiusAt(magnetLevel()); }
+function magnetInterval() { return magnetIntervalAt(magnetLevel()); }
+function magnetCount() { return magnetCountAt(magnetLevel()); }
+// What the NEXT Magnet pick (level n+1) gives, in RELATIVE terms
+// (v184, Sam: like the other stat cards — deltas, not absolutes).
+// Radius always +1; the interval drop shows as a % faster pull
+// rate (rounded); count +1 when the pick crosses an even level
+// (count improves every 2 levels). At the interval floor (Lv7->8)
+// the % part drops out — and the Lv7->8 pick is radius-only
+// (count is already 4 at Lv7).
 function magnetNextEffect(n) {
-  const lv = n + 1;
-  const r = MAGNET_RADIUS_BASE + lv;
-  const iv = Math.max(MAGNET_INTERVAL_MIN, MAGNET_INTERVAL_BASE - MAGNET_INTERVAL_STEP * lv);
-  const c = 1 + Math.floor((lv - 1) / MAGNET_COUNT_STEP);
-  return `Radius ${r} · every ${iv}s · ${c} per pull`;
+  const parts = ['+1 radius'];
+  const iv0 = magnetIntervalAt(n), iv1 = magnetIntervalAt(n + 1);
+  if (iv1 < iv0) parts.push(Math.round((iv0 / iv1 - 1) * 100) + '% faster pulls');
+  if (magnetCountAt(n + 1) > magnetCountAt(n)) parts.push('+1 count');
+  return parts.join(' · ');
 }
 // Magnet pull: pull up to `count` nearest idle pickups within `radius`
 // cells toward the unit (state 'gather', lerp to the unit, grant on
@@ -5932,6 +5941,40 @@ function render() {
       }
       ppy += bh + 4;
     }
+  }
+  // v184: Magnet (a passive, not a weapon stat) gets the same row
+  // once picked — Sam: it wasn't showing in the top-left corner
+  // like the other upgrades. Same 122x18 row, horseshoe icon,
+  // 'MGNT' label, one chip per level (cap 8).
+  const mgLvl = magnetLevel();
+  if (mgLvl > 0) {
+    const bw = 122, bh = 18;
+    ctx.fillStyle = 'rgba(10, 13, 22, 0.85)';
+    rr(8, ppy, bw, bh, 6); ctx.fill();
+    ctx.lineWidth = 1; ctx.strokeStyle = '#2a3145';
+    rr(8, ppy, bw, bh, 6); ctx.stroke();
+    const iy = ppy + bh / 2;
+    // Horseshoe magnet (matches ICONS.magnet): red U, pale pole tips.
+    ctx.lineWidth = 3.5; ctx.strokeStyle = '#ef4444';
+    ctx.beginPath();
+    ctx.moveTo(24.5, iy - 5); ctx.lineTo(24.5, iy + 1);
+    ctx.arc(20, iy + 1, 4.5, 0, Math.PI);
+    ctx.lineTo(15.5, iy - 5);
+    ctx.stroke();
+    ctx.fillStyle = '#f5f5f5';
+    ctx.fillRect(13.5, iy - 6, 4, 3);
+    ctx.fillRect(22.5, iy - 6, 4, 3);
+    ctx.fillStyle = '#dfe5f2';
+    ctx.font = 'bold 10px system-ui, sans-serif';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('MGNT', 30, iy + 1);
+    for (let i = 0; i < 8; i++) {
+      ctx.beginPath();
+      ctx.arc(60 + i * 7.5, iy, 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = i < mgLvl ? '#ffd75e' : '#2a3145';
+      ctx.fill();
+    }
+    ppy += bh + 4;
   }
   // "+1" floaters
   for (const f of S.floaters) {
