@@ -4361,7 +4361,10 @@ function nearBase(cx, cy, r) {
 }
 // v180: teleport bases — only a living BLUE Cannon or Outpost counts
 // as a base for teleport destinations (Sam: you can't teleport next
-// to a Digger). Placement's nearBase still counts any living unit.
+// to a Digger). v191: the Field uses the same anchor rule for
+// placement (Sam: a Field can't be placed next to a Digger either).
+// Placement's nearBase still counts any living unit for everything
+// else.
 function nearTeleportBase(cx, cy) {
   for (const t of S.turrets) {
     if (t.dead || t.color !== BLUE) continue;
@@ -4592,6 +4595,17 @@ function placeTurretAt(sx, sy) {
       // of the revealed area and it becomes a new anchor for the next
       // units — it just can't leap halfway across a half-cleared map.
       if (!nearBase(cx, cy, OUTPOST_PLACE_RADIUS) || S.fog[pi] !== 0) {
+        S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
+        return;
+      }
+    } else if (type === 'bloom') {
+      // v191: the Field anchors on a Cannon or Outpost only (Sam:
+      // same rule as the Cannon's teleport anchor — you can't place
+      // a Field next to a Digger). A roaming Digger must not let you
+      // drop Fields deep in a cave, far from your base; Fields expand
+      // from your bases, and the Outpost is the cheap expansion
+      // anchor (2 gold) for pushing the frontier out.
+      if (!nearTeleportBase(cx, cy)) {
         S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
         return;
       }
@@ -5680,11 +5694,14 @@ function render() {
   // units. Teleport shows the same discs, but only in its destination
   // stage (after a weapon is picked) — pick stage shows unit rings
   // instead — and only around Cannons and Outposts, the only teleport
-  // bases (v180). Main has no proximity rule (fog shows where you can
-  // place), so no discs there.
-  let discR = 0, discTeleport = false;
-  if (SURVIVAL && S.placing) discR = S.placing.type === 'lantern' ? OUTPOST_PLACE_RADIUS : PLACE_RADIUS;
-  else if (SURVIVAL && S.teleporting && S.teleporting.stage === 'dest') { discR = PLACE_RADIUS; discTeleport = true; }
+  // bases (v180). Placing a Field shows the same bases-only discs
+  // (v191: Fields anchor on Cannon/Outpost only). Main has no
+  // proximity rule (fog shows where you can place), so no discs there.
+  let discR = 0, discBases = false;
+  if (SURVIVAL && S.placing) {
+    discR = S.placing.type === 'lantern' ? OUTPOST_PLACE_RADIUS : PLACE_RADIUS;
+    discBases = S.placing.type === 'bloom';
+  } else if (SURVIVAL && S.teleporting && S.teleporting.stage === 'dest') { discR = PLACE_RADIUS; discBases = true; }
   if (discR > 0) {
     ctx.save();
     ctx.fillStyle = 'rgba(250, 204, 21, 0.07)';
@@ -5692,7 +5709,7 @@ function render() {
     ctx.lineWidth = 2;
     for (const t of S.turrets) {
       if (t.dead || t.color !== BLUE) continue;
-      if (discTeleport && t.type !== 'cannon' && t.type !== 'lantern') continue;
+      if (discBases && t.type !== 'cannon' && t.type !== 'lantern') continue;
       ctx.beginPath();
       ctx.arc((t.x + 0.5) * CELL_PX, (t.y + 0.5) * CELL_PX, discR * CELL_PX, 0, Math.PI * 2);
       ctx.fill();
