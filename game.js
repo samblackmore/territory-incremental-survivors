@@ -3256,8 +3256,8 @@ function meteorTick(dt) {
 // converted cell is lost with no free coin, like flood destruction.
 // CARVE mode pays like a BLUE cannon break, terrain only: regular
 // brown WHITE drops XP 30%, else gold 10% (never both); a nugget
-// WHITE drops its guaranteed gold plus the XP roll; GREY drops the
-// XP roll plus a guaranteed 80% gold / 20% XP pickup. Territory
+// WHITE drops only its guaranteed gold (no XP roll, v190); GREY
+// drops the XP roll plus a guaranteed 80% gold / 20% XP pickup. Territory
 // (BLUE/RED) carved to EMPTY pays nothing, exactly as a cannon
 // bombing territory pays nothing — territory pays on harvest, not
 // on destruction. Fog is recomputed once, after all cells, not per cell.
@@ -3336,7 +3336,8 @@ function meteorImpact(tx, ty) {
       if (wasCell === WHITE || wasCell === GREY) {
         if (wasNugget) pushIdleCoin(x, y, 'gold'); // nugget's guaranteed gold
         let xpDropped = false;
-        if (Math.random() < cfg.coinChance) { pushIdleCoin(x, y, 'xp'); xpDropped = true; }
+        // v190: nuggets drop only their guaranteed gold — no XP roll.
+        if (!wasNugget && Math.random() < cfg.coinChance) { pushIdleCoin(x, y, 'xp'); xpDropped = true; }
         if (!wasGrey && !wasNugget && !xpDropped && Math.random() < BROWN_GOLD_CHANCE) pushIdleCoin(x, y, 'gold');
         if (wasGrey) pushIdleCoin(x, y, Math.random() < GREY_GOLD_CHANCE ? 'gold' : 'xp');
       }
@@ -3741,7 +3742,9 @@ function damageBlock(idx, dmg, color, sx, sy, vx, vy, crit) {
     }
   }
   let xpDropped = false;
-  if (color === BLUE && Math.random() < cfg.coinChance) {
+  // v190: nugget cells drop only their guaranteed gold — no XP roll
+  // (Sam: breaking a nugget should pay gold, not XP).
+  if (color === BLUE && !wasNugget && Math.random() < cfg.coinChance) {
     xpDropped = true;
     S.coins.push({ x: cx + 0.5, y: cy + 0.5, state: 'idle', kind: 'xp',
                    phase: Math.random() * 6.283, sx: 0, sy: 0, t: 0, dead: false });
@@ -3754,9 +3757,9 @@ function damageBlock(idx, dmg, color, sx, sy, vx, vy, crit) {
   // XP roll above failed, so a regular brown break drops at most
   // one coin: XP 30%, else gold 10% of the remaining 70% = 7%
   // effective, else nothing 63%. Nugget cells keep their guaranteed
-  // gold (no extra roll); grey keeps its 80/20 guaranteed pickup
-  // below. Red/flood breaks pay nothing. (Nugget and grey can still
-  // drop 2 coins — guaranteed + XP roll — this change is brown only.)
+  // gold only (no XP roll since v190); grey keeps its 80/20
+  // guaranteed pickup below. Red/flood breaks pay nothing. (Grey
+  // can still drop 2 coins — guaranteed + XP roll.)
   if (color === BLUE && !wasGrey && !wasNugget && !xpDropped && Math.random() < BROWN_GOLD_CHANCE) {
     S.coins.push({ x: cx + 0.5, y: cy + 0.5, state: 'idle', kind: 'gold',
                    phase: Math.random() * 6.283, sx: 0, sy: 0, t: 0, dead: false });
