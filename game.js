@@ -145,6 +145,12 @@ const STAT_DEFS = {
     { key: 'hp', name: 'Wall HP', cap: 5, effect: '+10 wall HP' },
     { key: 'size', name: 'Wall Size', cap: 3, effect: '+1 wall size' },
   ],
+  laser: [
+    // v186: the Laser is a shield now (Sam: repurpose it to shoot down
+    // enemy projectiles). One track boosts BOTH: +25% fire rate and
+    // +1 shield radius per pick, cap 5. Base radius 3 (Lv0), max 8.
+    { key: 'shield', name: 'Shield', cap: 5, effect: '+25% fire rate, +1 shield radius' },
+  ],
 };
 // Fresh per-stat levels for a weapon type (0 = base value, cap = maxed).
 function initWeaponStats(type) {
@@ -167,6 +173,13 @@ function applyStat(w, weapon, st) {
       // Magnet passive. Each pick is +20% growth; cap 3 = 1.73x max.
       const n = w.stats.field || 0;
       w.rateMult = Math.pow(1.2, n);
+    }
+  } else if (weapon === 'laser') {
+    if (st === 'shield') {
+      // v186: one track, two boosts — fire rate (+25%/pick, like the
+      // cannon's rate track, so the laser's cooldown shrinks) and
+      // shield radius (+1/pick, read live by laserShieldRadius).
+      w.rateMult = Math.pow(1.25, n);
     }
   }
   // gather count derives from stats (gatherCount); mole
@@ -249,13 +262,19 @@ let ICONS = buildIcons('#ef4444');
 const TURRET = {
   cannon: { name: 'Cannon', hp: 8, interval: 1.0, dmg: 1 },
   rocket: { name: 'Rocket', hp: 6, interval: 2.5, dmg: 3 },
-  laser:  { name: 'Laser',  hp: 5, interval: 2.0, dmg: 2 },
+  laser:  { name: 'Laser',  hp: 5, interval: 2.0, dmg: 2 }, // v186: dmg is main-only now (survival Laser is a shield, it deals no damage)
   bloom:  { name: 'Field',  hp: 4, interval: GROW_INTERVAL, dmg: 0 },
   lantern:{ name: 'Outpost',hp: 4, interval: 0, dmg: 0 }, // fog light + base anchor, no firing (display rename v107, internal type still 'lantern', like Field/Digger/Harvester; v181: vacuum moved to the Magnet passive)
   gather: { name: 'Harvester', hp: 5, interval: GATHER_COOLDOWN, dmg: 0 }, // roams for pickups, anywhere, slowly
   mole:   { name: 'Digger', hp: 6, interval: 1.0, dmg: 1 }, // digs through rock, then dies
   wall:   { name: 'Wall',   hp: 20, interval: 0, dmg: 0 }, // terrain, not a turret (see placeTurretAt wall branch)
 };
+const LASER_SHIELD_RADIUS_BASE = 3; // v186: shield radius in cells at Shield 0
+// v186: shield radius = base + Shield level (3 at Lv0, 8 at Lv5).
+function laserShieldRadius() {
+  const w = S.weapons.laser;
+  return LASER_SHIELD_RADIUS_BASE + ((w && w.stats && w.stats.shield) || 0);
+}
 const MOLE_LIFETIME_MIN = 20;      // cells dug before dying (min, doubled: diggers were dying too soon to be useful)
 const MOLE_LIFETIME_MAX = 40;      // ... (max)
 const MOLE_TURN_EVERY = 3;         // cells before random turn
@@ -3410,23 +3429,33 @@ function weakestBlock(t) {
 }
 function fireLaser(t) {
   if (SURVIVAL) {
-    // Anti-flood only: paint the nearest VISIBLE flood cell (line of
-    // sight = fog cleared). If no flood is in sight, do nothing —
-    // the laser sits idle, which is the drama: it activates the
-    // moment flood finally approaches. Never zaps rock on survival.
-    // Painting (flip to player color), not HP damage: flood has no
-    // HP anymore, so the laser paints like the cannon, just with a
-    // beam to one precise cell instead of a penetrating line.
-    const tgt = weakestFlood(t);
-    if (!tgt) return;
-    S.beams.push({ x1: (t.x + 0.5) * CELL_PX, y1: (t.y + 0.5) * CELL_PX,
-                   x2: (tgt.x + 0.5) * CELL_PX, y2: (tgt.y + 0.5) * CELL_PX, t: 0 });
-    const i = tgt.i;
-    S.cells[i] = t.color;
-    S.growN[i] = 0; S.growBy[i] = 0; S.harvT[i] = 0;
-    S.hp[i] = 0; S.maxhp[i] = 0;
-    if (S.noHarvest) S.noHarvest[i] = 0; // laser-painted flood: harvests like field (v97)
-    spawnBurst(tgt.x + 0.5, tgt.y + 0.5, CELL_COLORS[t.color]);
+    // v186: the Laser is a shield now (Sam: repurpose it to shoot
+    // down enemy projectiles). Each shot clears every RED projectile
+    // within the shield radius of the Laser (base 3, +1 per Shield
+    // pick). It no longer paints flood — the Painter cannon does
+    // that job. A pulse ring shows the shield sweeping on every
+    // shot; a beam + burst mark the farthest kill. (weakestFlood is
+    // gone with the painting job — the Laser has no flood target
+    // anymore.)
+    const r = laserShieldRadius();
+    const cx = t.x + 0.5, cy = t.y + 0.5;
+    let kills = 0, fx = 0, fy = 0, fd = -1;
+    for (const p of S.projs) {
+      if (p.dead || p.color !== RED) continue;
+      const dx = p.x - cx, dy = p.y - cy;
+      const d2 = dx * dx + dy * dy;
+      if (d2 <= r * r) {
+        p.dead = true;
+        kills++;
+        if (d2 > fd) { fd = d2; fx = p.x; fy = p.y; }
+      }
+    }
+    S.rings.push({ x: cx, y: cy, t: 0, css: CELL_COLORS[t.color], dead: false });
+    if (kills > 0) {
+      S.beams.push({ x1: cx * CELL_PX, y1: cy * CELL_PX,
+                     x2: fx * CELL_PX, y2: fy * CELL_PX, t: 0 });
+      spawnBurst(fx, fy, CELL_COLORS[t.color]);
+    }
     return;
   }
   const tgt = weakestBlock(t);
@@ -3435,24 +3464,6 @@ function fireLaser(t) {
                  x2: (tgt.x + 0.5) * CELL_PX, y2: (tgt.y + 0.5) * CELL_PX, t: 0 });
   damageBlock(tgt.i, TURRET.laser.dmg + S.dmgBonus + weaponDmgBonus(t), t.color,
               t.x + 0.5, t.y + 0.5, tgt.x - t.x, tgt.y - t.y);
-}
-// Weakest VISIBLE flood cell (survival Laser target): flood (RED) with
-// fog cleared (line of sight), lowest HP first, nearest on ties —
-// same shape as weakestBlock, but flood-only, never rock.
-function weakestFlood(t) {
-  // Nearest VISIBLE flood cell (survival Laser target): flood (RED)
-  // with line of sight (fog cleared). No HP anymore, so nearest wins
-  // (not weakest — all flood paints the same).
-  let bx = -1, by = -1, bi = -1, bd = Infinity;
-  for (let y = 0; y < cfg.rows; y++) {
-    for (let x = 0; x < cfg.cols; x++) {
-      const i = y * cfg.cols + x;
-      if (S.cells[i] !== RED || S.fog[i] !== 0) continue; // needs line of sight to flood
-      const d = (x - t.x) * (x - t.x) + (y - t.y) * (y - t.y);
-      if (d < bd) { bd = d; bx = x; by = y; bi = i; }
-    }
-  }
-  return bi < 0 ? null : { x: bx, y: by, i: bi };
 }
 // Bloom: Tiberium-style territory. Every interval it makes one growth
 // increment on the nearest empty cell in radius (preferring cells it has
@@ -3781,19 +3792,21 @@ function checkLevel() {
 function buildCardPool() { return [
   { kind: 'turret', type: 'cannon', title: 'Cannon', icon: ICONS.cannon, sub: 'Sweeps shots in an arc, blasting rock.' },
   { kind: 'turret', type: 'rocket', title: 'Rocket', icon: ICONS.rocket, sub: 'Fires homing missiles that crash and splash-dig.' },
-  { kind: 'turret', type: 'laser', title: 'Laser', icon: ICONS.laser, sub: 'Waits for flood, then paints it.' },
+  { kind: 'turret', type: 'laser', title: 'Laser', icon: ICONS.laser, sub: 'Shoots down enemy shots in a radius around it.' },
   { kind: 'turret', type: 'bloom', title: 'Field', icon: ICONS.bloom, sub: 'Grows territory that harvests.' },
   { kind: 'turret', type: 'lantern', title: 'Outpost', icon: ICONS.lantern, sub: 'Pushes back fog and anchors your base.' },
   { kind: 'turret', type: 'gather', title: 'Harvester', icon: ICONS.gather, sub: 'Steps onto pickups to collect them, slowly.' },
   { kind: 'turret', type: 'mole', title: 'Digger', icon: ICONS.mole, sub: 'Digs tunnels through rock.' },
   { kind: 'turret', type: 'wall', title: 'Wall', icon: ICONS.wall, sub: '2x2 defensive barrier.' },
   { kind: 'turret', type: 'waypoint', title: 'Waypoint', icon: ICONS.waypoint, sub: 'Cannons aim at the nearest waypoint.' },
-  // Stat cards, generated from STAT_DEFS (cannon/bloom/gather/wall —
-  // mole dig advances via the shop bundle, never as a free XP pick;
-  // shopOnly stats like projectiles are bought with gold, not XP).
-  // Wall stats are gated on the Wall being unlocked (see
+  // Stat cards, generated from STAT_DEFS (cannon/bloom/gather/wall/
+  // laser — mole dig advances via the shop bundle, never as a free
+  // XP pick; shopOnly stats like projectiles are bought with gold,
+  // not XP). Wall stats are gated on the Wall being unlocked (see
   // availableCards), so they never appear before you can place one.
-  ...['cannon', 'bloom', 'gather', 'wall'].flatMap(weapon =>
+  // Laser stats need a Laser placed (S.weapons.laser is created on
+  // first placement), so the Shield card never appears before one.
+  ...['cannon', 'bloom', 'gather', 'wall', 'laser'].flatMap(weapon =>
     STAT_DEFS[weapon].filter(d => !d.shopOnly).map(d => ({
       kind: 'stat', weapon, stat: d.key, cap: d.cap,
       title: d.name, icon: ICONS[weapon], effect: d.effect,
@@ -5905,8 +5918,8 @@ function render() {
   // A stat with no picks yet (level 0) hides its row entirely — the
   // corner only shows stats you've actually invested in, and a stat
   // card shows New! on its first pick (see offerCards).
-  const STAT_LABEL = { dmg: 'DAMG', proj: 'PROJ', rate: 'RATE', pen: 'PENE', growth: 'GROW', field: 'FLD', count: 'CNTS', dig: 'DIGS', hp: 'HP', size: 'SIZE' };
-  for (const type of ['cannon', 'bloom', 'gather', 'mole', 'wall']) {
+  const STAT_LABEL = { dmg: 'DAMG', proj: 'PROJ', rate: 'RATE', pen: 'PENE', growth: 'GROW', field: 'FLD', count: 'CNTS', dig: 'DIGS', hp: 'HP', size: 'SIZE', shield: 'SHLD' };
+  for (const type of ['cannon', 'bloom', 'gather', 'mole', 'wall', 'laser']) {
     const w = S.weapons[type];
     if (!w || !w.stats) continue;
     for (const d of (STAT_DEFS[type] || [])) {
@@ -5942,6 +5955,11 @@ function render() {
         ctx.strokeStyle = '#4b5563'; ctx.lineWidth = 1;
         ctx.strokeRect(14, iy - 5, 12, 10);
         ctx.beginPath(); ctx.moveTo(20, iy - 5); ctx.lineTo(20, iy + 5); ctx.moveTo(14, iy); ctx.lineTo(26, iy); ctx.stroke();
+      } else if (type === 'laser') {
+        // v186: diamond, matching ICONS.laser.
+        ctx.beginPath();
+        ctx.moveTo(20, iy - 6); ctx.lineTo(26, iy); ctx.lineTo(20, iy + 6); ctx.lineTo(14, iy);
+        ctx.closePath(); ctx.fill();
       }
       ctx.fillStyle = '#dfe5f2';
       ctx.font = 'bold 10px system-ui, sans-serif';
