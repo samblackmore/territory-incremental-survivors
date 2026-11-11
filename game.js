@@ -4011,7 +4011,13 @@ function offerCards() {
     }
     // v181: Magnet shows what the NEXT pick actually does, like the
     // old Field rotation card did — radius, interval, count.
-    if (p.kind === 'passive' && p.passive === 'magnet') sub = magnetNextEffect(lv);
+    // v189: only from the second pick on. The first pick (NEW!) keeps
+    // the generic card text — what Magnet does in general terms —
+    // not the individual stat deltas (Sam: first-time descriptions
+    // are generic, not stat talk). The unlock cards are already
+    // generic this way; Magnet was the only NEW! card overriding
+    // its sub with a stat delta.
+    if (p.kind === 'passive' && p.passive === 'magnet' && lv > 0) sub = magnetNextEffect(lv);
     else if (p.kind === 'stat') {
       // One stat, one chip: title is the stat + its NEW level, sub the effect.
       // The weapon icon says which weapon it belongs to.
