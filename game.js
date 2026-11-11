@@ -134,7 +134,12 @@ const STAT_DEFS = {
     { key: 'count', name: 'Count', cap: 8, effect: '+1 pickup per pull' },
   ],
   mole: [
-    { key: 'dig', name: 'Dig', cap: 8, effect: '+1 dig damage' },
+    // v192: the Digger finally has an XP track (Sam: it was
+    // overpowered at level 1 with no way to upgrade it). One track,
+    // Dig, cap 8 — a mix of damage and lifetime (see moleDamageAt /
+    // moleLifetimeMinAt / moleLifetimeMaxAt). The card sub shows the
+    // next pick's delta (moleNextEffect), not this static effect.
+    { key: 'dig', name: 'Dig', cap: 8, effect: '+2 lifetime' },
   ],
   wall: [
     // v182: Wall upgrade track (Sam: HP and Size, so defenses scale
@@ -181,9 +186,17 @@ function applyStat(w, weapon, st) {
       // shield radius (+1/pick, read live by laserShieldRadius).
       w.rateMult = Math.pow(1.25, n);
     }
+  } else if (weapon === 'mole') {
+    if (st === 'dig') {
+      // v192: the Dig track sets the damage bonus (damage is
+      // moleDamageAt(n), base 1 — the lifetime is read live at
+      // spawn (moleLifetimeMinAt/MaxAt), so no spawn-time work here.
+      // The old dig bundle (buying a Digger gave +1 dig) is gone:
+      // Dig comes from the XP track only now.
+      w.dmgBonus = moleDamageAt(n) - TURRET.mole.dmg;
+    }
   }
-  // gather count derives from stats (gatherCount); mole
-  // dig uses dmgBonus, set by the bundle below.
+  // gather count derives from stats (gatherCount).
 }
 // Per-stat Cannon EVOS (v114, replacing the old cannon-wide Evo).
 // The old Evo required ALL cannon stats maxed (37 picks, never reached
@@ -277,6 +290,25 @@ function laserShieldRadius() {
 }
 const MOLE_LIFETIME_MIN = 20;      // cells dug before dying (min, doubled: diggers were dying too soon to be useful)
 const MOLE_LIFETIME_MAX = 40;      // ... (max)
+const MOLE_LIFETIME_MIN_L1 = 12;   // v192: BLUE digger lifetime at Dig 0 (was 20 — too long for a level-1 unit)
+const MOLE_LIFETIME_MAX_L1 = 24;   // v192: BLUE digger lifetime at Dig 0 (was 40)
+// v192: Digger upgrade track (Sam: 8 levels, a mix of damage and
+// lifetime — I chose the mix). Damage: +1 at Dig 3 and Dig 6
+// (1 -> 3 at max). Lifetime: +2 to both ends of the range per pick
+// (12-24 -> 28-40 at max). So most picks are lifetime, with a
+// damage bump every third pick. RED moles don't level — they keep
+// the old 20-40.
+function moleDamageAt(lv) { return 1 + Math.floor(lv / 3); }
+function moleLifetimeMinAt(lv) { return MOLE_LIFETIME_MIN_L1 + 2 * lv; }
+function moleLifetimeMaxAt(lv) { return MOLE_LIFETIME_MAX_L1 + 2 * lv; }
+// v192: what the NEXT Dig pick does, for the card sub (like
+// magnetNextEffect) — damage only on picks 3 and 6, lifetime every pick.
+function moleNextEffect(n) {
+  const parts = [];
+  if (moleDamageAt(n + 1) > moleDamageAt(n)) parts.push('+1 damage');
+  parts.push('+2 lifetime');
+  return parts.join(' · ');
+}
 const MOLE_TURN_EVERY = 3;         // cells before random turn
 const COIN_FLY_DUR = 0.45;           // seconds for a tapped coin to zip to the corner
 const RING_DUR = 0.3;                // conversion shockwave ring lifetime (s)
@@ -1266,7 +1298,13 @@ function mkTurret(x, y, color, type) {
     // Digger: burrows through rock, turning randomly, dies after N cells.
     t.moleDir = Math.floor(Math.random() * 4);
     t.dug = 0;
-    t.lifetime = MOLE_LIFETIME_MIN + Math.floor(Math.random() * (MOLE_LIFETIME_MAX - MOLE_LIFETIME_MIN + 1));
+    // v192: BLUE diggers live by the Dig track (12-24 at Dig 0,
+    // +2/+2 per pick, 28-40 at Dig 8); RED moles keep the old
+    // 20-40 (they don't level).
+    const digLv = color === BLUE && S.weapons.mole && S.weapons.mole.stats ? (S.weapons.mole.stats.dig || 0) : 0;
+    const lMin = color === BLUE ? moleLifetimeMinAt(digLv) : MOLE_LIFETIME_MIN;
+    const lMax = color === BLUE ? moleLifetimeMaxAt(digLv) : MOLE_LIFETIME_MAX;
+    t.lifetime = lMin + Math.floor(Math.random() * (lMax - lMin + 1));
     t.digT = 0;
     // Smooth-movement render state (glides cell to cell, no jumps).
     t.rx = x; t.ry = y; t.moveT = 1;
@@ -3807,13 +3845,13 @@ function buildCardPool() { return [
   { kind: 'turret', type: 'wall', title: 'Wall', icon: ICONS.wall, sub: '2x2 defensive barrier.' },
   { kind: 'turret', type: 'waypoint', title: 'Waypoint', icon: ICONS.waypoint, sub: 'Cannons aim at the nearest waypoint.' },
   // Stat cards, generated from STAT_DEFS (cannon/bloom/gather/wall/
-  // laser — mole dig advances via the shop bundle, never as a free
-  // XP pick; shopOnly stats like projectiles are bought with gold,
+  // laser/mole; shopOnly stats like projectiles are bought with gold,
   // not XP). Wall stats are gated on the Wall being unlocked (see
   // availableCards), so they never appear before you can place one.
   // Laser stats need a Laser placed (S.weapons.laser is created on
-  // first placement), so the Shield card never appears before one.
-  ...['cannon', 'bloom', 'gather', 'wall', 'laser'].flatMap(weapon =>
+  // first placement), so the Shield card never appears before one;
+  // v192: Dig needs a Digger placed the same way.
+  ...['cannon', 'bloom', 'gather', 'wall', 'laser', 'mole'].flatMap(weapon =>
     STAT_DEFS[weapon].filter(d => !d.shopOnly).map(d => ({
       kind: 'stat', weapon, stat: d.key, cap: d.cap,
       title: d.name, icon: ICONS[weapon], effect: d.effect,
@@ -4034,6 +4072,10 @@ function offerCards() {
       const cur = w && w.stats ? (w.stats[p.stat] || 0) : 0;
       title = `${p.title} <span class="lv">Lv${cur + 1}</span>`;
       sub = p.effect;
+      // v192: the Dig card's mix varies per level (damage only on
+      // picks 3 and 6, lifetime every pick), so the sub shows the
+      // next pick's actual delta, like the Magnet card does.
+      if (p.weapon === 'mole' && p.stat === 'dig') sub = moleNextEffect(cur);
       el.dataset.weapon = p.weapon;
       el.dataset.stat = p.stat;
       if (p.weapon === 'cannon' && p.stat === 'dmg') evoLine = `<span class="evoline">${ICONS.evoPaint} EVO</span>`;
@@ -4420,13 +4462,9 @@ function payForPlacement(type, placing, cost) {
     const c = (cost !== undefined ? cost : unitCost(type));
     if (S.gold >= c) S.gold -= c;
   }
-  if (type === 'mole' && placing.moleBundle && (placing.fromBar || placing.free)) {
-    const w = S.weapons.mole;
-    if (w && w.stats && (w.stats.dig || 0) < 8) {
-      w.stats.dig++;
-      w.dmgBonus = w.stats.dig;
-    }
-  }
+  // v192: the dig bundle is gone (see onPlaceBtn) — placing a
+  // Digger no longer raises the Dig stat. Dig comes from the XP
+  // track only now (applyStat mole branch).
   updatePlaceBar();
 }
 // Cancel a bar placement: tap its icon again. Unlock placements can
@@ -6185,7 +6223,11 @@ function onPlaceBtn(type) {
   if (S.teleporting) return;
   enterPlacement(type);
   S.placing.fromBar = true;
-  S.placing.moleBundle = type === 'mole';
+  // v192: the dig bundle is gone — buying a Digger no longer gives
+  // +1 dig (that's how damage crept to 2 at level 1). Dig comes
+  // from the XP track only now. moleBundle stays false so the swap
+  // handler has nothing to undo.
+  S.placing.moleBundle = false;
   S.placing.cost = unitCost(type);
   updatePlaceBar();
 }
