@@ -3547,7 +3547,11 @@ function stepProjectile(p, dt) {
     if (cx < 0 || cy < 0 || cx >= cfg.cols || cy >= cfg.rows) { p.dead = true; return; }
     // v159: enemy projectiles reveal the fog as they fly — the cell
     // the shot is in clears immediately and stays clear (see
-    // fogRevealed in computeFog). Player (BLUE) shots do not reveal.
+    // fogRevealed in computeFog). v187: on survival, player (BLUE)
+    // cannon shots reveal too (Sam: cannon projectiles clear fog
+    // the same way enemy projectiles do) — so the sweep of your own
+    // cannon opens up the map ahead of it. On main the old rule
+    // stands (RED only), so the frozen war prototype is untouched.
     // v167: one cell either side of the channel is half-fog (fog 1),
     // like the fringe computeFog draws around discovered terrain —
     // so the reveal reads as a soft corridor, not a hard 1-cell
@@ -3557,7 +3561,7 @@ function stepProjectile(p, dt) {
     // would force them fully clear. Fog only ever clears (see the
     // merge in computeFog), so the fringe sticks until a turret's
     // own fog disc clears it properly.
-    if (p.color === RED) {
+    if (SURVIVAL || p.color === RED) {
       const ridx = cy * cfg.cols + cx;
       if (S.fogRevealed) S.fogRevealed[ridx] = 1;
       S.fog[ridx] = 0;
