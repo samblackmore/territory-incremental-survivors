@@ -4378,11 +4378,13 @@ placeswap.addEventListener('click', () => {
 // placements are free, so only fromBar pays here. Mole bundle:
 // a bar/unlock Digger placement also applies the +1 dig upgrade
 // at placement time (after its weapon entry is created).
-function payForPlacement(type, placing) {
+function payForPlacement(type, placing, cost) {
   if (!placing) return;
   if (placing.fromBar) {
-    const cost = unitCost(type);
-    if (S.gold >= cost) S.gold -= cost;
+    // v185: a partial wall fill pays the proportional cost passed in;
+    // other placements pay the full unit cost.
+    const c = (cost !== undefined ? cost : unitCost(type));
+    if (S.gold >= c) S.gold -= c;
   }
   if (type === 'mole' && placing.moleBundle && (placing.fromBar || placing.free)) {
     const w = S.weapons.mole;
@@ -4431,25 +4433,35 @@ function placeTurretAt(sx, sy) {
   cy = Math.max(0, Math.min(cfg.rows - 1, cy));
   if (type === 'wall') {
     // v182: the wall block is wallSize() x wallSize() (2x2 base, +1
-    // per Size pick, up to 5x5). Every cell of the block must be in
-    // bounds, unoccupied, and EMPTY or a color cell (BLUE or RED,
-    // v134: you can wall your own territory — walling it stops its
-    // harvest — and you can wall flood, destroying that color and
-    // cutting the flood off. Rock/grey still refuse, so a wall into
-    // flood needs an NxN patch of flood/empty/own, not rock).
+    // per Size pick, up to 5x5). v185: partial fill — each cell of
+    // the block is judged on its own (in bounds, unoccupied, EMPTY
+    // or a color cell: BLUE or RED, v134 — you can wall your own
+    // territory, walling it stops its harvest, and you can wall
+    // flood, destroying that color and cutting the flood off).
+    // Rock/grey still refuse, but a refused cell no longer blocks
+    // the whole block — it is just skipped (see below).
     const n = wallSize();
-    if (cx + n - 1 >= cfg.cols || cy + n - 1 >= cfg.rows) {
+    // v185: partial fill — the wall fills every cell of the
+    // wallSize() x wallSize() block that is individually placeable
+    // (in bounds, unoccupied, EMPTY or a color cell), so a 1x gap
+    // between a wall and a cliff fills with a single tap. Only the
+    // TAPPED cell must be placeable: if it isn't (rock/grey or
+    // occupied — the tap is clamped in bounds, so out-of-bounds
+    // can't happen for it), the whole placement fails with a red
+    // ring, as before. Out-of-bounds and blocked cells of the block
+    // are simply skipped, not a failure.
+    const filled = [];
+    for (let dy = 0; dy < n; dy++) for (let dx = 0; dx < n; dx++) {
+      const wx = cx + dx, wy = cy + dy;
+      if (wx >= cfg.cols || wy >= cfg.rows) continue; // past the edge: skip
+      const wi = wy * cfg.cols + wx;
+      if (turretAt(wx, wy) || civilianAt(wx, wy) || (S.cells[wi] !== EMPTY && S.cells[wi] !== BLUE && S.cells[wi] !== RED)) continue;
+      filled.push([wx, wy]);
+    }
+    // The tapped cell is the anchor of the fill — it must be placeable.
+    if (!filled.some(([wx, wy]) => wx === cx && wy === cy)) {
       S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
       return;
-    }
-    const cellsN = [];
-    for (let dy = 0; dy < n; dy++) for (let dx = 0; dx < n; dx++) cellsN.push([cx + dx, cy + dy]);
-    for (const [wx, wy] of cellsN) {
-      const wi = wy * cfg.cols + wx;
-      if (turretAt(wx, wy) || civilianAt(wx, wy) || (S.cells[wi] !== EMPTY && S.cells[wi] !== BLUE && S.cells[wi] !== RED)) {
-        S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
-        return;
-      }
     }
     if (SURVIVAL) {
       if (!nearBase(cx, cy)) {
@@ -4460,24 +4472,29 @@ function placeTurretAt(sx, sy) {
       S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
       return;
     }
-    // Convert all N*N cells to GREY wall: this destroys any color
+    // Convert the filled cells to GREY wall: this destroys any color
     // there (own or flood) and clears any growth in progress, so
     // flood growing on an EMPTY cell is removed, not just completed flood.
     const hp = wallHp();
-    for (const [wx, wy] of cellsN) {
+    let bx = 0, by = 0;
+    for (const [wx, wy] of filled) {
       const wi = wy * cfg.cols + wx;
       S.cells[wi] = GREY;
       S.hp[wi] = hp; S.maxhp[wi] = hp; S.shade[wi] = WALL_SHADE;
       S.growN[wi] = 0; S.growBy[wi] = 0; S.harvT[wi] = 0; S.goldNug[wi] = 0; S.popT[wi] = -1;
       if (S.noHarvest) S.noHarvest[wi] = 0;
+      bx += wx; by += wy;
     }
-    spawnBurst(cx + n / 2, cy + n / 2, '#9ca3af'); // center of the NxN block
+    spawnBurst(bx / filled.length + 0.5, by / filled.length + 0.5, '#9ca3af'); // centroid of the filled cells
     // No turret entry — walls are terrain. (The stat track lives in
     // S.weapons.wall, but no turret is ever created, so the shop card
     // keeps showing New! + the description every time, which is fine:
     // each wall IS new.)
     const wallPlacing = S.placing;
-    payForPlacement(type, wallPlacing);
+    // v185: pay in proportion to the cells actually filled (min 1
+    // gold), not the full block cost — a 1-cell gap fill costs 1.
+    const fillCost = Math.max(1, Math.round(wallCost() * filled.length / (n * n)));
+    payForPlacement(type, wallPlacing, fillCost);
     // v154 wall chaining: a bar wall stays in placement mode while
     // you can afford another, so you can tap-tap-tap a defensive
     // line before a wave. Unlock walls are free and single-shot.
