@@ -3999,10 +3999,15 @@ function offerCards() {
     let title = p.title, sub = p.sub, newTag = '', priceHtml = '', evoLine = '';
     const icon = `<div class="icon">${p.icon || ''}</div>`;
     // v176: "New!" means first time picking up a unit — only unlock cards
-    // carry it (below). Stat, passive and hybrid first picks are upgrades
-    // to something you already own, so they never get the tag.
-    if (p.kind === 'passive' && lv > 0) {
-      title = `${p.title} <span class="lv">Lv${lv + 1}</span>`;
+    // carry it (below). Stat and hybrid first picks are upgrades to a
+    // weapon you already own, so they never get the tag.
+    // v188: a passive is the exception — at level 0 you don't own it at
+    // all, so the first pick IS a new pickup and gets the tag (Sam: the
+    // first-time Magnet card in his screenshot had no tag). Later picks
+    // show the level, like other stat cards.
+    if (p.kind === 'passive') {
+      if (lv > 0) title = `${p.title} <span class="lv">Lv${lv + 1}</span>`;
+      else newTag = '<span class="newtag">New!</span>';
     }
     // v181: Magnet shows what the NEXT pick actually does, like the
     // old Field rotation card did — radius, interval, count.
