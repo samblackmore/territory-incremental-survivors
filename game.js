@@ -318,6 +318,19 @@ const TURRET = {
   wall:   { name: 'Wall',   hp: 20, interval: 0, dmg: 0 }, // terrain, not a turret (see placeTurretAt wall branch)
 };
 const LASER_SHIELD_RADIUS_BASE = 3; // v186: shield radius in cells at Shield 0
+// v195: is there a live RED projectile inside this Laser's shield
+// radius? (The reactive trigger — the laser only fires when there's
+// something to shoot down, so it never wastes a shot on empty air.)
+function laserHasTarget(t) {
+  const r = laserShieldRadius();
+  const cx = t.x + 0.5, cy = t.y + 0.5;
+  for (const p of S.projs) {
+    if (p.dead || p.color !== RED) continue;
+    const dx = p.x - cx, dy = p.y - cy;
+    if (dx * dx + dy * dy <= r * r) return true;
+  }
+  return false;
+}
 // v186: shield radius = base + Shield level (3 at Lv0, 8 at Lv5).
 function laserShieldRadius() {
   const w = S.weapons.laser;
@@ -1329,6 +1342,10 @@ function mkTurret(x, y, color, type) {
   const maxhp = Math.max(1, Math.round(spec.hp * hpScale)) + (w && w.hpBonus ? w.hpBonus : 0);
   const t = { x, y, color, type, hp: maxhp, maxhp, base, angle: base, dir: 1,
               cd: Math.random(), dead: false, coolT: 0, burstLeft: 0, burstT: 0 };
+  // v195: a new Laser starts armed on survival (no initial cooldown)
+  // — reactive firing means it should be ready the moment a
+  // projectile enters range, even one already there when placed.
+  if (type === 'laser' && SURVIVAL) t.cd = 0;
   if (type === 'mole') {
     // Digger: burrows through rock, turning randomly, dies after N cells.
     t.moleDir = Math.floor(Math.random() * 4);
@@ -3524,6 +3541,9 @@ function fireLaser(t) {
         if (d2 > fd) { fd = d2; fx = p.x; fy = p.y; }
       }
     }
+    // v195: the ring only appears when the laser actually fires,
+    // and on survival it only fires on a target (reactive), so a
+    // ring now means it shot something down.
     S.rings.push({ x: cx, y: cy, t: 0, css: CELL_COLORS[t.color], dead: false });
     if (kills > 0) {
       S.beams.push({ x1: cx * CELL_PX, y1: cy * CELL_PX,
@@ -5002,7 +5022,18 @@ function update(dt) {
       if (t.cd <= 0) { t.cd = (TURRET.rocket.interval / rateMult) * (0.8 + Math.random() * 0.4); fireMissile(t); }
     } else if (t.type === 'laser') {
       t.cd -= dt;
-      if (t.cd <= 0) { t.cd = (TURRET.laser.interval / rateMult) * (0.8 + Math.random() * 0.4); fireLaser(t); }
+      // v195: reactive firing on survival (Sam: a projectile could
+      // slip through between timer shots and hit the laser). The
+      // laser sits armed (no cooldown) while idle; the moment a RED
+      // projectile enters its shield radius it fires immediately,
+      // then the cooldown starts. It never fires on a blind timer
+      // anymore, so every ring means it shot something down. Main
+      // keeps the blind timer (its laser zaps rock, not projectiles).
+      const armed = SURVIVAL ? (t.cd <= 0 && laserHasTarget(t)) : (t.cd <= 0);
+      if (armed) {
+        t.cd = (TURRET.laser.interval / rateMult) * (0.8 + Math.random() * 0.4);
+        fireLaser(t);
+      }
     } else if (t.type === 'bloom') {
       t.cd -= dt;
       if (t.cd <= 0) { t.cd = TURRET.bloom.interval / rateMult * S.bloomMult; bloomGrowth(t); }
