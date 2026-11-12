@@ -177,13 +177,13 @@ const STAT_DEFS = {
     { key: 'dig', name: 'Dig', cap: 8, effect: '+2 lifetime' },
   ],
   wall: [
-    // v182: Wall upgrade track (Sam: HP and Size, so defenses scale
-    // with the threat). HP: +10 per cell per level, cap 5 (20 -> 70).
-    // Size: the wall block grows a cell per level, cap 3 (2x2 -> 5x5);
-    // gold cost scales with area (see wallCost), so a bigger wall
-    // costs proportionally more, not the same flat 2.
-    { key: 'hp', name: 'Wall HP', cap: 5, effect: '+10 wall HP' },
-    { key: 'size', name: 'Wall Size', cap: 3, effect: '+1 wall size' },
+    // v194: one track now (Sam: the two Wall cards crowded the deal
+    // — half of it on one unit). Reinforce, cap 5: +10 HP every
+    // pick, +1 size at picks 1, 3 and 5 (see wallSizeAt) — so it
+    // reaches the same maxima as the old two tracks (70 HP, 5x5)
+    // in 5 picks instead of 8. The card sub shows the next pick's
+    // delta (wallNextEffect), like Dig/Magnet.
+    { key: 'reinforce', name: 'Reinforce', cap: 5, effect: '+10 wall HP' },
   ],
   laser: [
     // v186: the Laser is a shield now (Sam: repurpose it to shoot down
@@ -254,7 +254,7 @@ function cannonDmgMaxed() {
 // (early resources), Digger 4 (early exploration), Waypoint 5 (cannon
 // aiming) — the flood starts at 3 min, so you need cheap options before
 // you can level the cannon.
-const UNIT_COST = { cannon: 10, mole: 4, bloom: 3, gather: 6, lantern: 2, wall: 2, laser: 20, waypoint: 5 };
+const UNIT_COST = { cannon: 10, mole: 4, bloom: 3, gather: 6, lantern: 2, wall: 2, laser: 5, waypoint: 5 };
 const UNIT_COST_STEP = 5;
 const LANTERN_COST_STEP = 1; // outposts stay cheap so chaining them to extend the base is affordable
 function unitCost(type) {
@@ -3986,7 +3986,9 @@ function availableShopCards() {
   if (SURVIVAL) {
     // Full shop (no proj/pen — they're free XP stat cards now, v193):
     // all 8 placements, cost order (cheapest first) so you can plan
-    // ahead. No draw. Laser is the pricey late-game anti-flood unit (20, last).
+    // ahead. No draw. v194: the Laser is 5 gold now (was 20 — it
+    // was too weak to be worth 20 early), so it sorts near the
+    // cheap end, not last.
     // Start-screen toggles filter it: only enabled items appear
     // (missing = enabled, explicit false = excluded from the run).
     const types = ['cannon', 'mole', 'bloom', 'gather', 'lantern', 'wall', 'laser', 'waypoint']
@@ -4096,6 +4098,9 @@ function offerCards() {
       // picks 3 and 6, lifetime every pick), so the sub shows the
       // next pick's actual delta, like the Magnet card does.
       if (p.weapon === 'mole' && p.stat === 'dig') sub = moleNextEffect(cur);
+      // v194: the Reinforce card's mix varies per level too (size
+      // only on picks 1, 3 and 5, HP every pick).
+      if (p.weapon === 'wall' && p.stat === 'reinforce') sub = wallNextEffect(cur);
       el.dataset.weapon = p.weapon;
       el.dataset.stat = p.stat;
       if (p.weapon === 'cannon' && p.stat === 'dmg') evoLine = `<span class="evoline">${ICONS.evoPaint} EVO</span>`;
@@ -4363,17 +4368,27 @@ document.getElementById('diveagain').addEventListener('click', () => {
 // wall); gold cost scales with Size via wallCost, so a bigger wall
 // costs proportionally more, not the same flat 2.
 const WALL_HP = 20;
-const WALL_HP_PER_LEVEL = 10; // v182: +10 HP per Wall HP pick
-const WALL_SIZE_BASE = 2;     // v182: wall block dimension at Size 0
-// v182: wall stat levels (0 until the Wall is unlocked and picked).
-// Walls have no turret entry, so the track lives in S.weapons.wall,
-// created in newGame; the cards are gated on S.unlocked.wall.
-// Existing walls keep the HP they were placed with — the upgrade
-// only affects new placements.
-function wallHpLevel() { const w = S.weapons.wall; return (w && w.stats && w.stats.hp) || 0; }
-function wallSizeLevel() { const w = S.weapons.wall; return (w && w.stats && w.stats.size) || 0; }
-function wallHp() { return WALL_HP + WALL_HP_PER_LEVEL * wallHpLevel(); }
-function wallSize() { return WALL_SIZE_BASE + wallSizeLevel(); }
+const WALL_HP_PER_LEVEL = 10; // v182: +10 HP per Reinforce pick
+const WALL_SIZE_BASE = 2;     // v182: wall block dimension at level 0
+// v194: one Reinforce level (0 until the Wall is unlocked and
+// picked) drives both HP and size — HP +10/pick (20 -> 70), size
+// +1 at picks 1, 3 and 5 (2x2 -> 5x5). Walls have no turret entry,
+// so the track lives in S.weapons.wall, created in newGame; the
+// card is gated on S.unlocked.wall. Existing walls keep the HP
+// they were placed with — the upgrade only affects new placements.
+function wallLevel() { const w = S.weapons.wall; return (w && w.stats && w.stats.reinforce) || 0; }
+function wallHpAt(lv) { return WALL_HP + WALL_HP_PER_LEVEL * lv; }
+function wallSizeAt(lv) { return WALL_SIZE_BASE + Math.ceil(lv / 2); }
+function wallHp() { return wallHpAt(wallLevel()); }
+function wallSize() { return wallSizeAt(wallLevel()); }
+// v194: what the NEXT Reinforce pick does, for the card sub (like
+// moleNextEffect) — +10 HP every pick, +1 size on picks 1, 3 and 5.
+function wallNextEffect(n) {
+  const parts = [];
+  if (wallSizeAt(n + 1) > wallSizeAt(n)) parts.push('+1 wall size');
+  parts.push('+10 wall HP');
+  return parts.join(' · ');
+}
 // v182: wall gold cost scales with the block's area (per-cell cost
 // stays ~0.5 gold): 2x2 = 2, 3x3 = 5, 4x4 = 8, 5x5 = 13.
 function wallCost() {
@@ -5991,7 +6006,7 @@ function render() {
   // A stat with no picks yet (level 0) hides its row entirely — the
   // corner only shows stats you've actually invested in, and a stat
   // card shows New! on its first pick (see offerCards).
-  const STAT_LABEL = { dmg: 'DAMG', proj: 'PROJ', rate: 'RATE', pen: 'PENE', growth: 'GROW', field: 'FLD', count: 'CNTS', dig: 'DIGS', hp: 'HP', size: 'SIZE', shield: 'SHLD' };
+  const STAT_LABEL = { dmg: 'DAMG', proj: 'PROJ', rate: 'RATE', pen: 'PENE', growth: 'GROW', field: 'FLD', count: 'CNTS', dig: 'DIGS', reinforce: 'WALL', shield: 'SHLD' };
   for (const type of ['cannon', 'bloom', 'gather', 'mole', 'wall', 'laser']) {
     const w = S.weapons[type];
     if (!w || !w.stats) continue;
