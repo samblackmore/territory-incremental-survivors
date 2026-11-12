@@ -13,6 +13,32 @@ const CELL_COLORS = ['#eef1f6', '#3d4454', '#ef4444', '#3b82f6', '#6b7280'];
 
 const CELL_PX = 16;                 // render size of one cell
 const PENETRATE_CHANCE = 0.5;       // per-cell chance a piercing shot keeps going (v106, start 50%).
+// v193: projectiles are chance-based now (Sam: the guaranteed extra
+// projectile per level was ridiculously overpowered — treat it like
+// penetration, where the chance makes the surprise). Each level adds
+// one more MAX projectile, but every extra projectile is a chance
+// roll in a chain: roll for the 2nd; if it lands, roll for the 3rd;
+// and so on. Each slot's chance starts at 25% when it unlocks and
+// grows +25% per level after that, capping at 100% — so the chances
+// are staggered: early slots become reliable while later ones are
+// still a gamble. Base 1 projectile always fires, never rolls.
+// Expected count: ~1.25 at Lv1, ~2.2 at Lv3, ~4.2 at Lv5 (was a
+// guaranteed 2 / 4 / 6), with a max of 6 and a min of 1.
+function projChanceAt(slot, lv) {
+  // slot = the projectile number (2, 3, ...); it unlocks at level
+  // slot-1, at 25%, then +25% per level (25/50/75/100%).
+  return Math.min(1, 0.25 * (lv - slot + 2));
+}
+// v193: how many projectiles this volley fires — 1 plus a chain of
+// chance rolls, one per extra slot the proj level unlocks.
+function rollProjCount(lv) {
+  let n = 1;
+  for (let slot = 2; slot <= lv + 1; slot++) {
+    if (Math.random() < projChanceAt(slot, lv)) n++;
+    else break;
+  }
+  return n;
+}
                                       // Each rock/flood cell beyond the first rolls to continue; max depth still caps at penDepth.
 const STEER_RATE = 3;               // missile turn rate, rad/s (x S.steerMult)
 const RED_DEPLOY_EVERY = 12;        // seconds between red turret deployments
@@ -106,9 +132,15 @@ function pullCoinsTo(t, radius, count) {
 const STAT_DEFS = {
   cannon: [
     { key: 'dmg', name: 'Damage', cap: 5, effect: '+1 damage, +5% crit' },
-    // Projectiles is shop-only (gold-gated): it's the strongest stat, so
-    // it costs gold instead of a free XP pick. Still a track (chips + cap).
-    { key: 'proj', name: 'Projectiles', cap: 5, effect: '+1 projectile', shopOnly: true },
+    // Projectiles: v193, chance-based like Penetration (Sam: the
+    // guaranteed extra projectile per level was ridiculously
+    // overpowered). Each level adds one more MAX projectile, but
+    // every extra one is a chance roll in a chain (projChanceAt /
+    // rollProjCount) — the nerf is the chance, not gold. shopOnly
+    // stays set, but on survival shopOnly stats are free XP stat
+    // cards (see the CARD_POOL filter); on main it still means the
+    // shop-only gold card (v75, unchanged).
+    { key: 'proj', name: 'Projectiles', cap: 5, effect: '+1 projectile (chance of firing)', shopOnly: true },
     { key: 'rate', name: 'Fire rate', cap: 5, effect: '+25% fire rate' },
     // Penetration: how many cells one shot pierces (VS pass-through).
     // Base depth 1 (just the first cell); each level adds one more
@@ -119,7 +151,10 @@ const STAT_DEFS = {
     // Cap 5 (v114, down from 8): max depth 6, average pierce ~1.97 vs
     // ~2.00 at depth 9, so the cap cut costs almost nothing in practice.
     // v133: gold-gated like Projectiles (shopOnly, XP hybrid, 10+5/lv)
-    // — as a free starter pick it was too strong.
+    // — as a free starter pick it was too strong. v193: the gold is
+    // gone (the nerf is the chance, not gold) — on survival it's a
+    // free XP stat card now, like Projectiles; shopOnly still means
+    // gold-gated on main only.
     { key: 'pen', name: 'Penetration', cap: 5, effect: '+1 pierce depth (chance of continuing)', shopOnly: true },
   ],
   bloom: [
@@ -3845,14 +3880,17 @@ function buildCardPool() { return [
   { kind: 'turret', type: 'wall', title: 'Wall', icon: ICONS.wall, sub: '2x2 defensive barrier.' },
   { kind: 'turret', type: 'waypoint', title: 'Waypoint', icon: ICONS.waypoint, sub: 'Cannons aim at the nearest waypoint.' },
   // Stat cards, generated from STAT_DEFS (cannon/bloom/gather/wall/
-  // laser/mole; shopOnly stats like projectiles are bought with gold,
-  // not XP). Wall stats are gated on the Wall being unlocked (see
+  // laser/mole). Wall stats are gated on the Wall being unlocked (see
   // availableCards), so they never appear before you can place one.
   // Laser stats need a Laser placed (S.weapons.laser is created on
   // first placement), so the Shield card never appears before one;
-  // v192: Dig needs a Digger placed the same way.
+  // v192: Dig needs a Digger placed the same way. v193: shopOnly
+  // stats (Projectiles, Penetration) are free XP stat cards on
+  // survival — the filter lets them in here, and the generic stat
+  // machinery deals and picks them with no gold. On main shopOnly
+  // still means what it says: they're shop-only gold cards there.
   ...['cannon', 'bloom', 'gather', 'wall', 'laser', 'mole'].flatMap(weapon =>
-    STAT_DEFS[weapon].filter(d => !d.shopOnly).map(d => ({
+    STAT_DEFS[weapon].filter(d => !d.shopOnly || SURVIVAL).map(d => ({
       kind: 'stat', weapon, stat: d.key, cap: d.cap,
       title: d.name, icon: ICONS[weapon], effect: d.effect,
     }))),
@@ -3934,25 +3972,11 @@ function availableCards() {
   if (cannonDmgMaxed()) {
     pool.push({ kind: 'evoPaint', title: 'Painter', icon: ICONS.evoPaint, sub: 'Cannon paints ground as it fires — painted ground pays, weaker than Field' });
   }
-  if (SURVIVAL) {
-    // Gold-gated stat hybrids (survival only): back in the XP row as
-    // randomized draft cards, but they cost gold (like shop cards).
-    // If you see one and can afford it, it's a strong pick — but it
-    // still consumes the level-up (pick-one holds). Main keeps proj
-    // in the shop (v75, unchanged).
-    // v133: XP hybrids are HIDDEN when unaffordable (not greyed) —
-    // they never occupy a dealt slot you can't take. The shop row
-    // below still shows unaffordable placements greyed, for planning.
-    const cw = S.weapons.cannon;
-    if (cw && cw.stats && (cw.stats.proj || 0) < 5 && S.gold >= projCost()) {
-      pool.push({ kind: 'proj', weapon: 'cannon', stat: 'proj',
-        title: 'Projectiles', icon: ICONS.cannon, cost: projCost() });
-    }
-    if (cw && cw.stats && (cw.stats.pen || 0) < 5 && S.gold >= penCost()) {
-      pool.push({ kind: 'pen', weapon: 'cannon', stat: 'pen',
-        title: 'Penetration', icon: ICONS.cannon, cost: penCost() });
-    }
-  }
+  // v193: the gold-gated XP hybrids (v133) are gone — Projectiles
+  // and Penetration are free XP stat cards on survival now (they
+  // join the pool via the CARD_POOL filter above), so there's no
+  // hybrid block here anymore. The nerf is the chance, not gold.
+  // Main keeps proj in the shop (v75, unchanged) via projCost().
   return pool;
 }
 // Shop row: one placement card per active unit type, plus gold-gated stat
@@ -3960,9 +3984,9 @@ function availableCards() {
 // Unaffordable ones still show (greyed) so you can see what to save for.
 function availableShopCards() {
   if (SURVIVAL) {
-    // Full shop (no proj/pen — they're XP hybrids now): all 8 placements,
-    // cost order (cheapest first) so you can plan ahead. No draw.
-    // Laser is the pricey late-game anti-flood unit (20, last).
+    // Full shop (no proj/pen — they're free XP stat cards now, v193):
+    // all 8 placements, cost order (cheapest first) so you can plan
+    // ahead. No draw. Laser is the pricey late-game anti-flood unit (20, last).
     // Start-screen toggles filter it: only enabled items appear
     // (missing = enabled, explicit false = excluded from the run).
     const types = ['cannon', 'mole', 'bloom', 'gather', 'lantern', 'wall', 'laser', 'waypoint']
@@ -3992,13 +4016,9 @@ function projCost() {
   const lv = w && w.stats ? (w.stats.proj || 0) : 0;
   return 10 + lv * UNIT_COST_STEP;
 }
-// Penetration upgrade price (v133, same as projectiles): starts at
-// 10 gold, +5 per level already owned — 10, 15, 20, 25, 30.
-function penCost() {
-  const w = S.weapons.cannon;
-  const lv = w && w.stats ? (w.stats.pen || 0) : 0;
-  return 10 + lv * UNIT_COST_STEP;
-}
+// v193: penCost() is gone with the gold hybrids — Penetration is
+// a free XP stat card on survival now, and main's shop never sold
+// it (only Projectiles). projCost() stays for main's shop.
 function offerCards() {
   // v149: a new deal always starts in cards view, not map view — a
   // previous View map toggle must not carry over to the next level.
@@ -4105,36 +4125,11 @@ function offerCards() {
       el.dataset.amount = amt;
       sub = `+${amt}<span class="coin"></span>`;
     }
-    else if (p.kind === 'proj') {
-      // Hybrid (survival): XP-row draft card with a gold cost. Shows
-      // the price like a shop card. v133: availableCards already
-      // hides it when unaffordable, so the unaffordable class below
-      // is only a safety net (click handler's cost guard covers rest).
-      // v176: no New! — it's a Cannon upgrade, not a new unit.
-      const w = S.weapons.cannon;
-      const lv = w && w.stats ? (w.stats.proj || 0) : 0;
-      title = `Projectiles <span class="lv">Lv${lv + 1}</span>`;
-      sub = `+1 projectile`;
-      el.dataset.weapon = 'cannon';
-      el.dataset.stat = 'proj';
-      el.dataset.cost = String(p.cost);
-      priceHtml = `<div class="price">${p.cost}<span class="coin"></span></div>`;
-      if (S.gold < p.cost) el.classList.add('unaffordable');
-    }
-    else if (p.kind === 'pen') {
-      // Hybrid (survival, v133): Penetration, gold-gated like
-      // Projectiles. Same hiding rule as proj above.
-      const w = S.weapons.cannon;
-      const lv = w && w.stats ? (w.stats.pen || 0) : 0;
-      title = `Penetration <span class="lv">Lv${lv + 1}</span>`;
-      sub = `+1 pierce depth (chance of continuing)`;
-      el.dataset.weapon = 'cannon';
-      el.dataset.stat = 'pen';
-      el.dataset.cost = String(p.cost);
-      priceHtml = `<div class="price">${p.cost}<span class="coin"></span></div>`;
-      if (S.gold < p.cost) el.classList.add('unaffordable');
-      // v176: no New! — it's a Cannon upgrade, not a new unit.
-    }
+    // v193: the XP-row hybrid branches (kind 'proj'/'pen', gold
+    // price) are gone with the hybrids — Projectiles and Penetration
+    // are free stat cards now, rendered by the generic stat branch
+    // above (title, Lv, effect from STAT_DEFS, no price). The
+    // 'proj'/'pen' pick-handler branches stay for main's shop card.
     el.innerHTML = priceHtml + icon + newTag + '<b>' + title + '</b><span>' + sub + '</span>' + evoLine;
     // Staggered deal: cards appear one by one (prevents accidental taps).
     setTimeout(() => el.classList.add('dealt'), 150 + k * 120);
@@ -4979,7 +4974,12 @@ function update(dt) {
         }
       } else if (t.cd <= 0) {
         t.cd = (1 / rateMult) * evoBoost * (0.8 + Math.random() * 0.4);
-        t.burstLeft = 1 + (w && w.proj ? w.proj : 0);
+        // v193: projectiles are chance-based on survival (like
+        // penetration) — roll the chain at volley start; main keeps
+        // the guaranteed 1 + proj count. The stagger (one round per
+        // BURST_GAP) is unchanged — the roll only sets how many.
+        t.burstLeft = SURVIVAL ? rollProjCount((w && w.stats ? (w.stats.proj || 0) : 0))
+                               : 1 + (w && w.proj ? w.proj : 0);
         t.burstT = 0; // first round fires immediately
       }
     } else if (t.type === 'rocket') {
