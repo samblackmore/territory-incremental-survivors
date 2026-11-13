@@ -2873,28 +2873,27 @@ const FLOOD_SWEEP_RATE = Math.PI / 2; // rad/s the sweep rotates (90 deg/s)
 // going bottom-up — not a simultaneous row across the whole border.
 // Interval starts long (one shot every 5s when the attack starts
 // at 3:00) and gets gradually faster as attack time grows: it
-// halves every 60 seconds of attack time (v170: was 90s in v168,
-// 180s before that). 5s at 3:00, 2.5s at 4:00, 1.25s at 5:00,
-// 0.63s at 6:00, 0.31s at 7:00, 0.16s at 8:00, 0.078s at 9:00,
-// 0.039s at 10:00, floored at 0.01s (~100 shots/s) from about
-// 11:58 (v172: was 0.1s — Sam: walls only matter early, you can
-// burrow into a cave with a Digger and be safe far from the front,
-// so the threat has to come as bullet hell; go crazy). There is no
+// halves every 100 seconds of attack time (v196: was 60s — Sam:
+// the 12:00 peak came while the base was still early/mid strength,
+// so the ramp is slower now; peak at ~18:00, a couple of minutes
+// before the sweep joins at 20:00). 5s at 3:00, 3.3s at 4:00,
+// 2.2s at 5:00, 1.4s at 6:00, 0.95s at 7:00, 0.63s at 8:00,
+// 0.41s at 9:00, 0.27s at 10:00, 0.12s at 12:00, 0.034s at 15:00,
+// floored at 0.01s (~100 shots/s) from about 17:57. There is no
 // breather anymore — the ramp is the pressure.
 // Napkin math (75-col board): a shot flies north at 8 cells/s and
 // dies on the first rock/turret/territory it hits — early on that
 // is the cliff after ~40 cells of open ocean/beach, so a shot lives
 // ~5s. Concurrent shots ≈ rate × lifetime: ~1 on screen at 3:00,
-// ~2 at 4:00, ~4 at 5:00, ~8 at 6:00, ~16 at 7:00, ~32 at 8:00,
-// ~64 at 9:00, ~128 at 10:00, ~500 at 12:00 (and more later, as dug
-// channels and flood-painted ground let shots fly further). At
-// 100 shots/s over 75 columns, each column takes a shot about
-// every 0.75s, so a 20-HP wall cell lasts ~15s of fire in its
-// column at the cap. The 0.1s floor (v170) capped at ~50 on
-// screen from ~6:40.
+// ~2 at 5:00, ~3 at 6:00, ~5 at 7:00, ~8 at 8:00, ~12 at 9:00,
+// ~18 at 10:00, ~42 at 12:00, ~150 at 15:00, ~500 at 18:00 (and
+// more later, as dug channels and flood-painted ground let shots
+// fly further). At 100 shots/s over 75 columns, each column takes
+// a shot about every 0.75s, so a 20-HP wall cell lasts ~15s of
+// fire in its column at the cap.
 const FLOOD_WAVE_FIRST_INTERVAL = 5;
 const FLOOD_WAVE_MIN_INTERVAL = 0.01;
-const FLOOD_WAVE_RAMP_HALF_LIFE = 60; // seconds of attack time to halve the interval
+const FLOOD_WAVE_RAMP_HALF_LIFE = 100; // v196: seconds of attack time to halve the interval (was 60 — peak now at ~18:00, not ~12:00)
 function floodWaveInterval() {
   const t = Math.max(0, S.time - FLOOD_GRACE_DUR);
   return Math.max(FLOOD_WAVE_MIN_INTERVAL,
