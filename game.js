@@ -897,9 +897,8 @@ const GREY_SHADES = [
   [229, 231, 235], [209, 213, 219], [156, 163, 175], [107, 114, 128],
   [75, 85, 99], [55, 65, 81], [31, 41, 55], [17, 24, 39],
 ];
-const GREY_FILL = 0.40;        // CA seed fill for grey chunks (caves use 0.38; below ~0.33 the CA collapses to nothing)
 const CLIFF_BROWN_FILL = 0.42; // v197: CA seed fill for the brown islands left in the cliff biome (grey everywhere else) — ~15% brown, small scattered islands that break the grey up (measured: fill 0.42 -> ~15% coverage, 0.45 -> ~26%)
-const GREY_MIN_DIST = 12;      // cells from the starter: no grey near the opening
+const GREY_MIN_DIST = 12;      // v198: cells from the starter with no grey — the central-grey pass that used this is gone, but the rule still holds: the v152 safety net converts any cliff grey within this radius back to easy brown, so the opening is never a 30–100 HP wall (SPAWN_EASY_RADIUS is the same 12)
 // v152 spawn tuning (Sam: unlucky hard rock next to spawn, and corner
 // spawns wasting half the arc): brown rock within SPAWN_EASY_RADIUS
 // of the starter is capped at SPAWN_EASY_MAX_HP, and beach cells
@@ -2577,29 +2576,14 @@ function newGame() {
   // irrelevant (red Fields don't pull), so only the growth part matters.
   S.redWeapons.bloom.stats.field = RED_BLOOM_FIELD;
   applyStat(S.redWeapons.bloom, 'bloom', 'field');
-  // Grey rock: hard mid-map chunks, same CA blobs as caves but only where
-  // the map is central AND far from the starter — never around the opening.
-  // Only brown terrain converts (caves stay open); HP + shade come from the
-  // same noise field as brown, scaled to 30–100.
-  {
-    const greyMask = genCaves(cfg.cols, cfg.rows, GREY_FILL, rng);
-    const x0 = cfg.cols * 0.25, x1 = cfg.cols * 0.75, y0 = cfg.rows * 0.25, y1 = cfg.rows * 0.75;
-    for (let y = 0; y < cfg.rows; y++) {
-      for (let x = 0; x < cfg.cols; x++) {
-        const i = y * cfg.cols + x;
-        if (!greyMask[i] || cells[i] !== WHITE) continue;
-        if (x < x0 || x >= x1 || y < y0 || y >= y1) continue;
-        const dx = x - pc.x, dy = y - pc.y;
-        if (dx * dx + dy * dy < GREY_MIN_DIST * GREY_MIN_DIST) continue;
-        // Same normalized field as brown: grey now spans its full 30–100
-        // and all 8 grey shades (it had the same middle-clustering bug).
-        const v = norm(raw[i]);
-        cells[i] = GREY;
-        maxhp[i] = hp[i] = GREY_HP_MIN + Math.round(v * (GREY_HP_MAX - GREY_HP_MIN));
-        shade[i] = Math.round(v * 7);
-      }
-    }
-  }
+  // v198 (Sam): the old central-grey pass is gone. It put hard grey
+  // chunks in the centre of the map because the original prototype
+  // was attacked from four directions, so you were always pushing
+  // inwards and the centre was made the strongest. Now the game
+  // only goes up (bottom to north), so that logic is obsolete —
+  // grey lives only in the cliff biome (v197: grey IS the cliff,
+  // solid rock, as opposed to brown earth). The first grey you meet
+  // is in the cliff. (Meteors still add grey rock dynamically.)
   // v152 easy rock at spawn: yes, you can seed a spot — not by
   // re-seeding the global Perlin field (that would move the whole
   // map), but by post-processing the spawn area after generation.
@@ -2609,12 +2593,13 @@ function newGame() {
   // survives as 3 vs 4 HP, and beyond the radius the full 3–10
   // depth is untouched — so an unlucky spawn can no longer start
   // you next to a 10-HP wall, but the rest of the map still varies.
-  // v197: cliff grey can now land within the radius too (the cliff
+  // v197: cliff grey can land within the radius too (the cliff
   // conversion runs before the starter is placed, so it has no
   // GREY_MIN_DIST check) — any GREY within the radius becomes
   // easy brown instead, so the opening is never a 30–100 HP wall.
-  // (The central grey chunks were already excluded within 12 cells
-  // by the grey pass, so only cliff grey needs converting back.)
+  // (v198: the central-grey pass is gone, so cliff grey is the
+  // only grey that can land here — and the first grey you meet is
+  // in the cliff, past this radius.)
   for (let y = 0; y < cfg.rows; y++) {
     for (let x = 0; x < cfg.cols; x++) {
       const i = y * cfg.cols + x;
