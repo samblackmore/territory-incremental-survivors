@@ -898,6 +898,7 @@ const GREY_SHADES = [
   [75, 85, 99], [55, 65, 81], [31, 41, 55], [17, 24, 39],
 ];
 const GREY_FILL = 0.40;        // CA seed fill for grey chunks (caves use 0.38; below ~0.33 the CA collapses to nothing)
+const CLIFF_BROWN_FILL = 0.42; // v197: CA seed fill for the brown islands left in the cliff biome (grey everywhere else) — ~15% brown, small scattered islands that break the grey up (measured: fill 0.42 -> ~15% coverage, 0.45 -> ~26%)
 const GREY_MIN_DIST = 12;      // cells from the starter: no grey near the opening
 // v152 spawn tuning (Sam: unlucky hard rock next to spawn, and corner
 // spawns wasting half the arc): brown rock within SPAWN_EASY_RADIUS
@@ -2368,6 +2369,9 @@ function newGame() {
     const BIOME_EDGE_WANDER = 12, BIOME_TRANSITION = 8, BIOME_MIN_ISLAND = 6;
     const grassRock = genCaves(cfg.cols, cfg.rows, BIOME_GRASS_FILL, rng);
     const beachRock = genCaves(cfg.cols, cfg.rows, BIOME_BEACH_FILL, rng);
+    // v197: brown islands for the cliff biome — own RNG stream (seed
+    // + 99993) so the existing map generation is untouched.
+    const cliffBrown = genCaves(cfg.cols, cfg.rows, CLIFF_BROWN_FILL, mulberry32(seed + 99993));
     const edgeNoise = makeNoise2D(mulberry32(seed + 99991));
     const ditherNoise = makeNoise2D(mulberry32(seed + 99992));
     // Wander is capped so the two boundaries can never cross, even
@@ -2412,6 +2416,20 @@ function newGame() {
           } else {
             cells[i] = EMPTY; hp[i] = 0; maxhp[i] = 0; goldNug[i] = 0;
             S.grass[i] = 1;
+          }
+        } else { // cliff biome (v197): mostly grey rock now (Sam:
+          // the cliff was all easy brown, so the cannon chewed
+          // through it too fast). Brown survives only as little
+          // islands (cliffBrown mask) that break the grey up.
+          // Caves stay open; only WHITE rock converts. (The later
+          // grey pass may convert a few brown islands in the
+          // central region — that only thins the islands slightly.)
+          if (cells[i] === WHITE && !cliffBrown[i]) {
+            const v = norm(raw[i]);
+            cells[i] = GREY;
+            maxhp[i] = hp[i] = GREY_HP_MIN + Math.round(v * (GREY_HP_MAX - GREY_HP_MIN));
+            shade[i] = Math.round(v * 7);
+            goldNug[i] = 0;
           }
         }
       }
@@ -2591,15 +2609,24 @@ function newGame() {
   // survives as 3 vs 4 HP, and beyond the radius the full 3–10
   // depth is untouched — so an unlucky spawn can no longer start
   // you next to a 10-HP wall, but the rest of the map still varies.
-  // Grey is untouched here (it was already excluded within 12
-  // cells, and this loop only touches WHITE).
+  // v197: cliff grey can now land within the radius too (the cliff
+  // conversion runs before the starter is placed, so it has no
+  // GREY_MIN_DIST check) — any GREY within the radius becomes
+  // easy brown instead, so the opening is never a 30–100 HP wall.
+  // (The central grey chunks were already excluded within 12 cells
+  // by the grey pass, so only cliff grey needs converting back.)
   for (let y = 0; y < cfg.rows; y++) {
     for (let x = 0; x < cfg.cols; x++) {
       const i = y * cfg.cols + x;
-      if (cells[i] !== WHITE) continue;
       const dx = x - pc.x, dy = y - pc.y;
       if (dx * dx + dy * dy >= SPAWN_EASY_RADIUS * SPAWN_EASY_RADIUS) continue;
-      if (hp[i] > SPAWN_EASY_MAX_HP) { hp[i] = SPAWN_EASY_MAX_HP; maxhp[i] = SPAWN_EASY_MAX_HP; }
+      if (cells[i] === GREY) {
+        cells[i] = WHITE;
+        hp[i] = maxhp[i] = SPAWN_EASY_MAX_HP;
+        goldNug[i] = 0;
+      } else if (cells[i] === WHITE && hp[i] > SPAWN_EASY_MAX_HP) {
+        hp[i] = SPAWN_EASY_MAX_HP; maxhp[i] = SPAWN_EASY_MAX_HP;
+      }
     }
   }
   // Gold nuggets: 1% of rock cells seed a cluster of 1-5 contiguous cells.
