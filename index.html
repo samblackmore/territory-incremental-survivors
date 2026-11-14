@@ -138,7 +138,10 @@
   }
   .placebtn svg { width: 26px; height: 26px; }
   .placebtn .pcost { font-size: 11px; font-weight: bold; color: #ffd75e; }
+  .placebtn .pcount { font-size: 10px; color: #9ca3af; }
   .placebtn.unaffordable { opacity: 0.45; }
+  .placebtn.atcap { opacity: 0.45; }
+  .placebtn.atcap .pcount { color: #ef4444; }
   .placebtn.active { border-color: #ffd75e; background: rgba(255, 215, 94, 0.12); }
   .placebtn.hidden { display: none; }
   /* v174: unlock fly — the unit's icon zips from the picked card to its
@@ -776,6 +779,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=200"></script>
+<script src="game.js?v=201"></script>
 </body>
 </html>

@@ -257,14 +257,73 @@ function cannonDmgMaxed() {
 const UNIT_COST = { cannon: 10, mole: 4, bloom: 3, gather: 6, lantern: 2, wall: 2, laser: 5, waypoint: 5 };
 const UNIT_COST_STEP = 5;
 const LANTERN_COST_STEP = 1; // outposts stay cheap so chaining them to extend the base is affordable
+// v201 (Sam): unit capacity — a hard cap per type, starting at 1
+// for every type, raised by Capacity XP picks. The cap is what
+// gates how many you can place, not the cost. start = the cap
+// before any Capacity pick; step = how much one Capacity pick
+// adds; max = how many Capacity picks the type takes. Wall grows
+// fastest (+3/pick to 10) because a defensive line needs many;
+// Field grows slowest (+1/pick to 4). Capacity level lives in
+// S.capacity (a plain map, NOT in S.weapons stats — Sam: capacity
+// is not a top-left stat row, it lives in the place bar as x/y).
+const UNIT_CAP = {
+  cannon: { start: 1, step: 1, max: 4 },   // 1 -> 5
+  bloom: { start: 1, step: 1, max: 3 },    // 1 -> 4
+  mole: { start: 1, step: 1, max: 4 },     // 1 -> 5
+  gather: { start: 1, step: 1, max: 4 },   // 1 -> 5
+  laser: { start: 1, step: 1, max: 4 },    // 1 -> 5
+  lantern: { start: 1, step: 1, max: 5 },  // 1 -> 6
+  wall: { start: 1, step: 3, max: 3 },     // 1 -> 10
+  waypoint: { start: 1, step: 1, max: 4 }, // 1 -> 5
+};
+function capacityLevel(type) { return (S.capacity && S.capacity[type]) || 0; }
+function unitCap(type) {
+  const cfg = UNIT_CAP[type];
+  if (!cfg) return Infinity; // unknown type: no cap
+  return cfg.start + capacityLevel(type) * cfg.step;
+}
+function unitCount(type) {
+  if (type === 'wall') return liveWallBlocks().length;
+  let n = 0;
+  for (const t of S.turrets) {
+    if (!t.dead && t.color === BLUE && t.type === type) n++;
+  }
+  return n;
+}
+// Wall blocks are terrain, not turrets, so the wall count is a
+// list of placed blocks (S.wallBlocks), each holding its cell
+// indices. A block counts until every one of its cells is gone
+// (a destroyed cell becomes EMPTY in damageBlock, so it stops
+// being GREY). Pruned lazily here, on every count.
+function liveWallBlocks() {
+  if (!S.wallBlocks) S.wallBlocks = [];
+  for (let i = S.wallBlocks.length - 1; i >= 0; i--) {
+    const b = S.wallBlocks[i];
+    let alive = false;
+    for (const ci of (b.cells || [])) {
+      if (S.cells[ci] === GREY) { alive = true; break; }
+    }
+    if (!alive) S.wallBlocks.splice(i, 1);
+  }
+  return S.wallBlocks;
+}
+// v201: cost follows the unit's LEVEL (power), not how many you
+// own. The old +5-per-living-unit escalation is gone (Sam: it was
+// confusing — the numbers kept changing with no shown reason — and
+// it stopped gating once gold income grew). Now a placement costs
+// its base price plus 1 gold per power-stat level that type has
+// (Capacity picks don't raise cost — they only raise the cap).
+// The wall keeps its size-based cost (Reinforce already encodes
+// its level). UNIT_COST_STEP stays defined for main-mode only
+// (redMoleCost, projCost) — survival no longer uses it.
 function unitCost(type) {
   if (type === 'wall') return wallCost(); // v182: scales with Size (area)
-  let count = 0;
-  for (const t of S.turrets) {
-    if (!t.dead && t.color === BLUE && t.type === type) count++;
+  const w = S.weapons[type];
+  let lv = 0;
+  if (w && w.stats) {
+    for (const k in w.stats) lv += w.stats[k] || 0;
   }
-  const step = type === 'lantern' ? LANTERN_COST_STEP : UNIT_COST_STEP;
-  return UNIT_COST[type] + step * count;
+  return UNIT_COST[type] + lv;
 }
 // Red mole price: same formula as blue's, counted on living red moles.
 function redMoleCost() {
@@ -2196,6 +2255,12 @@ function newGame() {
         // weapons (VS-style): per-type stat tracks + derived mults. Picking
         // a stat card fills one chip on that track.
         weapons: {},
+        // v201: Capacity picks per type (plain map, NOT in weapons
+        // stats — capacity is not a top-left stat row, it lives in
+        // the place bar as x/y). Wall blocks placed this run, for
+        // the wall cap (walls are terrain, not turrets, so they need
+        // their own list — see liveWallBlocks).
+        capacity: {}, wallBlocks: [],
         // Red mirrors blue's weapon system (same STAT_DEFS, same
         // applyStat), just a separate object — so red can start ahead
         // (bloom Growth 3) without touching blue's tracks.
@@ -3936,6 +4001,16 @@ function buildCardPool() { return [
       kind: 'stat', weapon, stat: d.key, cap: d.cap,
       title: d.name, icon: ICONS[weapon], effect: d.effect,
     }))),
+  // v201: Capacity cards — one per unit type, raising that type's
+  // hard cap (see UNIT_CAP). Gated in availableCards on owning the
+  // type (S.weapons entry = placed at least once) and below the
+  // type's max Capacity picks. NOT a STAT_DEFS stat, so it never
+  // grows a top-left HUD row — Sam: capacity lives in the place
+  // bar as x/y. The sub names the new cap and is set in offerCards.
+  ...['cannon', 'bloom', 'gather', 'wall', 'laser', 'mole', 'lantern', 'waypoint'].map(type => ({
+    kind: 'capacity', weapon: type, title: ({ cannon: 'Cannon', bloom: 'Field', gather: 'Harvester', wall: 'Wall', laser: 'Laser', mole: 'Digger', lantern: 'Outpost', waypoint: 'Waypoint' })[type] + ' Capacity',
+    icon: ICONS[type],
+  })),
   // Magnet (v181): the global pull passive. Every living BLUE unit
   // pulls in nearby pickups; each pick grows the radius, speeds the
   // pull up, and adds count. Field and Outpost no longer pull by
@@ -3993,6 +4068,16 @@ function availableCards() {
       return (w.stats[c.stat] || 0) < c.cap;
     }
     if (c.kind === 'passive') return (S.passives[c.passive] || 0) < 8;
+    if (c.kind === 'capacity') {
+      // v201: survival only (main is frozen at v85, no Capacity
+      // there), gated on owning the type (placed at least once, so
+      // S.weapons exists) and below the type's max Capacity picks.
+      if (!SURVIVAL) return false;
+      const w = S.weapons[c.weapon];
+      if (!w) return false;
+      if (c.weapon === 'wall' && !(S.unlocked && S.unlocked.wall)) return false;
+      return capacityLevel(c.weapon) < UNIT_CAP[c.weapon].max;
+    }
     if (c.kind === 'teleport') return hasTeleportTarget();
     return (!c.needs || hasTurretTypes(c.needs));
   });
@@ -4147,6 +4232,20 @@ function offerCards() {
       el.dataset.stat = p.stat;
       if (p.weapon === 'cannon' && p.stat === 'dmg') evoLine = `<span class="evoline">${ICONS.evoPaint} EVO</span>`;
       if (p.weapon === 'cannon' && p.stat === 'rate') evoLine = `<span class="evoline">${ICONS.evoSpray} EVO</span>`;
+    }
+    else if (p.kind === 'capacity') {
+      // v201: Capacity — title is the new level, sub names the new
+      // cap ("Place up to 7 walls"). First pick is a new pickup, so
+      // it gets the New! tag like the Magnet passive (v188), not
+      // like a stat pick (v176). The unit icon says which type.
+      const cur = capacityLevel(p.weapon);
+      const cfg = UNIT_CAP[p.weapon];
+      const newCap = cfg.start + (cur + 1) * cfg.step;
+      const plural = ({ cannon: 'cannons', bloom: 'fields', gather: 'harvesters', wall: 'walls', laser: 'lasers', mole: 'diggers', lantern: 'outposts', waypoint: 'waypoints' })[p.weapon] || (p.weapon + 's');
+      title = `${p.title} <span class="lv">Lv${cur + 1}</span>`;
+      sub = `Place up to ${newCap} ${plural}`;
+      if (cur === 0) newTag = '<span class="newtag">New!</span>';
+      el.dataset.weapon = p.weapon;
     }
     else if (p.kind === 'unlock') {
       // v154: unlocks a placement type for the bottom bar, and the
@@ -4374,6 +4473,15 @@ document.querySelectorAll('#levelup .card').forEach(card => {
       if (cur < 8) {
         S.passives[p] = cur + 1;
       }
+    } else if (kind === 'capacity') {
+      // v201: raise this type's hard cap by one Capacity pick.
+      const type = card.dataset.weapon;
+      const cfg = UNIT_CAP[type];
+      if (cfg && capacityLevel(type) < cfg.max) {
+        if (!S.capacity) S.capacity = {};
+        S.capacity[type] = capacityLevel(type) + 1;
+        updatePlaceBar();
+      }
     } else if (kind === 'steer') {
       S.steerMult *= parseFloat(card.dataset.mult);
     } else if (kind === 'gold') {
@@ -4555,6 +4663,14 @@ function placeTurretAt(sx, sy) {
   let cx = Math.floor(wpt.x / CELL_PX), cy = Math.floor(wpt.y / CELL_PX);
   cx = Math.max(0, Math.min(cfg.cols - 1, cx));
   cy = Math.max(0, Math.min(cfg.rows - 1, cy));
+  // v201: hard cap (survival only — main mode is frozen at v85 and
+  // has no Capacity cards, so its cap would be stuck at 1). At the
+  // cap the tap is refused with a red ring, like any other invalid
+  // placement; the place bar already dims the button and shows x/y.
+  if (SURVIVAL && unitCount(type) >= unitCap(type)) {
+    S.rings.push({ x: cx + 0.5, y: cy + 0.5, t: 0, css: '#ef4444', dead: false });
+    return;
+  }
   if (type === 'wall') {
     // v182: the wall block is wallSize() x wallSize() (2x2 base, +1
     // per Size pick, up to 5x5). v185: partial fill — each cell of
@@ -4610,6 +4726,11 @@ function placeTurretAt(sx, sy) {
       bx += wx; by += wy;
     }
     spawnBurst(bx / filled.length + 0.5, by / filled.length + 0.5, '#9ca3af'); // centroid of the filled cells
+    // v201: track the placed block for the wall cap (walls are
+    // terrain, not turrets). A block counts until every cell is
+    // destroyed — see liveWallBlocks, which prunes dead blocks.
+    if (!S.wallBlocks) S.wallBlocks = [];
+    S.wallBlocks.push({ cells: filled.map(([wx, wy]) => wy * cfg.cols + wx) });
     // No turret entry — walls are terrain. (The stat track lives in
     // S.weapons.wall, but no turret is ever created, so the shop card
     // keeps showing New! + the description every time, which is fine:
@@ -6203,10 +6324,17 @@ function initPlaceBar() {
     coin.className = 'coin';
     pcost.appendChild(costNum);
     pcost.appendChild(coin);
+    // v201: capacity count, right next to the gold cost — "x/y"
+    // (current count / hard cap). Built once here, like the cost
+    // span (v175: never rewrite innerHTML in updatePlaceBar).
+    const pcount = document.createElement('span');
+    pcount.className = 'pcount';
     btn.appendChild(picon);
     btn.appendChild(pcost);
+    btn.appendChild(pcount);
     btn._picon = picon;
     btn._costNum = costNum;
+    btn._count = pcount;
     btn.addEventListener('click', () => onPlaceBtn(t));
   }
   updatePlaceBar();
@@ -6285,17 +6413,24 @@ function updatePlaceBar() {
     // button whose spans were never built (defensive; init covers all).
     if (btn._costNum) btn._costNum.textContent = String(cost);
     else btn.innerHTML = `<span class="picon">${(CARD_POOL.find(c => c.kind === 'turret' && c.type === t) || {}).icon || ''}</span><span class="pcost">${cost}<span class="coin"></span></span>`;
+    // v201: capacity count "x/y" next to the cost (Sam: capacity
+    // lives in the place bar, not a top-left stat row). At the cap
+    // the button dims — tapping it does nothing (see onPlaceBtn).
+    if (btn._count) btn._count.textContent = unitCount(t) + '/' + unitCap(t);
     btn.classList.toggle('unaffordable', S.gold < cost);
+    btn.classList.toggle('atcap', SURVIVAL && unitCount(t) >= unitCap(t));
     btn.classList.toggle('active', !!(S.placing && S.placing.type === t));
   }
 }
 // Tap a place-bar button: if its placement mode is already active,
 // cancel it; if another type is active, switch to this one; if you
-// can't afford it, do nothing (the dimmed button already says so).
+// can't afford it, or you're at the hard cap, do nothing (the
+// dimmed button already says so).
 function onPlaceBtn(type) {
   if (!S || !S.unlocked || !S.unlocked[type]) return;
   if (S.placing && S.placing.type === type) { cancelPlacement(); return; }
   if (S.gold < unitCost(type)) return;
+  if (SURVIVAL && unitCount(type) >= unitCap(type)) return;
   if (S.teleporting) return;
   enterPlacement(type);
   S.placing.fromBar = true;
