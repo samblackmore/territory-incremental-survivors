@@ -4868,7 +4868,15 @@ function weaponDmgBonus(t) {
 }
 // XP needed to go from the current level to the next: linear, +1 per level
 // (3, 4, 5...). XP resets to zero on every level-up.
-function xpNeed() { return S.level + 2; }
+// v200 (Sam): XP need is quadratic now, not linear — the linear
+// level + 2 made late levels too fast (level 25 needed only 27 XP
+// while Field + Magnet income had grown far more than 9x, so the
+// time per level shrank as you progressed). The quadratic kicker
+// floor(level^2 / 20) is 0 for levels 1–4, so the snappy 3 XP
+// starter is untouched; it pulls ahead gently from level 5 (8 XP)
+// and roughly doubles the late cost (level 25: 58, level 50: 177).
+// The knob is the divisor — smaller steepens it, larger softens it.
+function xpNeed() { return S.level + 2 + Math.floor(S.level * S.level / 20); }
 // ---- Sparkles (v123, v124 ocean ripples, v125 dash shimmer, v126 both) ----
 // Pure polish, no gameplay: every ~0.7–1.6s a shimmer event appears on
 // a random fog-clear EMPTY ocean cell currently in view (so you
