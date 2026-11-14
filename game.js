@@ -897,7 +897,7 @@ const GREY_SHADES = [
   [229, 231, 235], [209, 213, 219], [156, 163, 175], [107, 114, 128],
   [75, 85, 99], [55, 65, 81], [31, 41, 55], [17, 24, 39],
 ];
-const CLIFF_BROWN_FILL = 0.42; // v197: CA seed fill for the brown islands left in the cliff biome (grey everywhere else) — ~15% brown, small scattered islands that break the grey up (measured: fill 0.42 -> ~15% coverage, 0.45 -> ~26%)
+const MOUNTAIN_BROWN_FILL = 0.42; // v197: CA seed fill for the brown islands left in the mountain biome (grey everywhere else) — ~15% brown, small scattered islands that break the grey up (measured: fill 0.42 -> ~15% coverage, 0.45 -> ~26%)
 const GREY_MIN_DIST = 12;      // v198: cells from the starter with no grey — the central-grey pass that used this is gone, but the rule still holds: the v152 safety net converts any cliff grey within this radius back to easy brown, so the opening is never a 30–100 HP wall (SPAWN_EASY_RADIUS is the same 12)
 // v152 spawn tuning (Sam: unlucky hard rock next to spawn, and corner
 // spawns wasting half the arc): brown rock within SPAWN_EASY_RADIUS
@@ -1644,19 +1644,21 @@ function flagValid(t) {
   return true;
 }
 // ---- Rescue sites (survival only) ----
-// Biome of a cell, for rescue sites (v177). Beach/grass come from
-// the biome flags; unflagged land is cliff; ocean is water. The
-// bottom coast's sand/grass ring carries the same flags as the
-// biome bands, so a row split separates them: the beach band ends
-// ~0.31H down and the coast starts ~0.4H down, so beach cells are
-// above 0.36H and grass-band cells above 0.4H; anything flagged
-// below that is coast, never a rescue biome.
+// Biome of a cell, for rescue sites (v177, v199: five biomes).
+// Desert/grass come from the biome flags; unflagged land is
+// mountain (upper) or dirt (lower); ocean is water. The bottom
+// coast's sand/grass ring carries the same flags as the biome
+// bands, so a row split separates them: the desert band ends
+// ~0.20H down and the coast starts lower, so desert cells are
+// above 0.25H and grass-band cells above 0.45H; anything flagged
+// below that is coast, never a rescue biome. Unflagged land splits
+// at 0.60H (mountain above, dirt below).
 function rescueBiomeAt(x, y) {
   const i = y * cfg.cols + x;
   if (S.ocean && S.ocean[i]) return 'ocean';
-  if (S.beach && S.beach[i]) return y < cfg.rows * 0.36 ? 'beach' : 'coast';
-  if (S.grass && S.grass[i]) return y < cfg.rows * 0.4 ? 'grass' : 'coast';
-  return 'cliff';
+  if (S.beach && S.beach[i]) return y < cfg.rows * 0.25 ? 'desert' : 'coast';
+  if (S.grass && S.grass[i]) return y < cfg.rows * 0.45 ? 'grass' : 'coast';
+  return y < cfg.rows * 0.60 ? 'mountain' : 'dirt';
 }
 // Pick RESCUE_SITES_PER_BIOME sites per biome (cliff, grass, beach),
 // 1-5 civilians each (capped by pocket size). One site per separate
@@ -1863,7 +1865,7 @@ function rescueArrow() {
 // and never celebrate.
 function siteBiome(si) {
   const site = S.rescue && S.rescue.sites ? S.rescue.sites[si] : null;
-  if (!site) return 'cliff';
+  if (!site) return 'dirt';
   if (site.biome) return site.biome;
   return rescueBiomeAt(site.x, site.y); // synthetic/legacy sites without a biome
 }
@@ -2333,28 +2335,33 @@ function newGame() {
     }
   }
 
-  // v163 biomes (Sam, 2026-11-06): the map is four horizontal bands,
-  // each roughly a quarter of the height, bottom to top:
+  // v163 biomes (Sam, 2026-11-06), v199 (Sam, 2026-11-13): the map
+  // is five horizontal bands, each roughly a fifth of the height,
+  // bottom to top:
   //   ocean — the bottom coast (already done above, 3x ocean + beach)
-  //   cliff — the starter area: beach at its southern edge, then the
-  //     existing cave-pockets-in-rock interior (untouched below)
+  //   dirt — brown earth: the existing cave-pockets-in-rock
+  //     interior, untouched below (the soft ground you start in)
+  //   mountain — grey rock (v197/v198: grey IS the cliff, solid
+  //     rock as opposed to brown earth), with little brown islands
   //   grass — mostly open grass, with LARGE rock islands for mining
-  //   beach — a long extended beach at the top, with only SMALL
-  //     rock islands
+  //   desert — a long dry sand at the top, with only SMALL rock
+  //     islands (sand, no water — unlike the beach by the ocean)
   // No side coasts: land runs to the left/right edges in every band.
-  // Grass and beach bands are applied here, after the cave/rock
+  // Grass and desert bands are applied here, after the cave/rock
   // generation above and the coast override, so they replace it in
   // their bands only. Rock islands keep HP from the same Perlin
-  // field (3–10, like cliff rock); open ground renders via the
+  // field (3–10, like dirt rock); open ground renders via the
   // grass/beach flags, so the minimap and tiles read the biome too.
-  // Rescue note: grass/beach open ground is one big EMPTY component,
+  // (The desert sets the S.beach flag — it means sand, whether
+  // beach by the water or dry desert at the top.)
+  // Rescue note: grass/desert open ground is one big EMPTY component,
   // so rescue sites may now sit in open ground there, not only in
-  // cliff caves — pickRescueSites' fallback already covers that.
+  // dirt/mountain caves — pickRescueSites' fallback already covers that.
   // v164 (Sam, 2026-11-06): three fixes from his screenshot —
   // (1) grass islands are BIGGER: fill 0.42 -> 0.48, and any grass
   // rock island smaller than BIOME_MIN_ISLAND cells is removed, so
   // the speckle goes and the islands read as large;
-  // (2) the top beach gets islands too, at the size the grass ones
+  // (2) the top desert gets islands too, at the size the grass ones
   // were in v163 (fill 0.42) — small islands, fewer of them than
   // the grass band has;
   // (3) the biome edges are no longer straight horizontal lines:
@@ -2364,20 +2371,21 @@ function newGame() {
   // with fingers of each biome crossing it instead of a hard line.
   if (SURVIVAL) {
     const H = cfg.rows;
-    const BIOME_GRASS_FILL = 0.45, BIOME_BEACH_FILL = 0.42;
+    const BIOME_GRASS_FILL = 0.45, BIOME_DESERT_FILL = 0.42;
     const BIOME_EDGE_WANDER = 12, BIOME_TRANSITION = 8, BIOME_MIN_ISLAND = 6;
     const grassRock = genCaves(cfg.cols, cfg.rows, BIOME_GRASS_FILL, rng);
-    const beachRock = genCaves(cfg.cols, cfg.rows, BIOME_BEACH_FILL, rng);
-    // v197: brown islands for the cliff biome — own RNG stream (seed
-    // + 99993) so the existing map generation is untouched.
-    const cliffBrown = genCaves(cfg.cols, cfg.rows, CLIFF_BROWN_FILL, mulberry32(seed + 99993));
+    const desertRock = genCaves(cfg.cols, cfg.rows, BIOME_DESERT_FILL, rng);
+    // v197: brown islands for the mountain biome — own RNG stream
+    // (seed + 99993) so the existing map generation is untouched.
+    const mountainBrown = genCaves(cfg.cols, cfg.rows, MOUNTAIN_BROWN_FILL, mulberry32(seed + 99993));
     const edgeNoise = makeNoise2D(mulberry32(seed + 99991));
     const ditherNoise = makeNoise2D(mulberry32(seed + 99992));
-    // Wander is capped so the two boundaries can never cross, even
-    // on a short map (bands are 0.25H tall).
+    // Wander is capped so adjacent boundaries can never cross, even
+    // on a short map (bands are 0.20H tall).
     const wander = Math.min(BIOME_EDGE_WANDER, H * 0.06);
-    const b1 = x => H * 0.25 + (edgeNoise(x * 0.06, 0.31) - 0.5) * 2 * wander;
-    const b2 = x => H * 0.50 + (edgeNoise(x * 0.06, 0.73) - 0.5) * 2 * wander;
+    const b1 = x => H * 0.20 + (edgeNoise(x * 0.06, 0.31) - 0.5) * 2 * wander;
+    const b2 = x => H * 0.40 + (edgeNoise(x * 0.06, 0.73) - 0.5) * 2 * wander;
+    const b3 = x => H * 0.60 + (edgeNoise(x * 0.06, 0.17) - 0.5) * 2 * wander;
     const biomeAt = (x, y) => {
       const t = BIOME_TRANSITION;
       const dither = (d, lower, upper) => {
@@ -2386,8 +2394,9 @@ function newGame() {
         const p = (d + t) / (2 * t); // 0 at top of zone, 1 at bottom
         return ditherNoise(x * 0.25, y * 0.25) < p ? lower : upper;
       };
-      if (dither(y - b1(x), 'grass', 'beach') === 'beach') return 'beach';
-      return dither(y - b2(x), 'cliff', 'grass');
+      if (dither(y - b1(x), 'grass', 'desert') === 'desert') return 'desert';
+      if (dither(y - b2(x), 'mountain', 'grass') === 'grass') return 'grass';
+      return dither(y - b3(x), 'dirt', 'mountain');
     };
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < cfg.cols; x++) {
@@ -2398,14 +2407,14 @@ function newGame() {
         // on — that was a sand cell turned WHITE with S.beach set.
         if (S.ocean[i] || S.beach[i] || S.grass[i]) continue;
         const band = biomeAt(x, y);
-        if (band === 'beach') { // top beach biome
-          if (beachRock[i]) {
+        if (band === 'desert') { // top desert biome (sand, no water)
+          if (desertRock[i]) {
             cells[i] = WHITE;
             const m = 3 + Math.round(norm(raw[i]) * 7);
             maxhp[i] = m; hp[i] = m; goldNug[i] = 0;
           } else {
             cells[i] = EMPTY; hp[i] = 0; maxhp[i] = 0; goldNug[i] = 0;
-            S.beach[i] = 1;
+            S.beach[i] = 1; // S.beach means sand (desert or beach)
           }
         } else if (band === 'grass') { // grass biome
           if (grassRock[i]) {
@@ -2416,14 +2425,12 @@ function newGame() {
             cells[i] = EMPTY; hp[i] = 0; maxhp[i] = 0; goldNug[i] = 0;
             S.grass[i] = 1;
           }
-        } else { // cliff biome (v197): mostly grey rock now (Sam:
-          // the cliff was all easy brown, so the cannon chewed
-          // through it too fast). Brown survives only as little
-          // islands (cliffBrown mask) that break the grey up.
-          // Caves stay open; only WHITE rock converts. (The later
-          // grey pass may convert a few brown islands in the
-          // central region — that only thins the islands slightly.)
-          if (cells[i] === WHITE && !cliffBrown[i]) {
+        } else if (band === 'mountain') { // mountain biome (v197):
+          // mostly grey rock (Sam: grey IS the cliff, solid rock
+          // as opposed to brown earth). Brown survives only as
+          // little islands (mountainBrown mask) that break the
+          // grey up. Caves stay open; only WHITE rock converts.
+          if (cells[i] === WHITE && !mountainBrown[i]) {
             const v = norm(raw[i]);
             cells[i] = GREY;
             maxhp[i] = hp[i] = GREY_HP_MIN + Math.round(v * (GREY_HP_MAX - GREY_HP_MIN));
@@ -2431,12 +2438,14 @@ function newGame() {
             goldNug[i] = 0;
           }
         }
+        // 'dirt' biome: untouched — brown earth with cave pockets,
+        // the soft ground you start in (no conversion here).
       }
     }
     // Grass speckle removal: flood-fill the WHITE cells in the grass
     // band and delete any rock island smaller than BIOME_MIN_ISLAND
     // cells, so the grass biome is open grass plus a few large
-    // islands. Beach islands are left alone — small is what Sam
+    // islands. Desert islands are left alone — small is what Sam
     // wants there.
     {
       const seen = new Uint8Array(n);
@@ -2932,12 +2941,13 @@ const FLOOD_DIRS = ['north', 'south', 'west', 'east']; // edge the flood comes F
 // per second (Harvester pace) to the nearest Cannon or Outpost. They
 // never die in v112 (flood can trap them, painting them back out frees
 // them) — death/stakes are a later tuning call, not a v112 mechanic.
-// v177: 3 rescue sites per biome (cliff, grass, beach) — 9 total —
-// so a run forces you to climb through every biome to find them all.
-// Ocean/coast cells never hold a site.
+// v177: 3 rescue sites per biome — v199: four land biomes (dirt,
+// mountain, grass, desert), 12 total — so a run forces you to
+// climb through every biome to find them all. Ocean/coast cells
+// never hold a site.
 const RESCUE_SITES_PER_BIOME = 3;
-const RESCUE_BIOMES = ['cliff', 'grass', 'beach'];
-const BIOME_NAMES = { cliff: 'Cliff', grass: 'Grass', beach: 'Beach' };
+const RESCUE_BIOMES = ['dirt', 'mountain', 'grass', 'desert'];
+const BIOME_NAMES = { dirt: 'Dirt', mountain: 'Mountain', grass: 'Grass', desert: 'Desert' };
 const CIV_MIN = 1;
 const CIV_MAX = 5;
 const CIV_STEP_DUR = 1.0; // seconds per civilian step — slow on purpose, like Harvester
@@ -3251,20 +3261,21 @@ function meteorNextInterval() {
   return METEOR_INTERVAL_MIN + Math.random() * (METEOR_INTERVAL_MAX - METEOR_INTERVAL_MIN);
 }
 function meteorTargets() {
-  // Count scales with map area: 2–3 per 1728 cells (v171: was 3–5
-  // since v129 — but maps are now ~12k cells, not the 3750-cell
-  // 75x50 the old density was tuned for, so showers had grown to
-  // 20–45 meteors; Sam: reduce a bit, keep it density-based so it
-  // scales with map size). Now ~14–27 on a current map, 4–7 on the
-  // old 75x50. Positions are uniform — anywhere, including fog,
-  // starter area, and flood territory — except the ocean (v166,
-  // Sam: a meteor ADD in the ocean drops a rock that blocks the
-  // flood shots coming from the south, gutting the threat — and
-  // meteors are strong early).
+  // Count scales with map area: 1–1.5 per 1728 cells (v199: was
+  // 2–3 — Sam: half the density, the showers were leaving too
+  // many holes/walls over time. v171 was 3–5 since v129 — but maps
+  // are now ~12k cells, not the 3750-cell 75x50 the old density
+  // was tuned for, so showers had grown to 20–45 meteors; Sam:
+  // reduce a bit, keep it density-based so it scales with map
+  // size). Now ~7–13 on a current map. Positions are uniform —
+  // anywhere, including fog, starter area, and flood territory —
+  // except the ocean (v166, Sam: a meteor ADD in the ocean drops
+  // a rock that blocks the flood shots coming from the south,
+  // gutting the threat — and meteors are strong early).
   // Retry up to 20 times for a non-ocean cell; if the map is
   // (nearly) all ocean, that target is skipped.
   const area = cfg.cols * cfg.rows;
-  const base = 2 + Math.floor(Math.random() * 2); // 2 or 3
+  const base = 1 + Math.floor(Math.random() * 2) * 0.5; // 1 or 1.5 (half of the old 2 or 3)
   const n = Math.max(1, Math.round(area / 1728 * base));
   const out = [];
   for (let k = 0; k < n; k++) {
@@ -6803,12 +6814,14 @@ function randomizeMapSize() {
   // shots from below). v179 (Sam, 2026-11-09): 75 columns — wider
   // again, so the coast has room to breathe and the shoreline slopes
   // can run longer. Still narrower than the old ~87 average.
-  // Rows are still 140–200 random (panel size; newGame still adds
-  // the bottom-ocean extra rows on top, so a real map is taller
-  // still). Biomes (see newGame) split the height into quarters.
+  // Rows are 175–250 random (v199: was 140–200 — the level got
+  // taller for five biomes instead of four, so each band keeps its
+  // old height of ~35–50 rows; panel size, newGame still adds the
+  // bottom-ocean extra rows on top, so a real map is taller still).
+  // Biomes (see newGame) split the height into fifths.
   // ?cols= in the URL still overrides the fixed width.
   if (!qCols) inCols.value = 75;
-  if (!qRows) inRows.value = 140 + Math.floor(Math.random() * 61);
+  if (!qRows) inRows.value = 175 + Math.floor(Math.random() * 76);
 }
 
 applyUrlParams();
