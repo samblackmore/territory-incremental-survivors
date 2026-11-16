@@ -211,8 +211,9 @@ function applyStat(w, weapon, st) {
     if (st === 'field') {
       // v181: growth only — pull left the Field track for the global
       // Magnet passive. Each pick is +20% growth; cap 3 = 1.73x max.
+      // v202 (Cultivator): the commander multiplies growth by 1.25.
       const n = w.stats.field || 0;
-      w.rateMult = Math.pow(1.2, n);
+      w.rateMult = Math.pow(1.2, n) * (S && S.commander === 'cultivator' ? 1.25 : 1);
     }
   } else if (weapon === 'laser') {
     if (st === 'shield') {
@@ -391,9 +392,11 @@ function laserHasTarget(t) {
   return false;
 }
 // v186: shield radius = base + Shield level (3 at Lv0, 8 at Lv5).
+// v202 (Warden): the commander adds +1 to the base, so a Warden
+// Laser starts at radius 4.
 function laserShieldRadius() {
   const w = S.weapons.laser;
-  return LASER_SHIELD_RADIUS_BASE + ((w && w.stats && w.stats.shield) || 0);
+  return LASER_SHIELD_RADIUS_BASE + ((w && w.stats && w.stats.shield) || 0) + (S && S.commander === 'warden' ? 1 : 0);
 }
 const MOLE_LIFETIME_MIN = 20;      // cells dug before dying (min, doubled: diggers were dying too soon to be useful)
 const MOLE_LIFETIME_MAX = 40;      // ... (max)
@@ -1339,7 +1342,15 @@ const meta = { gold: 0, unlocks: { cannon: true, gather: false, mole: false, blo
   // until the player toggles). Explicit false = excluded from the run.
   // (Separate from unlocks: unlocks are future progression gating;
   // toggles are player choice for this run. End-of-run unlocking TBD.)
-  enabled: {} };
+  enabled: {},
+  // v202: meta progression — units and commanders unlocked by
+  // achievements, persistent across runs. A fresh player has only
+  // the Cannon and the Scout; the other 7 units and 4 commanders
+  // start locked. stats are cumulative across runs (for the
+  // total-based achievements).
+  units: { cannon: true, lantern: false, wall: false, bloom: false, mole: false, gather: false, laser: false, waypoint: false },
+  commanders: { scout: true, bulwark: false, cultivator: false, gunner: false, warden: false },
+  stats: { rescuedTotal: 0, shotDownTotal: 0 } };
 function loadMeta() {
   try {
     const m = JSON.parse(localStorage.getItem('tis_meta'));
@@ -1351,11 +1362,109 @@ function loadMeta() {
     }
     if (m && m.enabled) for (const t of ['cannon', 'mole', 'bloom', 'gather', 'lantern', 'wall', 'laser'])
       if (typeof m.enabled[t] === 'boolean') meta.enabled[t] = m.enabled[t];
+    if (m && m.units) for (const k of Object.keys(meta.units)) if (typeof m.units[k] === 'boolean') meta.units[k] = m.units[k];
+    if (m && m.commanders) for (const k of Object.keys(meta.commanders)) if (typeof m.commanders[k] === 'boolean') meta.commanders[k] = m.commanders[k];
+    if (m && m.stats) {
+      if (typeof m.stats.rescuedTotal === 'number') meta.stats.rescuedTotal = Math.max(0, m.stats.rescuedTotal | 0);
+      if (typeof m.stats.shotDownTotal === 'number') meta.stats.shotDownTotal = Math.max(0, m.stats.shotDownTotal | 0);
+    }
   } catch (e) { /* fresh save */ }
 }
 function saveMeta() {
   try { localStorage.setItem('tis_meta', JSON.stringify(meta)); } catch (e) { /* ignore */ }
 }
+// ---- v202: Commanders (meta progression) ------------------------
+// A commander is a stat boost + an ability, Vampire Survivors style.
+// Portraits are dumb-but-distinct shape-drawn faces (same flat SVG
+// style as the weapon ICONS, 48x48 so a face reads at card size) —
+// each one has its own colour and distinguishing feature so the
+// character feels like a person, not just a stat boost.
+const COMMANDERS = [
+  { id: 'scout', name: 'Scout', unlocked: true,
+    portrait: '<svg viewBox="0 0 48 48" width="48" height="48"><circle cx="24" cy="26" r="16" fill="#c9a86a"/><path d="M8 22 Q24 4 40 22 L40 16 Q24 0 8 16 Z" fill="#4d7c0f"/><circle cx="18" cy="26" r="2.2" fill="#1a2138"/><circle cx="30" cy="26" r="2.2" fill="#1a2138"/><path d="M19 33 Q24 36 29 33" stroke="#1a2138" stroke-width="2" fill="none" stroke-linecap="round"/></svg>',
+    ability: 'Every 3 levels, a bonus Teleport card joins the level-up deal — free, on top of the normal picks.',
+    start: 'Starts with the Cannon.' },
+  { id: 'bulwark', name: 'Bulwark', unlocked: false,
+    portrait: '<svg viewBox="0 0 48 48" width="48" height="48"><circle cx="24" cy="26" r="16" fill="#9ca3af"/><path d="M8 24 Q8 8 24 8 Q40 8 40 24 L36 24 Q36 12 24 12 Q12 12 12 24 Z" fill="#4b5563"/><rect x="14" y="22" width="20" height="3" fill="#4b5563"/><circle cx="18" cy="28" r="2.2" fill="#1a2138"/><circle cx="30" cy="28" r="2.2" fill="#1a2138"/><path d="M19 35 L29 35" stroke="#1a2138" stroke-width="2" stroke-linecap="round"/></svg>',
+    ability: 'Built to hold the line.',
+    start: 'Starts with a Wall placed, Wall unlocked, Reinforce 1 (3x3, 30 HP).' },
+  { id: 'cultivator', name: 'Cultivator', unlocked: false,
+    portrait: '<svg viewBox="0 0 48 48" width="48" height="48"><circle cx="24" cy="27" r="16" fill="#d9a05b"/><path d="M24 12 Q18 4 12 6 Q16 12 24 12 Z" fill="#16a34a"/><path d="M24 12 Q30 4 36 6 Q32 12 24 12 Z" fill="#22c55e"/><circle cx="18" cy="27" r="2.2" fill="#1a2138"/><circle cx="30" cy="27" r="2.2" fill="#1a2138"/><circle cx="14" cy="31" r="2.5" fill="#f472b6" opacity="0.6"/><circle cx="34" cy="31" r="2.5" fill="#f472b6" opacity="0.6"/><path d="M18 34 Q24 39 30 34" stroke="#1a2138" stroke-width="2" fill="none" stroke-linecap="round"/></svg>',
+    ability: 'Fields grow 25% faster.',
+    start: 'Starts with a Field placed, Field unlocked.' },
+  { id: 'gunner', name: 'Gunner', unlocked: false,
+    portrait: '<svg viewBox="0 0 48 48" width="48" height="48"><circle cx="24" cy="26" r="16" fill="#c9a86a"/><rect x="9" y="14" width="30" height="7" rx="3" fill="#dc2626"/><circle cx="18" cy="27" r="2.5" fill="#1a2138"/><circle cx="30" cy="27" r="2.5" fill="#1a2138"/><path d="M17 34 Q24 31 31 34" stroke="#1a2138" stroke-width="2" fill="none" stroke-linecap="round"/></svg>',
+    ability: 'Cannon starts with Damage 1 (+1 damage, +5% crit).',
+    start: 'Starts with the Cannon, Damage 1.' },
+  { id: 'warden', name: 'Warden', unlocked: false,
+    portrait: '<svg viewBox="0 0 48 48" width="48" height="48"><circle cx="24" cy="26" r="16" fill="#93c5fd"/><path d="M8 26 Q8 8 24 8 Q40 8 40 26 L36 26 Q36 12 24 12 Q12 12 12 26 Z" fill="#1d4ed8"/><circle cx="18" cy="27" r="2.2" fill="#1a2138"/><circle cx="30" cy="27" r="2.2" fill="#1a2138"/><path d="M19 34 L29 34" stroke="#1a2138" stroke-width="2" stroke-linecap="round"/></svg>',
+    ability: 'Shield radius +1 (base 4 instead of 3).',
+    start: 'Starts with a Laser placed, Laser unlocked.' },
+];
+function isUnitUnlocked(type) { return type === 'cannon' || !!(meta.units && meta.units[type]); }
+function isCommanderUnlocked(id) { return id === 'scout' || !!(meta.commanders && meta.commanders[id]); }
+// ---- v202: Achievements (meta progression) ----------------------
+// Each unlocks one unit or commander. Conditions are chosen to relate
+// to the thing unlocked (XP unlocks Field, which helps you earn XP
+// faster; surviving unlocks Wall/Laser/Bulwark, which help you
+// survive longer). Thresholds are starting points to tune. Per-run
+// stats live in S (runXp, runGold, destroyedBlue, rescue.rescued,
+// time); totals live in meta.stats (rescuedTotal, shotDownTotal).
+const ACHIEVEMENTS = [
+  { id: 'survive5', text: 'Survive 5 minutes', reward: { kind: 'unit', id: 'wall' }, check: () => S && S.time >= 300 },
+  { id: 'dirt3', text: 'Discover all 3 civilians in the Dirt biome', reward: { kind: 'unit', id: 'waypoint' }, check: () => S && S.rescue && S.rescue.sites.length > 0 && S.rescue.sites.filter(s => s.biome === 'dirt').length > 0 && S.rescue.sites.filter(s => s.biome === 'dirt').every(s => s.celebrated) },
+  { id: 'rescue3', text: 'Rescue 3 civilians in a single run', reward: { kind: 'unit', id: 'lantern' }, check: () => S && S.rescue && S.rescue.rescued >= 3 },
+  { id: 'xp100', text: 'Collect 100 XP in a single run', reward: { kind: 'unit', id: 'bloom' }, check: () => S && (S.runXp || 0) >= 100 },
+  { id: 'gold50', text: 'Collect 50 gold in a single run', reward: { kind: 'unit', id: 'gather' }, check: () => S && (S.runGold || 0) >= 50 },
+  { id: 'rock100', text: 'Destroy 100 rock cells in a single run', reward: { kind: 'unit', id: 'mole' }, check: () => S && S.destroyedBlue >= 100 },
+  { id: 'survive8', text: 'Survive 8 minutes', reward: { kind: 'unit', id: 'laser' }, check: () => S && S.time >= 480 },
+  { id: 'survive10', text: 'Survive 10 minutes', reward: { kind: 'commander', id: 'bulwark' }, check: () => S && S.time >= 600 },
+  { id: 'rescue10', text: 'Rescue 10 civilians (total)', reward: { kind: 'commander', id: 'cultivator' }, check: () => meta.stats && meta.stats.rescuedTotal >= 10 },
+  { id: 'xp300', text: 'Collect 300 XP in a single run', reward: { kind: 'commander', id: 'gunner' }, check: () => S && (S.runXp || 0) >= 300 },
+  { id: 'shoot50', text: 'Shoot down 50 enemy projectiles with a Laser (total)', reward: { kind: 'commander', id: 'warden' }, check: () => meta.stats && meta.stats.shotDownTotal >= 50 },
+];
+function achievementUnlocked(a) {
+  return a.reward.kind === 'unit' ? isUnitUnlocked(a.reward.id) : isCommanderUnlocked(a.reward.id);
+}
+// Check every achievement; unlock any whose condition is met, save,
+// and toast. Cheap (11 numeric checks + one 12-site loop), so the
+// update loop can call it once a second and the rescue/laser/run-over
+// paths can call it directly for an immediate unlock.
+function checkAchievements() {
+  if (!S) return;
+  for (const a of ACHIEVEMENTS) {
+    if (achievementUnlocked(a)) continue;
+    let ok = false;
+    try { ok = !!a.check(); } catch (e) { ok = false; }
+    if (!ok) continue;
+    if (a.reward.kind === 'unit') {
+      if (!meta.units) meta.units = {};
+      meta.units[a.reward.id] = true;
+    } else {
+      if (!meta.commanders) meta.commanders = {};
+      meta.commanders[a.reward.id] = true;
+    }
+    saveMeta();
+    showUnlockToast(a);
+  }
+}
+function showUnlockToast(a) {
+  const name = a.reward.kind === 'unit'
+    ? (COMMANDERS.find(c => c.id === a.reward.id)?.name || (CARD_POOL.find(c => c.kind === 'turret' && c.type === a.reward.id)?.title || a.reward.id))
+    : (COMMANDERS.find(c => c.id === a.reward.id)?.name || a.reward.id);
+  const label = a.reward.kind === 'unit' ? 'Unit unlocked' : 'Commander unlocked';
+  try {
+    const el = document.getElementById('unlocktoast');
+    if (!el) return;
+    el.textContent = label + ': ' + name + '!';
+    el.classList.remove('hidden');
+    setTimeout(() => { try { el.classList.add('hidden'); } catch (e) {} }, 4000);
+  } catch (e) { /* no DOM (harness): the meta unlock still stands */ }
+}
+// The commander picked on the character-select screen (default
+// Scout). newGame reads it into S.commander; the harness can set it
+// directly before calling newGame to test another commander.
+let selectedCommander = 'scout';
 // ---- Game state ----
 let S = null;
 
@@ -2204,6 +2313,107 @@ function snapAnchor(a) { // fallback spawn when there are no caves at all
            y: Math.min(cfg.rows - 1, Math.max(0, Math.round(a.y))) };
 }
 
+// v202: commander starting items. Finds open ground near the starter
+// (the beach is open, so this almost always lands 1–2 cells away).
+// A turret spot is a single EMPTY cell; a wall spot is an n×n block
+// of EMPTY cells (the starting wall is 3x3 at Reinforce 1).
+function findEmptyNear(x, y, r) {
+  for (let d = 1; d <= r; d++) {
+    for (let dy = -d; dy <= d; dy++) {
+      for (let dx = -d; dx <= d; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== d) continue;
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= cfg.cols || ny >= cfg.rows) continue;
+        const ni = ny * cfg.cols + nx;
+        if (S.cells[ni] === EMPTY && !turretAt(nx, ny) && !civilianAt(nx, ny)) return { x: nx, y: ny };
+      }
+    }
+  }
+  return null;
+}
+function findEmptyBlockNear(x, y, n, r, allowRock) {
+  // Finds an n×n block of EMPTY cells near (x, y), nearest ring first.
+  // allowRock: also accept WHITE rock (the wall replaces it) — used
+  // as a fallback for the Bulwark starting wall, since the beach near
+  // the starter is often too rocky for a pure-EMPTY 3×3.
+  for (let d = 1; d <= r; d++) {
+    for (let dy = -d; dy <= d; dy++) {
+      for (let dx = -d; dx <= d; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== d) continue;
+        const bx = x + dx, by = y + dy;
+        if (bx < 0 || by < 0 || bx + n > cfg.cols || by + n > cfg.rows) continue;
+        let ok = true;
+        for (let wy = by; wy < by + n && ok; wy++) {
+          for (let wx = bx; wx < bx + n && ok; wx++) {
+            const wi = wy * cfg.cols + wx;
+            if ((S.cells[wi] !== EMPTY && !(allowRock && S.cells[wi] === WHITE)) ||
+                turretAt(wx, wy) || civilianAt(wx, wy)) ok = false;
+          }
+        }
+        if (ok) return { x: bx, y: by };
+      }
+    }
+  }
+  return null;
+}
+function applyCommanderStart(pc) {
+  const cmd = S.commander || 'scout';
+  if (cmd === 'bulwark') {
+    // Wall unlocked from the start, Reinforce 1 (3x3, 30 HP), and
+    // one wall placed next to the starter (the cap of 1).
+    if (S.unlocked) S.unlocked.wall = true;
+    if (S.weapons.wall) S.weapons.wall.stats.reinforce = 1;
+    // Prefer open ground; fall back to rock (the wall replaces it) —
+    // the beach near the starter is often too rocky for a 3×3 of pure
+    // EMPTY. Wider radius on the fallback so the wall always lands.
+    let spot = findEmptyBlockNear(pc.x, pc.y, wallSize(), 8);
+    if (!spot) spot = findEmptyBlockNear(pc.x, pc.y, wallSize(), 12, true);
+    if (spot) {
+      const n = wallSize(), hp = wallHp(), cellsIdx = [];
+      for (let wy = spot.y; wy < spot.y + n; wy++) {
+        for (let wx = spot.x; wx < spot.x + n; wx++) {
+          const wi = wy * cfg.cols + wx;
+          S.cells[wi] = GREY;
+          S.hp[wi] = hp; S.maxhp[wi] = hp; S.shade[wi] = WALL_SHADE;
+          S.growN[wi] = 0; S.growBy[wi] = 0; S.harvT[wi] = 0; S.goldNug[wi] = 0; S.popT[wi] = -1;
+          if (S.noHarvest) S.noHarvest[wi] = 0;
+          cellsIdx.push(wi);
+        }
+      }
+      if (!S.wallBlocks) S.wallBlocks = [];
+      S.wallBlocks.push({ cells: cellsIdx });
+    }
+  } else if (cmd === 'cultivator') {
+    // Field unlocked from the start, one placed next to the starter.
+    // The +25% growth rides on applyStat (S.commander is read there).
+    if (S.unlocked) S.unlocked.bloom = true;
+    const spot = findEmptyNear(pc.x, pc.y, 6);
+    if (spot) {
+      if (!S.weapons.bloom) S.weapons.bloom = { stats: initWeaponStats('bloom'), rateMult: 1, dmgBonus: 0, critChance: 0, proj: 0, evo: false };
+      applyStat(S.weapons.bloom, 'bloom', 'field');
+      S.turrets.push(mkTurret(spot.x, spot.y, BLUE, 'bloom'));
+    }
+  } else if (cmd === 'gunner') {
+    // Cannon starts with Damage 1 (stacks on top of perma).
+    if (S.weapons.cannon) {
+      S.weapons.cannon.stats.dmg = (S.weapons.cannon.stats.dmg || 0) + 1;
+      applyStat(S.weapons.cannon, 'cannon', 'dmg');
+    }
+  } else if (cmd === 'warden') {
+    // Laser unlocked from the start, one placed next to the starter.
+    // The +1 shield radius rides on laserShieldRadius (S.commander).
+    if (S.unlocked) S.unlocked.laser = true;
+    const spot = findEmptyNear(pc.x, pc.y, 6);
+    if (spot) {
+      if (!S.weapons.laser) S.weapons.laser = { stats: initWeaponStats('laser'), rateMult: 1, dmgBonus: 0, critChance: 0, proj: 0, evo: false };
+      applyStat(S.weapons.laser, 'laser', 'shield');
+      S.turrets.push(mkTurret(spot.x, spot.y, BLUE, 'laser'));
+    }
+  }
+  // Scout: no starting item — the ability (bonus Teleport every 3
+  // levels) is the character.
+}
+
 function newGame() {
   // Bank the previous run's gold into the outer total.
   let banked = 0;
@@ -2249,6 +2459,13 @@ function newGame() {
         // screen); the rest join when an XP unlock card is picked.
         unlocked: Object.fromEntries(PLACEBAR_TYPES.map(t => [t, START_UNLOCKED.includes(t) && !(meta && meta.enabled && meta.enabled[t] === false)])),
         coins: [], floaters: [], gold: 0, chipPulse: 0, civChipPulse: 0, time: 0, lastBanked: banked,
+        // v202: per-run totals for the XP/gold achievements (S.xp and
+        // S.gold reset on spend/pick, so they can't be the totals).
+        // commander = the selected commander id for this run;
+        // scoutBonusTaken = the Scout bonus Teleport was picked this
+        // level-up (so it isn't re-offered in the re-deal); achT
+        // throttles the achievement check to once a second.
+        runXp: 0, runGold: 0, commander: selectedCommander, scoutBonusTaken: false, achT: 0,
         // XP bar animation: xpShown eases toward xp; level-up cards wait
         // for the bar to finish filling.
         xpShown: 0, awaitingLevel: false,
@@ -2730,6 +2947,13 @@ function newGame() {
   }
   if (SURVIVAL) pickRescueSites(rng); // 3 sites per biome, 1-5 civilians each (see pickRescueSites)
   startWave(1);
+  // v202: commander starting items — applied LAST, after every
+  // terrain pass, so the Bulwark wall isn't erased by the v152
+  // easy-rock loop (which converts GREY within 12 of the starter
+  // back to WHITE). Each commander places exactly one of its unit
+  // (the v201 cap of 1), next to the starter (within radius 6, so
+  // nearBase is satisfied).
+  applyCommanderStart(pc);
   computeFog();   // fog of war: fogDist on open ground, 3 into rock, around player units
   // v177: a site whose anchor is already fog-clear at spawn was never
   // hidden, so there is no discovery to celebrate — mark it celebrated
@@ -2901,6 +3125,9 @@ function checkRunOver() {
   if (!bluesAlive) {
     S.runOver = true;
     S.paused = true;
+    // v202: final achievement check at run end (a survive-time
+    // threshold crossed in the last second still counts).
+    checkAchievements();
     S.placing = null;
     placebanner.classList.add('hidden');
     placeswap.classList.add('hidden');
@@ -3636,6 +3863,9 @@ function fireLaser(t) {
       S.beams.push({ x1: cx * CELL_PX, y1: cy * CELL_PX,
                      x2: fx * CELL_PX, y2: fy * CELL_PX, t: 0 });
       spawnBurst(fx, fy, CELL_COLORS[t.color]);
+      // v202: cumulative shoot-downs feed the Warden achievement.
+      if (meta.stats) { meta.stats.shotDownTotal += kills; saveMeta(); }
+      checkAchievements();
     }
     return;
   }
@@ -4086,8 +4316,12 @@ function availableCards() {
     // its card is picked (VS-style), then it's bought with gold there.
     // Start-unlocked types never appear here; start-screen toggles
     // filter the pool, so a toggled-off type can never be unlocked.
+    // v202: a type only joins the pool once it is META-unlocked
+    // (achievement) — a fresh player sees only the Cannon, and
+    // locked units never appear as unlock cards.
     for (const t of UNLOCKABLE) {
       if (S.unlocked && S.unlocked[t]) continue;
+      if (!isUnitUnlocked(t)) continue;
       if (meta && meta.enabled && meta.enabled[t] === false) continue;
       const entry = CARD_POOL.find(c => c.kind === 'turret' && c.type === t);
       if (entry) pool.push({ kind: 'unlock', type: t, title: entry.title, icon: entry.icon, sub: entry.sub });
@@ -4168,7 +4402,10 @@ function offerCards() {
     el.dataset.cost = ''; el.dataset.amount = ''; el.dataset.weapon = '';
     el.innerHTML = ''; el.style.display = 'none';
   });
-  for (let k = 0; k < els.length && pool.length; k++) {
+  // v202: the normal deal is 4 cards; a 5th slot (els[4], the bonus
+  // slot) is reserved for the Scout bonus Teleport below and is never
+  // a normal deal slot.
+  for (let k = 0; k < Math.min(els.length, 4) && pool.length; k++) {
     let total = 0;
     for (const p of pool) total += weight(p);
     let r = Math.random() * total, pi = 0;
@@ -4279,6 +4516,25 @@ function offerCards() {
     el.innerHTML = priceHtml + icon + newTag + '<b>' + title + '</b><span>' + sub + '</span>' + evoLine;
     // Staggered deal: cards appear one by one (prevents accidental taps).
     setTimeout(() => el.classList.add('dealt'), 150 + k * 120);
+  }
+  // v202 (Scout): the bonus Teleport — a 5th card in the bonus slot
+  // (els[4]), IN ADDITION to the 4 normal picks, when the commander
+  // is Scout, the new level is a multiple of 3, the bonus hasn't
+  // been taken yet this level-up, and there's a Cannon to move.
+  // It carries dataset.bonus = 'scout' so the pick handler can mark
+  // it taken (it isn't re-offered in the re-deal). If it isn't due,
+  // the slot stays hidden (the reset above already hid it).
+  const bonusEl = els.length > 4 ? els[4] : null;
+  if (bonusEl && S.commander === 'scout' && S.level % 3 === 0 && !S.scoutBonusTaken && hasTeleportTarget()) {
+    const tp = CARD_POOL.find(c => c.kind === 'teleport');
+    bonusEl.style.display = '';
+    bonusEl.dataset.kind = 'teleport';
+    bonusEl.dataset.bonus = 'scout';
+    bonusEl.dataset.type = ''; bonusEl.dataset.mult = ''; bonusEl.dataset.add = '';
+    bonusEl.dataset.passive = ''; bonusEl.dataset.amount = ''; bonusEl.dataset.stat = '';
+    bonusEl.dataset.cost = ''; bonusEl.dataset.weapon = '';
+    bonusEl.innerHTML = `<div class="icon">${(tp && tp.icon) || ICONS.teleport}</div><span class="bonustag">Scout Bonus</span><b>Teleport</b><span>Move a Cannon to a new spot.</span>`;
+    setTimeout(() => bonusEl.classList.add('dealt'), 150 + 4 * 120);
   }
 }
 // Shop row: survival shows the FULL shop (all items, cost order, no
@@ -4426,6 +4682,9 @@ document.querySelectorAll('#levelup .card').forEach(card => {
       // hides, and the game stays paused while you pick a weapon, then
       // a destination. Completion (completeTeleport) re-offers cards
       // if picks remain, else unpauses.
+      // v202: a Scout bonus Teleport is marked taken so it isn't
+      // re-offered in the re-deal of the same level-up.
+      if (card.dataset.bonus === 'scout') S.scoutBonusTaken = true;
       S.pending--;
       overlay.classList.add('hidden');
       updateHud();
@@ -5075,6 +5334,13 @@ function updateSparkles(dt) {
 function update(dt) {
   updateAutoCam(dt); // v153 try-it: slow north-only follow, toggleable, never south/zoom/death
   updateUnlockFlies(dt); // v174: card -> bar icon flight after an unlock pick
+  // v202: achievements, checked once a second (the survive-time and
+  // per-run totals only change on a clock; rescue/laser events call
+  // checkAchievements directly for an immediate unlock).
+  if (S && !S.runOver) {
+    S.achT = (S.achT || 0) + dt;
+    if (S.achT >= 1) { S.achT = 0; checkAchievements(); }
+  }
   const arcRad = (cfg.arc * Math.PI) / 180;
   const turnRate = (cfg.turnRate * Math.PI) / 180; // rad/s
   // XP bar animates toward the true XP (full bar in ~0.6s); the level-up
@@ -5092,6 +5358,13 @@ function update(dt) {
     // XP stays full while the cards show (so you see what caused the
     // level-up); it resets to zero only when you pick a card.
     S.pending++;
+    // v202 (Scout): every 3rd level grants a BONUS pick — the
+    // Teleport is an extra reward, not a replacement for a stat pick.
+    // The bonus Teleport itself is dealt as a 5th card in offerCards.
+    if (S.commander === 'scout' && S.level % 3 === 0) {
+      S.pending++;
+      S.scoutBonusTaken = false;
+    }
     S.paused = true;
     offerCards(); // v154: shop removed from level-up, placements live in the place bar
     overlay.classList.remove('hidden');
@@ -5460,17 +5733,17 @@ function update(dt) {
       if (k >= 1) {
         c.dead = true;
         if (c.kind === 'gold') {
-          S.gold++; // run gold only — banked to the meta total when the run ends
+          S.gold++; S.runGold = (S.runGold || 0) + 1; // run gold only — banked to the meta total when the run ends
           S.chipPulse = 1; // the "blurp": chip pops
           S.floaters.push({ x: CHIP_CX + 30, y: CHIP_CY, t: 0 });
         } else if (c.kind === 'civ') {
           // v165: the rescue counts on ARRIVAL at the counter, not
           // when the civilian leaves the map.
-          if (S.rescue) S.rescue.rescued++;
+          if (S.rescue) { S.rescue.rescued++; if (meta.stats) { meta.stats.rescuedTotal++; saveMeta(); } checkAchievements(); }
           S.civChipPulse = 1;
           S.floaters.push({ x: CIV_CHIP_CX + 30, y: CIV_CHIP_CY, t: 0 });
         } else {
-          S.xp++;
+          S.xp++; S.runXp = (S.runXp || 0) + 1;
           checkLevel();
         }
       }
@@ -5487,11 +5760,11 @@ function update(dt) {
       if (k >= 1) {
         c.dead = true;
         if (c.kind === 'gold') {
-          S.gold++; // run gold only — banked to the meta total when the run ends
+          S.gold++; S.runGold = (S.runGold || 0) + 1; // run gold only — banked to the meta total when the run ends
           S.chipPulse = 1;
           spawnBurst(px, py, '#f5b301');
         } else {
-          S.xp++;
+          S.xp++; S.runXp = (S.runXp || 0) + 1;
           spawnBurst(px, py, '#7dd3fc');
           checkLevel();
         }
@@ -5506,12 +5779,12 @@ function update(dt) {
       if (k >= 1) {
         c.dead = true;
         if (c.kind === 'gold') {
-          S.gold++; // run gold only — banked to the meta total when the run ends
+          S.gold++; S.runGold = (S.runGold || 0) + 1; // run gold only — banked to the meta total when the run ends
           S.chipPulse = 1;
           S.floaters.push({ x: CHIP_CX + 30, y: CHIP_CY, t: 0 });
           spawnBurst(c.gx, c.gy, '#f5b301');
         } else {
-          S.xp++;
+          S.xp++; S.runXp = (S.runXp || 0) + 1;
           spawnBurst(c.gx, c.gy, '#7dd3fc');
           checkLevel();
         }
@@ -6765,6 +7038,62 @@ function renderStartScreen() {
   renderTeamToggle();
   renderShopToggles();
   renderPerma();
+  renderMissions();
+}
+// v202: Missions — the achievement goals on the start screen. The
+// condition is always shown; the reward is hidden as ??? until
+// unlocked, then it names the unit or commander.
+function renderMissions() {
+  let list;
+  try { list = document.getElementById('missions-list'); } catch (e) { list = null; }
+  if (!list) return;
+  const html = ACHIEVEMENTS.map(a => {
+    const done = achievementUnlocked(a);
+    const reward = done
+      ? (a.reward.kind === 'unit'
+          ? (CARD_POOL.find(c => c.kind === 'turret' && c.type === a.reward.id)?.title || a.reward.id)
+          : (COMMANDERS.find(c => c.id === a.reward.id)?.name || a.reward.id))
+      : '???';
+    return `<div class="mission${done ? ' done' : ''}"><span>${a.text}</span><span class="mreward">${reward}</span></div>`;
+  }).join('');
+  list.innerHTML = html;
+}
+// v202: character select — one card per commander (portrait, name,
+// ability, starting items). Locked ones are greyed with a lock and
+// can't be picked. Rebuilt every time the screen shows, so unlocks
+// land immediately.
+function renderCharSelect() {
+  let list;
+  try { list = document.getElementById('charlist'); } catch (e) { list = null; }
+  if (!list) return;
+  list.innerHTML = '';
+  for (const c of COMMANDERS) {
+    const locked = !isCommanderUnlocked(c.id);
+    const card = document.createElement('div');
+    card.className = 'charcard' + (locked ? ' locked' : '');
+    // classList too (the harness stub keeps className and classList
+    // separate; the real DOM syncs them, so this is harmless there).
+    if (card.classList) { card.classList.add('charcard'); if (locked) card.classList.add('locked'); }
+    card.dataset.commander = c.id;
+    card.innerHTML = `<div class="portrait">${c.portrait}</div><b>${c.name}</b>` +
+      `<div class="ability">${c.ability}</div><div class="start">${c.start}</div>` +
+      (locked ? '<div class="lock">Locked</div>' : '');
+    if (!locked) {
+      card.addEventListener('click', () => startRunWithCommander(c.id));
+    }
+    list.appendChild(card);
+  }
+}
+function showCharSelect() {
+  try { document.getElementById('startscreen').classList.add('hidden'); } catch (e) {}
+  renderCharSelect();
+  try { document.getElementById('charscreen').classList.remove('hidden'); } catch (e) {}
+}
+function startRunWithCommander(id) {
+  selectedCommander = id;
+  try { document.getElementById('charscreen').classList.add('hidden'); } catch (e) {}
+  newGame();
+  if (SURVIVAL) showCommander();
 }
 function renderShopToggles() {
   // Start-screen shop toggles: click to include/exclude a placement
@@ -6924,11 +7253,17 @@ document.getElementById('commander-btn').addEventListener('click', () => {
   S.paused = false;
 });
 document.getElementById('startbtn').addEventListener('click', () => {
-  // Every run starts with Cannon; the shop only gates mid-run drafts.
-  document.getElementById('startscreen').classList.add('hidden');
-  newGame();
-  if (SURVIVAL) showCommander();
+  // v202: Play goes to character select (Missions -> commander ->
+  // game). The run starts when a commander card is picked.
+  showCharSelect();
 });
+try {
+  document.getElementById('charback').addEventListener('click', () => {
+    document.getElementById('charscreen').classList.add('hidden');
+    document.getElementById('startscreen').classList.remove('hidden');
+    renderStartScreen();
+  });
+} catch (e) { /* no charscreen (harness stub guards below) */ }
 
 // Random map size (v127, v128 range, v143 minimum: Sam: 100–200 was
 // really big, then 50–100, then max 150 after a 140 map felt about
