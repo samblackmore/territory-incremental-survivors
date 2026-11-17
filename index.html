@@ -513,11 +513,34 @@
     position: absolute; top: 8px; left: 8px;
     color: #2dd4bf; font-size: 11px; font-weight: bold; letter-spacing: .03em;
   }
-  /* v202: missions list (start screen) and character select. */
-  #missions-list { text-align: left; margin: 4px auto 0; max-width: 480px; }
-  .mission { display: flex; justify-content: space-between; gap: 12px; padding: 5px 10px; border-bottom: 1px solid #1e2536; font-size: 13px; }
-  .mission .mreward { color: #ffd75e; font-weight: bold; white-space: nowrap; }
-  .mission.done .mreward { color: #4ade80; }
+  /* v204: armory list (start screen) and character select. */
+  #armory-list { text-align: left; margin: 4px auto 0; max-width: 480px; }
+  .armory { display: flex; align-items: center; gap: 10px; padding: 5px 10px; border-bottom: 1px solid #1e2536; font-size: 13px; }
+  .armory .aicon { flex: 0 0 24px; text-align: center; color: #ffd75e; font-weight: bold; }
+  .armory .aicon svg { width: 22px; height: 22px; vertical-align: middle; }
+  .armory .aname { flex: 0 0 86px; font-weight: bold; white-space: nowrap; }
+  .armory .adesc { flex: 1; opacity: .85; }
+  .armory.done .aname { color: #4ade80; }
+  /* v204: the start-screen sections retired by the meta progression
+     — perma stat boosts (characters own that now), the unit toggles
+     (units are unlocked by the Armory now), and the team color
+     selector (the player is always blue). Hidden, not deleted: the
+     code and saved data stay, and the harness still finds the ids. */
+  #teamrow, #itemtoggles, #shoplabel-start, #permarow, #perma-reset, #permalabel { display: none; }
+  /* v204: commander bonus screen — same overlay treatment as the
+     level-up screen (dark backdrop, centred cards). */
+  #cmdbonus {
+    position: fixed; inset: 0;
+    background: rgba(5, 8, 15, 0.78);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 10;
+    overflow-y: auto;
+  }
+  #cmdbonus.hidden { display: none; }
+  #cmdbonus .cards { position: relative; z-index: 1; margin: auto; }
+  #cmdbonus-portrait { margin-bottom: 8px; }
+  #cmdbonus-portrait svg { width: 64px; height: 64px; }
+  #cmdbonus-sub { color: var(--text); opacity: .85; font-size: 15px; margin: 0 0 18px; }
   #charscreen {
     position: fixed; inset: 0;
     background: rgba(5, 8, 15, 0.92);
@@ -731,14 +754,15 @@
 <div id="startscreen" class="hidden">
   <div class="startpanel">
     <h2>Territory</h2>
-    <!-- v202: Missions — the achievement goals, shown up front. The
-         reward is hidden as ??? until unlocked. -->
-    <div class="startlabel">Missions</div>
-    <div id="missions-list"></div>
+    <!-- v204: Armory — the unlock collection (was "Missions"). Each
+         row names the unit/commander; locked rows show the unlock
+         condition and ???, unlocked rows show the description and icon. -->
+    <div class="startlabel">Armory</div>
+    <div id="armory-list"></div>
     <!-- Shop grid lives here when dormant renderShop() is restored. -->
     <div id="weaponlist"></div>
     <div id="teamrow"><span>Team color</span><button id="team-red">Red</button><button id="team-blue">Blue</button></div>
-    <div class="startlabel">Shop items for this run</div>
+    <div class="startlabel" id="shoplabel-start">Shop items for this run</div>
     <div id="itemtoggles">
       <button id="toggle-cannon" class="itemtoggle">Cannon</button>
       <button id="toggle-mole" class="itemtoggle">Digger</button>
@@ -749,7 +773,7 @@
       <button id="toggle-laser" class="itemtoggle">Laser</button>
       <button id="toggle-waypoint" class="itemtoggle">Waypoint</button>
     </div>
-    <div class="startlabel">Perma upgrades</div>
+    <div class="startlabel" id="permalabel">Perma upgrades</div>
     <div id="permarow">
       <button id="perma-dmg" class="permabtn"></button>
       <button id="perma-rate" class="permabtn"></button>
@@ -779,7 +803,6 @@
       <button class="card xpcard"></button>
       <button class="card xpcard"></button>
       <button class="card xpcard"></button>
-      <button class="card xpcard" id="xpcard-bonus"></button>
     </div>
     <div class="shoplabel" id="shoplabel">Shop</div>
     <div class="cardrow" id="shoprow">
@@ -791,6 +814,21 @@
       <button class="card shopcard"></button>
       <button class="card shopcard"></button>
       <button class="card shopcard"></button>
+    </div>
+  </div>
+</div>
+
+<!-- v204: commander bonus — dedicated screen after the level-up, for
+     the Scout's every-3-levels bonus Teleport. Shows the commander
+     avatar + bonus text, and exactly two cards: Teleport or Skip. -->
+<div id="cmdbonus" class="hidden">
+  <div class="cards">
+    <div id="cmdbonus-portrait"></div>
+    <h2>Commander Bonus</h2>
+    <div id="cmdbonus-sub"></div>
+    <div class="cardrow">
+      <button class="card" id="cmdbonus-teleport"></button>
+      <button class="card" id="cmdbonus-skip"></button>
     </div>
   </div>
 </div>
@@ -822,6 +860,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=203"></script>
+<script src="game.js?v=204"></script>
 </body>
 </html>

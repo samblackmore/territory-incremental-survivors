@@ -285,6 +285,10 @@ function unitCap(type) {
 }
 function unitCount(type) {
   if (type === 'wall') return liveWallBlocks().length;
+  // v204: waypoints are markers in S.waypoints, not turrets — the
+  // turret loop below always counted 0 for them, so the cap never
+  // blocked a second waypoint and the place bar always showed 0/1.
+  if (type === 'waypoint') return (S.waypoints || []).length;
   let n = 0;
   for (const t of S.turrets) {
     if (!t.dead && t.color === BLUE && t.type === type) n++;
@@ -938,15 +942,15 @@ let RED_RGB = [59, 130, 246]; // enemy render color (set by applyTeamColors; def
 // the player toggles. A global preference (applies to both branches).
 const TEAM_RED_HEX = '#ef4444', TEAM_BLUE_HEX = '#3b82f6';
 const TEAM_RED_RGB = [239, 68, 68], TEAM_BLUE_RGB = [59, 130, 246];
-let PLAYER_RED = true; // set by applyTeamColors at boot (before first run)
+let PLAYER_RED = false; // v204: no team selector — the player is always blue (set by applyTeamColors at boot)
 function applyTeamColors() {
-  let stored = null;
-  try { stored = localStorage.getItem('tis_team'); } catch (e) { /* ignore */ }
-  PLAYER_RED = stored === 'red' ? true : stored === 'blue' ? false : SURVIVAL;
-  const playerHex = PLAYER_RED ? TEAM_RED_HEX : TEAM_BLUE_HEX;
-  const enemyHex = PLAYER_RED ? TEAM_BLUE_HEX : TEAM_RED_HEX;
-  BLUE_RGB = (PLAYER_RED ? TEAM_RED_RGB : TEAM_BLUE_RGB).slice();
-  RED_RGB = (PLAYER_RED ? TEAM_BLUE_RGB : TEAM_RED_RGB).slice();
+  // v204: the team selector is gone; the player is always blue.
+  // The stored preference ('tis_team') is no longer honoured.
+  PLAYER_RED = false;
+  const playerHex = TEAM_BLUE_HEX;
+  const enemyHex = TEAM_RED_HEX;
+  BLUE_RGB = TEAM_BLUE_RGB.slice();
+  RED_RGB = TEAM_RED_RGB.slice();
   CELL_COLORS[BLUE] = playerHex; CELL_COLORS[RED] = enemyHex;
   ICONS = buildIcons(playerHex);
   CARD_POOL = buildCardPool();
@@ -1042,7 +1046,7 @@ function bottomOceanExtraRows(seed, cols) {
 // tint and pop flash — those are transient, not region identity.
 // Inside notches (concave corners) stay square for now; only the
 // outer (convex) corners round. Radius is the knob (CELL_PX = 16).
-const CELL_CORNER_R = 3;
+const CELL_CORNER_R = 5; // v204: 3 -> 5 (Sam: the curves look good, increase the radius)
 function cellRegion(x, y) {
   if (!S || !S.cells || !cfg.cols || x < 0 || y < 0 || x >= cfg.cols || y >= cfg.rows) return -1;
   const i = y * cfg.cols + x;
@@ -1432,8 +1436,8 @@ function saveMeta() {
 const COMMANDERS = [
   { id: 'scout', name: 'Scout', unlocked: true,
     portrait: '<svg viewBox="0 0 48 48" width="48" height="48"><circle cx="24" cy="26" r="16" fill="#c9a86a"/><path d="M8 22 Q24 4 40 22 L40 16 Q24 0 8 16 Z" fill="#4d7c0f"/><circle cx="18" cy="26" r="2.2" fill="#1a2138"/><circle cx="30" cy="26" r="2.2" fill="#1a2138"/><path d="M19 33 Q24 36 29 33" stroke="#1a2138" stroke-width="2" fill="none" stroke-linecap="round"/></svg>',
-    ability: 'Every 3 levels, a bonus Teleport card joins the level-up deal — free, on top of the normal picks.',
-    start: 'Starts with the Cannon.' },
+    ability: 'Every 3 levels, a commander bonus offers a free Teleport — on its own screen, after the level-up.',
+    start: 'Starts with a Waypoint placed, Waypoint unlocked.' },
   { id: 'bulwark', name: 'Bulwark', unlocked: false,
     portrait: '<svg viewBox="0 0 48 48" width="48" height="48"><circle cx="24" cy="26" r="16" fill="#9ca3af"/><path d="M8 24 Q8 8 24 8 Q40 8 40 24 L36 24 Q36 12 24 12 Q12 12 12 24 Z" fill="#4b5563"/><rect x="14" y="22" width="20" height="3" fill="#4b5563"/><circle cx="18" cy="28" r="2.2" fill="#1a2138"/><circle cx="30" cy="28" r="2.2" fill="#1a2138"/><path d="M19 35 L29 35" stroke="#1a2138" stroke-width="2" stroke-linecap="round"/></svg>',
     ability: 'Built to hold the line.',
@@ -2105,12 +2109,14 @@ function startRescueCelebration(si) {
   const site = S.rescue.sites[si];
   site.celebrated = true;
   const biome = siteBiome(si);
-  const inCave = (S.rescue.civilians || []).filter(c => c.site === si).length;
-  const inBiome = (S.rescue.byBiome && S.rescue.byBiome[biome] !== undefined)
-    ? S.rescue.byBiome[biome]
-    : (S.rescue.civilians || []).filter(c => siteBiome(c.site) === biome).length;
+  // v204: the discovery count is CAMPS (rescue sites), not individual
+  // civilians — "1 / 3" means 1 of 3 camps in the biome, even if a
+  // camp holds 5 civilians. site.celebrated is already true here
+  // (set above), so this camp counts in the found total.
+  const campsTotal = (S.rescue.sites || []).filter((s, i) => (s.biome || siteBiome(i)) === biome).length;
+  const campsFound = (S.rescue.sites || []).filter((s, i) => (s.biome || siteBiome(i)) === biome && s.celebrated).length;
   if (rescueTitle) rescueTitle.textContent =
-    `${inCave} / ${inBiome} civilians discovered in ${BIOME_NAMES[biome] || biome} biome`;
+    `${campsFound} / ${campsTotal} civilian camps discovered in ${BIOME_NAMES[biome] || biome} biome`;
   S.paused = true;
   S.rescueCeleb = {
     si, phase: 'lerp', t: 0, dur: 0.8,
@@ -2381,6 +2387,24 @@ function findEmptyNear(x, y, r) {
   }
   return null;
 }
+// v204: nearest EMPTY cell to the SIDE of (x, y) — east first
+// (dx 2..r, |dy| <= 1), then west. For the Scout's starting
+// Waypoint, so the Cannon aims at side civilians instead of
+// straight up. Falls back to findEmptyNear (any direction) if no
+// side cell is free.
+function findEmptySideNear(x, y, r) {
+  for (const dir of [1, -1]) {
+    for (let dx = 2; dx <= r; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const nx = x + dir * dx, ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= cfg.cols || ny >= cfg.rows) continue;
+        const ni = ny * cfg.cols + nx;
+        if (S.cells[ni] === EMPTY && !turretAt(nx, ny) && !civilianAt(nx, ny)) return { x: nx, y: ny };
+      }
+    }
+  }
+  return null;
+}
 function findEmptyBlockNear(x, y, n, r, allowRock) {
   // Finds an n×n block of EMPTY cells near (x, y), nearest ring first.
   // allowRock: also accept WHITE rock (the wall replaces it) — used
@@ -2459,9 +2483,25 @@ function applyCommanderStart(pc) {
       applyStat(S.weapons.laser, 'laser', 'shield');
       S.turrets.push(mkTurret(spot.x, spot.y, BLUE, 'laser'));
     }
+  } else if (cmd === 'scout') {
+    // v204: Scout starts with a Waypoint — without one you can only
+    // ever go up, and Waypoint is how you reach side civilians.
+    // Waypoint unlocked from the start, one placed to the SIDE of
+    // the starter (east first, then west) so the Cannon aims at side
+    // civilians. The marker counts toward the Waypoint cap of 1
+    // (unitCount counts S.waypoints), so no second one until a
+    // Capacity pick. Trade-off: the Cannon aims sideways at the very
+    // start instead of up; the player can remove the Waypoint (tap
+    // it) to aim up again. The weapons entry exists so the Waypoint
+    // Capacity card can appear (waypoints are markers, not turrets,
+    // so placement never creates one — see placeTurretAt).
+    if (S.unlocked) S.unlocked.waypoint = true;
+    if (!S.weapons.waypoint) S.weapons.waypoint = { stats: initWeaponStats('waypoint'), rateMult: 1, dmgBonus: 0, critChance: 0, proj: 0, evo: false, evoPaint: false };
+    if (!S.waypoints) S.waypoints = [];
+    const spot = findEmptySideNear(pc.x, pc.y, 6) || findEmptyNear(pc.x, pc.y, 6);
+    if (spot) S.waypoints.push({ x: spot.x, y: spot.y });
   }
-  // Scout: no starting item — the ability (bonus Teleport every 3
-  // levels) is the character.
+  // The ability (bonus Teleport every 3 levels) is the rest of the character.
 }
 
 function newGame() {
@@ -4567,25 +4607,41 @@ function offerCards() {
     // Staggered deal: cards appear one by one (prevents accidental taps).
     setTimeout(() => el.classList.add('dealt'), 150 + k * 120);
   }
-  // v202 (Scout): the bonus Teleport — a 5th card in the bonus slot
-  // (els[4]), IN ADDITION to the 4 normal picks, when the commander
-  // is Scout, the new level is a multiple of 3, the bonus hasn't
-  // been taken yet this level-up, and there's a Cannon to move.
-  // It carries dataset.bonus = 'scout' so the pick handler can mark
-  // it taken (it isn't re-offered in the re-deal). If it isn't due,
-  // the slot stays hidden (the reset above already hid it).
-  const bonusEl = els.length > 4 ? els[4] : null;
-  if (bonusEl && S.commander === 'scout' && S.level % 3 === 0 && !S.scoutBonusTaken && hasTeleportTarget()) {
-    const tp = CARD_POOL.find(c => c.kind === 'teleport');
-    bonusEl.style.display = '';
-    bonusEl.dataset.kind = 'teleport';
-    bonusEl.dataset.bonus = 'scout';
-    bonusEl.dataset.type = ''; bonusEl.dataset.mult = ''; bonusEl.dataset.add = '';
-    bonusEl.dataset.passive = ''; bonusEl.dataset.amount = ''; bonusEl.dataset.stat = '';
-    bonusEl.dataset.cost = ''; bonusEl.dataset.weapon = '';
-    bonusEl.innerHTML = `<div class="icon">${(tp && tp.icon) || ICONS.teleport}</div><span class="bonustag">Scout Bonus</span><b>Teleport</b><span>Move a Cannon to a new spot.</span>`;
-    setTimeout(() => bonusEl.classList.add('dealt'), 150 + 4 * 120);
-  }
+  // v204: the Scout bonus Teleport is NO LONGER a 5th card in the
+  // deal — it read as if taking it was the only upgrade. It's a
+  // dedicated screen after the level-up now (see
+  // maybeShowCommanderBonus, fired when the XP pick finishes).
+  // The 5th slot (#xpcard-bonus) is gone; the deal is 4 cards only.
+}
+// v204: commander bonus — a dedicated screen AFTER the level-up,
+// for the Scout's every-3-levels bonus Teleport. The 5th card in
+// the deal read as if taking it was the only upgrade, so the bonus
+// is now its own screen: the commander avatar, the bonus text, and
+// exactly two cards — Teleport (same as the XP-screen Teleport) or
+// Skip. maybeShowCommanderBonus returns true if the screen was
+// shown (the game stays paused); false means resume normally.
+// Fires once per qualifying level-up: scoutBonusTaken is reset at
+// the level-up and set here when the screen shows.
+function maybeShowCommanderBonus() {
+  if (!S || S.commander !== 'scout' || S.level % 3 !== 0 || S.scoutBonusTaken) return false;
+  if (!hasTeleportTarget()) return false;
+  S.scoutBonusTaken = true;
+  return showCommanderBonus();
+}
+function showCommanderBonus() {
+  const cmd = (COMMANDERS || []).find(c => c.id === (S.commander || 'scout')) || COMMANDERS[0];
+  try {
+    const p = document.getElementById('cmdbonus-portrait');
+    if (p) p.innerHTML = cmd ? cmd.portrait : '';
+    const sub = document.getElementById('cmdbonus-sub');
+    if (sub) sub.textContent = (cmd ? cmd.name : 'Scout') + ' — gets an extra Teleport every 3 levels.';
+    const tp = document.getElementById('cmdbonus-teleport');
+    if (tp) tp.innerHTML = `<div class="icon">${ICONS.teleport}</div><b>Teleport</b><span>Move a Cannon to a new spot.</span>`;
+    const sk = document.getElementById('cmdbonus-skip');
+    if (sk) sk.innerHTML = `<b>Skip</b><span>Skip the bonus and keep playing.</span>`;
+    document.getElementById('cmdbonus').classList.remove('hidden');
+    return true;
+  } catch (e) { return false; }
 }
 // Shop row: survival shows the FULL shop (all items, cost order, no
 // draw) in a 3x3 grid; main keeps the original 2-card affordable-first
@@ -4717,9 +4773,10 @@ document.querySelectorAll('#levelup .card').forEach(card => {
       updateHud(); updatePlaceBar();
       if (S.pending <= 0) {
         S.pending = 0;
-        S.paused = false;
         overlay.classList.add('hidden');
         startUnlockFly(type, from); // only when the bar is visible
+        // v204: a due commander bonus shows instead of resuming.
+        if (!maybeShowCommanderBonus()) S.paused = false;
       } else {
         offerCards();
         overlay.classList.remove('hidden');
@@ -4731,10 +4788,7 @@ document.querySelectorAll('#levelup .card').forEach(card => {
       // pending-- here replaces the generic one at the end, the overlay
       // hides, and the game stays paused while you pick a weapon, then
       // a destination. Completion (completeTeleport) re-offers cards
-      // if picks remain, else unpauses.
-      // v202: a Scout bonus Teleport is marked taken so it isn't
-      // re-offered in the re-deal of the same level-up.
-      if (card.dataset.bonus === 'scout') S.scoutBonusTaken = true;
+      // if picks remain, else unpauses (or shows the commander bonus).
       S.pending--;
       overlay.classList.add('hidden');
       updateHud();
@@ -4802,8 +4856,9 @@ document.querySelectorAll('#levelup .card').forEach(card => {
     S.pending--;
     if (S.pending <= 0) {
       S.pending = 0;
-      S.paused = false;
       overlay.classList.add('hidden');
+      // v204: a due commander bonus shows instead of resuming.
+      if (!maybeShowCommanderBonus()) S.paused = false;
     }
     updateHud();
   });
@@ -5084,6 +5139,13 @@ function placeTurretAt(sx, sy) {
       return;
     }
     S.waypoints.push({ x: cx, y: cy });
+    // v204: waypoints are markers, not turrets, so the generic path
+    // below never creates a weapons entry — and the Capacity card
+    // gate needs one. Creating it here makes the Waypoint Capacity
+    // card obtainable (the cap now counts markers, so the card must
+    // be reachable). Cost stays flat 5: waypoint has no stat track,
+    // so the level sum is 0.
+    if (!S.weapons.waypoint) S.weapons.waypoint = { stats: initWeaponStats('waypoint'), rateMult: 1, dmgBonus: 0, critChance: 0, proj: 0, evo: false, evoPaint: false };
     spawnBurst(cx + 0.5, cy + 0.5, '#ffd75e'); // gold, matching the marker
     payForPlacement(type, S.placing);
     S.placing = null;
@@ -5279,7 +5341,8 @@ function completeTeleport(t, cx, cy) {
     if (S.pending > 0) {
       offerCards(); // v154: shop removed from level-up, placements live in the place bar // more picks: fresh XP + shop rows, stays paused
       overlay.classList.remove('hidden');
-    } else {
+    } else if (!maybeShowCommanderBonus()) {
+      // v204: a due commander bonus shows instead of resuming.
       S.paused = false;
     }
   }
@@ -5408,11 +5471,13 @@ function update(dt) {
     // XP stays full while the cards show (so you see what caused the
     // level-up); it resets to zero only when you pick a card.
     S.pending++;
-    // v202 (Scout): every 3rd level grants a BONUS pick — the
-    // Teleport is an extra reward, not a replacement for a stat pick.
-    // The bonus Teleport itself is dealt as a 5th card in offerCards.
+    // v204 (Scout): every 3rd level grants a BONUS Teleport — no
+    // longer a 5th card in the deal (that read as the only pick) and
+    // no longer a second pending pick. It's a dedicated screen after
+    // the level-up (see maybeShowCommanderBonus); the flag just
+    // resets here so the screen can fire once when the XP pick
+    // finishes.
     if (S.commander === 'scout' && S.level % 3 === 0) {
-      S.pending++;
       S.scoutBonusTaken = false;
     }
     S.paused = true;
@@ -7088,23 +7153,36 @@ function renderStartScreen() {
   renderTeamToggle();
   renderShopToggles();
   renderPerma();
-  renderMissions();
+  renderArmory();
 }
-// v202: Missions — the achievement goals on the start screen. The
-// condition is always shown; the reward is hidden as ??? until
-// unlocked, then it names the unit or commander.
-function renderMissions() {
+// v204: Armory — the unlock collection on the start screen (was
+// "Missions"). One row per unlockable (7 units + 4 commanders, same
+// order as the achievements): the NAME, a DESCRIPTION, and an ICON.
+// Locked: the description is the unlock condition and the icon is
+// ???. Unlocked: the description is the unit/commander description
+// and the icon is the unit icon or commander portrait.
+function renderArmory() {
   let list;
-  try { list = document.getElementById('missions-list'); } catch (e) { list = null; }
+  try { list = document.getElementById('armory-list'); } catch (e) { list = null; }
   if (!list) return;
   const html = ACHIEVEMENTS.map(a => {
     const done = achievementUnlocked(a);
-    const reward = done
-      ? (a.reward.kind === 'unit'
-          ? (CARD_POOL.find(c => c.kind === 'turret' && c.type === a.reward.id)?.title || a.reward.id)
-          : (COMMANDERS.find(c => c.id === a.reward.id)?.name || a.reward.id))
-      : '???';
-    return `<div class="mission${done ? ' done' : ''}"><span>${a.text}</span><span class="mreward">${reward}</span></div>`;
+    let name, desc, icon;
+    if (a.reward.kind === 'unit') {
+      const card = CARD_POOL.find(c => c.kind === 'turret' && c.type === a.reward.id);
+      name = (card && card.title) || a.reward.id;
+      desc = done ? ((card && card.sub) || '') : a.text;
+      icon = done ? ((card && card.icon) || '') : '???';
+    } else {
+      const cmd = COMMANDERS.find(c => c.id === a.reward.id);
+      name = (cmd && cmd.name) || a.reward.id;
+      // Commanders: ability + starting items, so the row says what
+      // the commander actually does (the ability alone is a tagline
+      // for Bulwark — "Built to hold the line.").
+      desc = done ? ((cmd ? cmd.ability + ' ' + cmd.start : '')) : a.text;
+      icon = done ? ((cmd && cmd.portrait) || '') : '???';
+    }
+    return `<div class="armory${done ? ' done' : ''}"><span class="aicon">${icon}</span><span class="aname">${name}</span><span class="adesc">${desc}</span></div>`;
   }).join('');
   list.innerHTML = html;
 }
@@ -7303,9 +7381,21 @@ document.getElementById('commander-btn').addEventListener('click', () => {
   S.paused = false;
 });
 document.getElementById('startbtn').addEventListener('click', () => {
-  // v202: Play goes to character select (Missions -> commander ->
+  // v202: Play goes to character select (Armory -> commander ->
   // game). The run starts when a commander card is picked.
   showCharSelect();
+});
+// v204: commander bonus screen — Teleport enters teleport mode (same
+// as the XP-screen Teleport card; the game stays paused until the
+// move completes); Skip closes the screen and resumes the game.
+document.getElementById('cmdbonus-teleport').addEventListener('click', () => {
+  try { document.getElementById('cmdbonus').classList.add('hidden'); } catch (e) {}
+  enterTeleport();
+});
+document.getElementById('cmdbonus-skip').addEventListener('click', () => {
+  try { document.getElementById('cmdbonus').classList.add('hidden'); } catch (e) {}
+  S.paused = false;
+  updateHud();
 });
 try {
   document.getElementById('charback').addEventListener('click', () => {
