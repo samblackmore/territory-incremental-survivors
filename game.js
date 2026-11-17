@@ -126,9 +126,11 @@ function pullCoinsTo(t, radius, count) {
 // separate track anymore (v114): nobody picked it, so it rides on
 // Damage instead (+5% crit per Damage level, max 25% at Damage 5).
 // Steps are uniform by design, so a card always tells you exactly
-// what you get. Rate step is +25% (v114, up from +15%): +15% sat inside
-// the ±20% fire jitter, so a Rate pick felt invisible; +25% restores
-// the old 8-level final rate (1.25^5 ≈ 3.05x ≈ 1.15^8 ≈ 3.06x) in 5 picks.
+// what you get. Rate is the exception (v209, Sam: +25% steps were too
+// much per pick): Rate is cap 8 at +15% per level, so the same final
+// rate takes 8 smaller picks (1.15^8 ≈ 3.06x ≈ 1.25^5 ≈ 3.05x).
+// v114 kept +25% because +15% sat inside the ±20% fire jitter and a
+// Rate pick felt invisible — v209 trades that back for smaller steps.
 const STAT_DEFS = {
   cannon: [
     { key: 'dmg', name: 'Damage', cap: 5, effect: '+1 damage, +5% crit' },
@@ -141,7 +143,7 @@ const STAT_DEFS = {
     // cards (see the CARD_POOL filter); on main it still means the
     // shop-only gold card (v75, unchanged).
     { key: 'proj', name: 'Projectiles', cap: 5, effect: '+1 projectile (chance of firing)', shopOnly: true },
-    { key: 'rate', name: 'Fire rate', cap: 5, effect: '+25% fire rate' },
+    { key: 'rate', name: 'Fire rate', cap: 8, effect: '+15% fire rate' },
     // Penetration: how many cells one shot pierces (VS pass-through).
     // Base depth 1 (just the first cell); each level adds one more
     // MAX cell in the same shot's path — rock it damages, or flood it
@@ -205,7 +207,7 @@ function applyStat(w, weapon, st) {
   if (weapon === 'cannon') {
     if (st === 'dmg') { w.dmgBonus = n; w.critChance = 0.05 * n; } // v114: crit rides on Damage, no separate Crit track
     else if (st === 'proj') w.proj = n;
-    else if (st === 'rate') w.rateMult = Math.pow(1.25, n); // v114: +25% per level (was +15%)
+    else if (st === 'rate') w.rateMult = Math.pow(1.15, n); // v209: +15% per level, cap 8 (was +25%, cap 5)
     else if (st === 'pen') w.penDepth = 1 + n; // max penetration depth: base 1 + 1 per level (rock hits + flood paints, each step 50% chance v106)
   } else if (weapon === 'bloom') {
     if (st === 'field') {
@@ -236,13 +238,13 @@ function applyStat(w, weapon, st) {
 }
 // Per-stat Cannon EVOS (v114, replacing the old cannon-wide Evo).
 // The old Evo required ALL cannon stats maxed (37 picks, never reached
-// in a 30-minute round). Now each stat evolves on its own at cap 5:
-// Rate 5 → Sprayer (w.evo, 12x fire speed, as before), Damage 5 →
+// in a 30-minute round). Now each stat evolves on its own at cap:
+// Rate 8 → Sprayer (w.evo, 12x fire speed, as before), Damage 5 →
 // Painter (w.evoPaint, trail painting, see stepProjectile). Other
 // tracks (Projectiles, Penetration) cap at 5 with no Evo yet.
 function cannonRateMaxed() {
   const w = S.weapons.cannon;
-  return !!w && !w.evo && (w.stats.rate || 0) >= 5;
+  return !!w && !w.evo && (w.stats.rate || 0) >= 8;
 }
 function cannonDmgMaxed() {
   const w = S.weapons.cannon;
@@ -4823,7 +4825,7 @@ document.querySelectorAll('#levelup .card').forEach(card => {
         applyStat(w, card.dataset.weapon, st);
       }
     } else if (kind === 'evo') {
-      // Rate EVO: Rate 5 → becomes the Sprayer (12x fire speed).
+      // Rate EVO: Rate 8 → becomes the Sprayer (12x fire speed).
       if (S.weapons.cannon) S.weapons.cannon.evo = true;
     } else if (kind === 'evoPaint') {
       // Damage EVO: Damage 5 → becomes the Painter (trail painting on).
@@ -7290,7 +7292,7 @@ function renderPerma() {
   // levels (not item toggles) — the VS-style sell-all.
   const defs = [
     { id: 'perma-dmg', key: 'dmg', title: 'Damage', sub: '+1 base damage, +5% crit per level' },
-    { id: 'perma-rate', key: 'rate', title: 'Fire Rate', sub: '+25% base fire rate per level' },
+    { id: 'perma-rate', key: 'rate', title: 'Fire Rate', sub: '+15% base fire rate per level' },
   ];
   for (const d of defs) {
     const b = document.getElementById(d.id);
