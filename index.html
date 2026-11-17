@@ -396,6 +396,35 @@
     z-index: 20;
   }
   #startscreen.hidden { display: none; }
+  /* v206: reset-all-progress button — red trash can, top-left corner
+     of the start screen. */
+  #resetbtn {
+    position: absolute; top: 12px; left: 12px;
+    width: 40px; height: 40px; padding: 8px;
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(239, 68, 68, 0.5);
+    border-radius: 10px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #resetbtn:hover { background: rgba(239, 68, 68, 0.25); }
+  #resetbtn svg { display: block; }
+  /* v206: reset confirm overlay — wiping progress is irreversible,
+     so the trash can asks first. */
+  #resetconfirm {
+    position: fixed; inset: 0; z-index: 30;
+    background: rgba(5, 8, 15, 0.8);
+    display: flex; align-items: center; justify-content: center;
+  }
+  #resetconfirm.hidden { display: none; }
+  .resetconfirm-panel {
+    background: #131a2e; border: 1px solid #2a3352; border-radius: 14px;
+    padding: 24px; max-width: 340px; text-align: center; color: var(--text);
+  }
+  .resetconfirm-panel h3 { margin: 0 0 8px; color: #ef4444; }
+  .resetconfirm-panel p { margin: 0 0 18px; font-size: 14px; line-height: 1.5; color: #8b93a7; }
+  .resetconfirm-panel .row { display: flex; gap: 10px; justify-content: center; }
+  #resetconfirm-yes { background: #ef4444; color: #fff; border: none; border-radius: 8px; padding: 10px 18px; font-size: 15px; cursor: pointer; }
+  #resetconfirm-no { background: #232c47; color: var(--text); border: 1px solid #2a3352; border-radius: 8px; padding: 10px 18px; font-size: 15px; cursor: pointer; }
   .startpanel { text-align: center; max-width: 560px; padding: 20px; max-height: 92vh; overflow-y: auto; }
   .startpanel h2 {
     color: #ffd75e;
@@ -752,6 +781,10 @@
 <div id="wavebanner" class="banner hidden"></div>
 
 <div id="startscreen" class="hidden">
+  <!-- v206: reset all progress — red trash can, top-left corner. -->
+  <button id="resetbtn" title="Reset all progress" aria-label="Reset all progress">
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+  </button>
   <div class="startpanel">
     <h2>Territory</h2>
     <!-- v204: Armory — the unlock collection (was "Missions"). Each
@@ -781,6 +814,18 @@
     <button id="perma-reset">Reset all perma upgrades</button>
     <button id="startbtn">Start Run</button>
     <div id="buildver"></div>
+  </div>
+</div>
+<!-- v206: reset confirm — wiping progress is irreversible, so the trash
+     can asks first. -->
+<div id="resetconfirm" class="hidden">
+  <div class="resetconfirm-panel">
+    <h3>Reset all progress?</h3>
+    <p>This clears every unlocked unit and commander, and all rescue and shoot-down totals. It can't be undone.</p>
+    <div class="row">
+      <button id="resetconfirm-yes">Reset</button>
+      <button id="resetconfirm-no">Cancel</button>
+    </div>
   </div>
 </div>
 <!-- v202: character select — pick a commander, then the run starts.
@@ -860,6 +905,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=205"></script>
+<script src="game.js?v=206"></script>
 </body>
 </html>

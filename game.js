@@ -1427,6 +1427,22 @@ function loadMeta() {
 function saveMeta() {
   try { localStorage.setItem('tis_meta', JSON.stringify(meta)); } catch (e) { /* ignore */ }
 }
+// v206: reset all meta progression to a fresh player — every unit and
+// commander locked again except Cannon + Scout, stats and gold zeroed,
+// perma and toggles cleared. From the start-screen trash can, after
+// the confirm overlay. Re-renders the start screen (Armory shows
+// everything locked again).
+function resetMeta() {
+  meta.gold = 0;
+  meta.unlocks = { cannon: true, gather: false, mole: false, bloom: false };
+  meta.perma = { dmg: 0, rate: 0 };
+  meta.enabled = {};
+  meta.units = { cannon: true, lantern: false, wall: false, bloom: false, mole: false, gather: false, laser: false, waypoint: false };
+  meta.commanders = { scout: true, bulwark: false, cultivator: false, gunner: false, warden: false };
+  meta.stats = { rescuedTotal: 0, shotDownTotal: 0 };
+  saveMeta();
+  renderStartScreen();
+}
 // ---- v202: Commanders (meta progression) ------------------------
 // A commander is a stat boost + an ability, Vampire Survivors style.
 // Portraits are dumb-but-distinct shape-drawn faces (same flat SVG
@@ -2392,19 +2408,6 @@ function findEmptyNear(x, y, r) {
 // Waypoint, so the Cannon aims at side civilians instead of
 // straight up. Falls back to findEmptyNear (any direction) if no
 // side cell is free.
-function findEmptySideNear(x, y, r) {
-  for (const dir of [1, -1]) {
-    for (let dx = 2; dx <= r; dx++) {
-      for (let dy = -1; dy <= 1; dy++) {
-        const nx = x + dir * dx, ny = y + dy;
-        if (nx < 0 || ny < 0 || nx >= cfg.cols || ny >= cfg.rows) continue;
-        const ni = ny * cfg.cols + nx;
-        if (S.cells[ni] === EMPTY && !turretAt(nx, ny) && !civilianAt(nx, ny)) return { x: nx, y: ny };
-      }
-    }
-  }
-  return null;
-}
 function findEmptyBlockNear(x, y, n, r, allowRock) {
   // Finds an n×n block of EMPTY cells near (x, y), nearest ring first.
   // allowRock: also accept WHITE rock (the wall replaces it) — used
@@ -2484,22 +2487,12 @@ function applyCommanderStart(pc) {
       S.turrets.push(mkTurret(spot.x, spot.y, BLUE, 'laser'));
     }
   } else if (cmd === 'scout') {
-    // v204: Scout starts with a Waypoint — without one you can only
-    // ever go up, and Waypoint is how you reach side civilians.
-    // Waypoint unlocked from the start, one placed to the SIDE of
-    // the starter (east first, then west) so the Cannon aims at side
-    // civilians. The marker counts toward the Waypoint cap of 1
-    // (unitCount counts S.waypoints), so no second one until a
-    // Capacity pick. Trade-off: the Cannon aims sideways at the very
-    // start instead of up; the player can remove the Waypoint (tap
-    // it) to aim up again. The weapons entry exists so the Waypoint
-    // Capacity card can appear (waypoints are markers, not turrets,
-    // so placement never creates one — see placeTurretAt).
+    // v206: Scout starts with Waypoint UNLOCKED but none placed. The
+    // v204 auto-placed Waypoint made the Cannon aim sideways at the
+    // very start instead of up, which fought the opening. The unlock
+    // is what Scout needs to reach side civilians, not a pre-placed
+    // marker — the player buys one from the bar (5 gold) when wanted.
     if (S.unlocked) S.unlocked.waypoint = true;
-    if (!S.weapons.waypoint) S.weapons.waypoint = { stats: initWeaponStats('waypoint'), rateMult: 1, dmgBonus: 0, critChance: 0, proj: 0, evo: false, evoPaint: false };
-    if (!S.waypoints) S.waypoints = [];
-    const spot = findEmptySideNear(pc.x, pc.y, 6) || findEmptyNear(pc.x, pc.y, 6);
-    if (spot) S.waypoints.push({ x: spot.x, y: spot.y });
   }
   // The ability (bonus Teleport every 3 levels) is the rest of the character.
 }
@@ -4636,9 +4629,9 @@ function showCommanderBonus() {
     const sub = document.getElementById('cmdbonus-sub');
     if (sub) sub.textContent = (cmd ? cmd.name : 'Scout') + ' — gets an extra Teleport every 3 levels.';
     const tp = document.getElementById('cmdbonus-teleport');
-    if (tp) tp.innerHTML = `<div class="icon">${ICONS.teleport}</div><b>Teleport</b><span>Move a Cannon to a new spot.</span>`;
+    if (tp) { tp.innerHTML = `<div class="icon">${ICONS.teleport}</div><b>Teleport</b><span>Move a Cannon to a new spot.</span>`; tp.classList.add('dealt'); }
     const sk = document.getElementById('cmdbonus-skip');
-    if (sk) sk.innerHTML = `<b>Skip</b><span>Skip the bonus and keep playing.</span>`;
+    if (sk) { sk.innerHTML = `<b>Skip</b><span>Skip the bonus and keep playing.</span>`; sk.classList.add('dealt'); }
     document.getElementById('cmdbonus').classList.remove('hidden');
     return true;
   } catch (e) { return false; }
@@ -7384,6 +7377,19 @@ document.getElementById('startbtn').addEventListener('click', () => {
   // v202: Play goes to character select (Armory -> commander ->
   // game). The run starts when a commander card is picked.
   showCharSelect();
+});
+// v206: reset-all-progress trash can (top-left of the start screen).
+// The button only opens the confirm overlay; the Reset button inside
+// it does the wipe, Cancel closes it.
+document.getElementById('resetbtn').addEventListener('click', () => {
+  try { document.getElementById('resetconfirm').classList.remove('hidden'); } catch (e) {}
+});
+document.getElementById('resetconfirm-yes').addEventListener('click', () => {
+  try { document.getElementById('resetconfirm').classList.add('hidden'); } catch (e) {}
+  resetMeta();
+});
+document.getElementById('resetconfirm-no').addEventListener('click', () => {
+  try { document.getElementById('resetconfirm').classList.add('hidden'); } catch (e) {}
 });
 // v204: commander bonus screen — Teleport enters teleport mode (same
 // as the XP-screen Teleport card; the game stays paused until the
