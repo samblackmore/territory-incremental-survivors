@@ -7150,15 +7150,20 @@ function renderStartScreen() {
 }
 // v204: Armory — the unlock collection on the start screen (was
 // "Missions"). One row per unlockable (7 units + 4 commanders, same
-// order as the achievements): the NAME, a DESCRIPTION, and an ICON.
-// Locked: the description is the unlock condition and the icon is
-// ???. Unlocked: the description is the unit/commander description
+// order as the achievements), led by the Cannon (v207: the starting
+// unit, always unlocked, first row): the NAME, a DESCRIPTION, and an
+// ICON. Locked: the description is the unlock condition and the icon
+// is ???. Unlocked: the description is the unit/commander description
 // and the icon is the unit icon or commander portrait.
 function renderArmory() {
   let list;
   try { list = document.getElementById('armory-list'); } catch (e) { list = null; }
   if (!list) return;
-  const html = ACHIEVEMENTS.map(a => {
+  // v207: Cannon leads the list — the starting unit, always unlocked,
+  // with its title, description and icon like any unlocked row.
+  const cannonCard = CARD_POOL.find(c => c.kind === 'turret' && c.type === 'cannon');
+  const cannonRow = `<div class="armory done"><span class="aicon">${(cannonCard && cannonCard.icon) || ''}</span><span class="aname">${(cannonCard && cannonCard.title) || 'Cannon'}</span><span class="adesc">${(cannonCard && cannonCard.sub) || ''}</span></div>`;
+  const html = cannonRow + ACHIEVEMENTS.map(a => {
     const done = achievementUnlocked(a);
     let name, desc, icon;
     if (a.reward.kind === 'unit') {
