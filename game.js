@@ -1374,7 +1374,7 @@ function clampNum(v, lo, hi, fallback) {
 }
 
 function readDebug() {
-  const cols = Math.round(clampNum(inCols.value, 8, 200, 75));
+  const cols = Math.round(clampNum(inCols.value, 8, 200, 100));
   const rows = Math.round(clampNum(inRows.value, 8, 200, 50));
   cfg = {
     cols, rows,
@@ -4558,8 +4558,11 @@ function offerCards() {
     else if (p.kind === 'stat') {
       // One stat, one chip: title is the stat + its NEW level, sub the effect.
       // The weapon icon says which weapon it belongs to.
-      // v176: no New! tag here — a first stat pick is an upgrade to a
-      // weapon you already own, not a new unit (only unlocks get New!).
+      // v210: first pick of a stat shows New! (cur === 0), like the
+      // Magnet passive (v188) and Capacity (v201). v176 had no New!
+      // here — a first stat pick was "an upgrade, not a new unit" —
+      // but Sam flagged that LV1 Projectiles/Penetration cards read
+      // as new pickups and should say so, like Capacity does.
       // v115: cannon Damage/Rate cards (the only tracks with Evos) get
       // a little gold Evo line — icon + the word EVO, no Evo name —
       // so you can see at a glance that this track evolves. Other
@@ -4568,6 +4571,7 @@ function offerCards() {
       const cur = w && w.stats ? (w.stats[p.stat] || 0) : 0;
       title = `${p.title} <span class="lv">Lv${cur + 1}</span>`;
       sub = p.effect;
+      if (cur === 0) newTag = '<span class="newtag">New!</span>';
       // v192: the Dig card's mix varies per level (damage only on
       // picks 3 and 6, lifetime every pick), so the sub shows the
       // next pick's actual delta, like the Magnet card does.
@@ -4583,8 +4587,8 @@ function offerCards() {
     else if (p.kind === 'capacity') {
       // v201: Capacity — title is the new level, sub names the new
       // cap ("Place up to 7 walls"). First pick is a new pickup, so
-      // it gets the New! tag like the Magnet passive (v188), not
-      // like a stat pick (v176). The unit icon says which type.
+      // it gets the New! tag like the Magnet passive (v188) and first
+      // stat picks (v210). The unit icon says which type.
       const cur = capacityLevel(p.weapon);
       const cfg = UNIT_CAP[p.weapon];
       const newCap = cfg.start + (cur + 1) * cfg.step;
@@ -7484,13 +7488,15 @@ function randomizeMapSize() {
   // shots from below). v179 (Sam, 2026-11-09): 75 columns — wider
   // again, so the coast has room to breathe and the shoreline slopes
   // can run longer. Still narrower than the old ~87 average.
+  // v210 (Sam, 2026-11-17): 100 columns — Sam confirmed the width
+  // is 75 and wants it wider again.
   // Rows are 175–250 random (v199: was 140–200 — the level got
   // taller for five biomes instead of four, so each band keeps its
   // old height of ~35–50 rows; panel size, newGame still adds the
   // bottom-ocean extra rows on top, so a real map is taller still).
   // Biomes (see newGame) split the height into fifths.
   // ?cols= in the URL still overrides the fixed width.
-  if (!qCols) inCols.value = 75;
+  if (!qCols) inCols.value = 100;
   if (!qRows) inRows.value = 175 + Math.floor(Math.random() * 76);
 }
 
