@@ -4511,6 +4511,43 @@ function projCost() {
 // v193: penCost() is gone with the gold hybrids — Penetration is
 // a free XP stat card on survival now, and main's shop never sold
 // it (only Projectiles). projCost() stays for main's shop.
+// v214: deterministic deal order (Sam) — the draw is still random,
+// but the dealt cards are sorted before they're placed, so the
+// screen scans the same way every time: unit upgrades first
+// (ordered by unit, cannon first), then Teleport/passive, then
+// Gold Ore last. Unit order is my call: cannon, laser, wall, field,
+// digger, harvester, outpost, waypoint. Within a unit, stats follow
+// the STAT_DEFS order (Damage, Fire rate, Projectiles, Penetration).
+const CARD_UNIT_ORDER = ['cannon', 'laser', 'wall', 'bloom', 'mole', 'gather', 'lantern', 'waypoint'];
+const CARD_STAT_ORDER = ['dmg', 'rate', 'proj', 'pen', 'shield', 'reinforce', 'dig', 'field', 'count'];
+function cardDealRank(p) {
+  // [group, unitIdx, kindIdx, statIdx] — group 0 = unit upgrade,
+  // 1 = teleport/passive, 2 = gold. Lower sorts first.
+  if (p.kind === 'gold') return [2, 0, 0, 0];
+  if (p.kind === 'teleport') return [1, 0, 0, 0];
+  if (p.kind === 'passive') return [1, 1, 0, 0];
+  // Unit upgrades: stat, unlock, capacity, evo, evoPaint. The Evo
+  // capstones have no weapon field — both are cannon Evos.
+  const unit = p.kind === 'unlock' ? (p.type || '') :
+    (p.kind === 'evo' || p.kind === 'evoPaint') ? 'cannon' : (p.weapon || '');
+  const ui = CARD_UNIT_ORDER.indexOf(unit);
+  const kindIdx = p.kind === 'unlock' ? 0 : p.kind === 'stat' ? 1 :
+    p.kind === 'capacity' ? 2 : 3;
+  const si = p.stat ? CARD_STAT_ORDER.indexOf(p.stat) : -1;
+  return [0, ui === -1 ? 99 : ui, kindIdx, si === -1 ? 99 : si];
+}
+function sortDealtCards(dealt) {
+  // Stable sort by the rank tuple (Array.sort is stable in modern JS,
+  // so equal ranks keep their draw order — the deal stays random
+  // within a tie, just never across groups).
+  return dealt.slice().sort((a, b) => {
+    const ra = cardDealRank(a), rb = cardDealRank(b);
+    for (let i = 0; i < ra.length; i++) {
+      if (ra[i] !== rb[i]) return ra[i] - rb[i];
+    }
+    return 0;
+  });
+}
 function offerCards() {
   // v149: a new deal always starts in cards view, not map view — a
   // previous View map toggle must not carry over to the next level.
@@ -4534,12 +4571,21 @@ function offerCards() {
   // v202: the normal deal is 4 cards; a 5th slot (els[4], the bonus
   // slot) is reserved for the Scout bonus Teleport below and is never
   // a normal deal slot.
+  // v214: draw first, then sort into the deterministic order before
+  // placing — the draw is still a weighted random without replacement,
+  // but the screen always scans unit upgrades (cannon first), then
+  // Teleport/passive, then Gold Ore last.
+  const dealt = [];
   for (let k = 0; k < Math.min(els.length, 4) && pool.length; k++) {
     let total = 0;
     for (const p of pool) total += weight(p);
     let r = Math.random() * total, pi = 0;
     while (pi < pool.length - 1 && (r -= weight(pool[pi])) > 0) pi++;
-    const p = pool.splice(pi, 1)[0];
+    dealt.push(pool.splice(pi, 1)[0]);
+  }
+  sortDealtCards(dealt);
+  for (let k = 0; k < dealt.length; k++) {
+    const p = dealt[k];
     const el = els[k];
     el.style.display = '';
     el.dataset.kind = p.kind;
