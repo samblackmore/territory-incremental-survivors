@@ -133,7 +133,7 @@ function pullCoinsTo(t, radius, count) {
 // Rate pick felt invisible — v209 trades that back for smaller steps.
 const STAT_DEFS = {
   cannon: [
-    { key: 'dmg', name: 'Damage', cap: 5, effect: '+1 damage, +5% crit' },
+    { key: 'dmg', name: 'Damage', cap: 5, effect: '+1 max damage, +5% crit' },
     // Projectiles: v193, chance-based like Penetration (Sam: the
     // guaranteed extra projectile per level was ridiculously
     // overpowered). Each level adds one more MAX projectile, but
@@ -424,6 +424,12 @@ function moleNextEffect(n) {
   if (moleDamageAt(n + 1) > moleDamageAt(n)) parts.push('+1 damage');
   parts.push('+2 lifetime');
   return parts.join(' · ');
+}
+function dmgNextEffect(n) {
+  // v212: min/max damage — each pick raises the MAX by 1, min stays 1.
+  // n is the current Damage level; the next pick makes level n+1, so
+  // the range becomes 1 to (1 + n + 1) = n+2.
+  return `Damage 1–${n + 2}, +5% crit`;
 }
 const MOLE_TURN_EVERY = 3;         // cells before random turn
 const COIN_FLY_DUR = 0.45;           // seconds for a tapped coin to zip to the corner
@@ -3901,16 +3907,19 @@ function fireTurret(t) {
   const w = t.color === BLUE ? S.weapons.cannon : null;
   const mx = t.x + 0.5 + Math.cos(t.angle) * 1.1;
   const my = t.y + 0.5 + Math.sin(t.angle) * 1.1;
-  let dmg = TURRET.cannon.dmg + S.dmgBonus + weaponDmgBonus(t);
+  // v212 (Sam): damage is a MIN/MAX range, not a flat base — the max
+  // grows by 1 per Damage level while the min stays 1, so the first
+  // pick no longer doubles the damage (1 -> 2 flat). Level 0 = 1,
+  // level 1 = 1-2, level 5 = 1-6, rolled uniformly per shot. The range
+  // IS the variance now, so the old non-crit +0/+1/+2 bump is gone.
+  // Crits (5% per Damage level) still multiply the ROLLED value by
+  // 2x or 3x. RED cannons have no Damage track (weaponDmgBonus 0),
+  // so they always roll 1.
+  let dmg = TURRET.cannon.dmg + S.dmgBonus + Math.floor(Math.random() * (weaponDmgBonus(t) + 1));
   let crit = false;
   if (w && w.critChance > 0 && Math.random() < w.critChance) {
     dmg *= 2 + Math.floor(Math.random() * 2); // 2x or 3x, whole numbers
     crit = true;
-  } else {
-    // Damage variance (non-crit): sometimes +1, rarely +2 over base.
-    const r = Math.random();
-    if (r < 0.05) dmg += 2;
-    else if (r < 0.25) dmg += 1;
   }
   S.projs.push({
     x: mx, y: my,
@@ -4587,6 +4596,9 @@ function offerCards() {
       // picks 3 and 6, lifetime every pick), so the sub shows the
       // next pick's actual delta, like the Magnet card does.
       if (p.weapon === 'mole' && p.stat === 'dig') sub = moleNextEffect(cur);
+      // v212: the Damage card shows the next pick's range (min 1, max
+      // grows by 1 per level), not a flat +1.
+      if (p.weapon === 'cannon' && p.stat === 'dmg') sub = dmgNextEffect(cur);
       // v194: the Reinforce card's mix varies per level too (size
       // only on picks 1, 3 and 5, HP every pick).
       if (p.weapon === 'wall' && p.stat === 'reinforce') sub = wallNextEffect(cur);
@@ -7307,7 +7319,7 @@ function renderPerma() {
   // shown as little circles (filled = level). Reset clears all perma
   // levels (not item toggles) — the VS-style sell-all.
   const defs = [
-    { id: 'perma-dmg', key: 'dmg', title: 'Damage', sub: '+1 base damage, +5% crit per level' },
+    { id: 'perma-dmg', key: 'dmg', title: 'Damage', sub: '+1 max damage, +5% crit per level' },
     { id: 'perma-rate', key: 'rate', title: 'Fire Rate', sub: '+15% base fire rate per level' },
   ];
   for (const d of defs) {
