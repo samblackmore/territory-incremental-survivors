@@ -1092,6 +1092,31 @@ function fillCellFlat(x, y) {
   ctx.fillRect(x * CELL_PX - TILE_OVERDRAW, y * CELL_PX - TILE_OVERDRAW,
                CELL_PX + 2 * TILE_OVERDRAW, CELL_PX + 2 * TILE_OVERDRAW);
 }
+// v208: layered terrain — under materials (sand, grass, cave) are drawn
+// first as oversized plain squares, then over materials (water, rock,
+// blue/red) are drawn at 1x with rounded corners on top. Water over
+// sand, rock over grass. The under layer bleeds past its cell edges
+// and fills the gaps the over layer's rounded corners leave, so no
+// dark background shows through at region boundaries.
+const UNDER_OVERDRAW = 1.2; // under cells drawn at 1.2x CELL_PX (knob)
+function isUnderRegion(x, y) {
+  const r = cellRegion(x, y);
+  return r === 6 || r === 7 || r === 8; // beach, grass, cave
+}
+function fillCellUnder(x, y) {
+  // Oversized square, no rounding — the bleed layer that seals the
+  // seams under the over layer's rounded corners.
+  const s = CELL_PX * UNDER_OVERDRAW;
+  const off = (s - CELL_PX) / 2;
+  ctx.fillRect(x * CELL_PX - off, y * CELL_PX - off, s, s);
+}
+function emptyCellShade(i) {
+  // Flat ground shade for an EMPTY cell (ocean/beach/grass/cave),
+  // from its biome flag and elevation shade.
+  return (S.ocean && S.ocean[i]) ? OCEAN_SHADES[S.shade[i] || 0] :
+    (S.beach && S.beach[i]) ? BEACH_SHADES[S.shade[i] || 0] :
+    (S.grass && S.grass[i]) ? GRASS_SHADES[S.shade[i] || 0] : CAVE_SHADES[S.shade[i] || 0];
+}
 // v177: exact-size fill (no overdraw) — for the half-fog overlay only.
 // The 50% black of adjacent half-fog cells overlaps by a pixel each
 // side, and the overlap composites darker (0.75), drawing a grid over
@@ -6010,6 +6035,26 @@ function render() {
   const vw = view.w / cam.zoom / 2, vh = view.h / cam.zoom / 2;
   const vx0 = Math.max(0, Math.floor((cam.x - vw) / CELL_PX) - 2), vx1 = Math.min(w - 1, Math.ceil((cam.x + vw) / CELL_PX) + 2);
   const vy0 = Math.max(0, Math.floor((cam.y - vh) / CELL_PX) - 2), vy1 = Math.min(h - 1, Math.ceil((cam.y + vh) / CELL_PX) + 2);
+  // v208: layered terrain, pass 1 — UNDER materials (sand, grass, cave)
+  // as oversized plain squares. They bleed past their cell edges and
+  // fill the gaps the over layer's rounded corners leave. Water over
+  // sand, rock over grass.
+  for (let y = vy0; y <= vy1; y++) {
+    for (let x = vx0; x <= vx1; x++) {
+      const i = y * w + x;
+      if (S.cells[i] !== EMPTY) continue;
+      if (!isUnderRegion(x, y)) continue; // ocean is over, drawn in pass 2
+      if (SURVIVAL) {
+        const groundTile = (S.beach && S.beach[i]) ? TILES.sand : TILES.grass;
+        if (drawCellTile(groundTile, x, y, S.shade[i] || 0, emptyCellShade(i))) continue;
+      }
+      const sh = emptyCellShade(i);
+      ctx.fillStyle = `rgb(${sh[0]},${sh[1]},${sh[2]})`;
+      fillCellUnder(x, y);
+    }
+  }
+  // v208: pass 2 — OVER materials (water, rock, blue/red) at 1x with
+  // rounded corners, on top of the under layer.
   for (let y = vy0; y <= vy1; y++) {
     for (let x = vx0; x <= vx1; x++) {
       const i = y * w + x;
@@ -6055,19 +6100,13 @@ function render() {
         fillCell(x, y);
       }
       else if (st === EMPTY) {
-        // v158: ground tiles — ocean, sand, or grass (coast grass and
-        // cave ground both use the grass tile for now).
+        // v208: under cells (sand, grass, cave) were drawn in pass 1;
+        // only ocean reaches here (region 5).
+        if (isUnderRegion(x, y)) continue;
         if (SURVIVAL) {
-          const groundTile = (S.ocean && S.ocean[i]) ? TILES.ocean :
-            (S.beach && S.beach[i]) ? TILES.sand : TILES.grass;
-          const groundTint = (S.ocean && S.ocean[i]) ? OCEAN_SHADES[S.shade[i] || 0] :
-            (S.beach && S.beach[i]) ? BEACH_SHADES[S.shade[i] || 0] :
-            (S.grass && S.grass[i]) ? GRASS_SHADES[S.shade[i] || 0] : CAVE_SHADES[S.shade[i] || 0];
-          if (drawCellTile(groundTile, x, y, S.shade[i] || 0, groundTint)) continue;
+          if (drawCellTile(TILES.ocean, x, y, S.shade[i] || 0, emptyCellShade(i))) continue;
         }
-        const sh = (S.ocean && S.ocean[i]) ? OCEAN_SHADES[S.shade[i] || 0] :
-          (S.beach && S.beach[i]) ? BEACH_SHADES[S.shade[i] || 0] :
-          (S.grass && S.grass[i]) ? GRASS_SHADES[S.shade[i] || 0] : CAVE_SHADES[S.shade[i] || 0];
+        const sh = emptyCellShade(i);
         ctx.fillStyle = `rgb(${sh[0]},${sh[1]},${sh[2]})`;
         fillCell(x, y);
       }
