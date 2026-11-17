@@ -1101,14 +1101,13 @@ function fillCellFlat(x, y) {
                CELL_PX + 2 * TILE_OVERDRAW, CELL_PX + 2 * TILE_OVERDRAW);
 }
 // v211: layered terrain order (Sam) — rock > dark grass > light grass
-// > sand > water (bottom). Each layer below the top is drawn oversized
-// (1.2x) as a bleed for the layer above it; rock and blue/red are drawn
-// at 1x rounded on top. Only rock (and blue/red) keeps rounded corners;
-// grass/sand/water go square-edged, hidden under the layer above except
-// where they fill a rounded corner's gap. Cave (dug-out interior ground)
-// sits at the bottom with water. Grass splits by elevation shade:
+// > sand > water (bottom). v213: every ground layer rounds now, not
+// just rock — each layer gets BOTH a 1.2x square bleed (drawn first,
+// seals the gaps) and a 1x rounded shape (drawn in the over pass,
+// defines the curved edge). Grass splits by elevation shade:
 // GRASS_SHADES runs light -> dark, so light grass is shade 0-3 and
-// dark grass is shade 4-7.
+// dark grass is shade 4-7. Cave (dug-out interior ground) sits at
+// the bottom with water.
 const UNDER_OVERDRAW = 1.2; // under cells drawn at 1.2x CELL_PX (knob)
 const GRASS_DARK_SHADE = 4; // grass shade >= 4 is dark grass (knob)
 function groundLayer(x, y) {
@@ -6064,12 +6063,14 @@ function render() {
   const vw = view.w / cam.zoom / 2, vh = view.h / cam.zoom / 2;
   const vx0 = Math.max(0, Math.floor((cam.x - vw) / CELL_PX) - 2), vx1 = Math.min(w - 1, Math.ceil((cam.x + vw) / CELL_PX) + 2);
   const vy0 = Math.max(0, Math.floor((cam.y - vh) / CELL_PX) - 2), vy1 = Math.min(h - 1, Math.ceil((cam.y + vh) / CELL_PX) + 2);
-  // v211: layered terrain, ground passes — bottom to top: water/cave,
-  // sand, light grass, dark grass, each as an oversized plain square
-  // (1.2x). Each layer bleeds past its cell edges and fills the gaps
-  // the layer above it leaves (rock's rounded corners, and the next
-  // ground layer's square edge). Rock and blue/red come last, 1x
-  // rounded, on top.
+  // v213: layered terrain — every ground layer rounds now (Sam: v211
+  // made grass/sand/water all straight, only rock curved). Each layer
+  // gets BOTH a 1.2x square bleed and a 1x rounded shape: all the
+  // bleeds are drawn first (bottom to top: water/cave, sand, light
+  // grass, dark grass), then every ground cell is drawn again at 1x
+  // rounded in the over pass below, so the rounded shape — drawn
+  // last — defines the curved edge and the bleed only shows through
+  // in the tiny corner gaps. Rock and blue/red round as before.
   for (let layer = 0; layer <= 3; layer++) {
     for (let y = vy0; y <= vy1; y++) {
       for (let x = vx0; x <= vx1; x++) {
@@ -6086,9 +6087,10 @@ function render() {
       }
     }
   }
-  // v211: over pass — rock, blue/red at 1x with rounded corners, on
-  // top of the ground layers. (No EMPTY branch: every EMPTY ground
-  // cell was drawn in one of the four ground passes above.)
+  // v213: over pass — rock, blue/red, AND every ground cell, all at
+  // 1x with rounded corners, on top of the bleeds. (Ground cells
+  // were already drawn once as a 1.2x bleed above; this second draw
+  // is their visible rounded edge.)
   for (let y = vy0; y <= vy1; y++) {
     for (let x = vx0; x <= vx1; x++) {
       const i = y * w + x;
@@ -6133,13 +6135,24 @@ function render() {
         }
         fillCell(x, y);
       }
-      // v211: no EMPTY branch — every EMPTY ground cell was drawn in
-      // one of the four ground passes above (water/cave, sand, light
-      // grass, dark grass). Only BLUE, RED and rock reach here, so
-      // the rock branch must name its states explicitly: without the
-      // old EMPTY branch catching them, EMPTY cells would fall through
-      // to the popT check (popT is -1 for non-rock) and drawRockCell
-      // would round them.
+      // v213: ground cells draw AGAIN here at 1x rounded (their
+      // visible edge), on top of the 1.2x bleed above. Every layer
+      // rounds now — water, sand, light/dark grass — not just rock.
+      else if (st === EMPTY) {
+        if (SURVIVAL) {
+          const groundTile = (S.ocean && S.ocean[i]) ? TILES.ocean :
+            (S.beach && S.beach[i]) ? TILES.sand : TILES.grass;
+          if (drawCellTile(groundTile, x, y, S.shade[i] || 0, emptyCellShade(i))) continue;
+        }
+        const sh = emptyCellShade(i);
+        ctx.fillStyle = `rgb(${sh[0]},${sh[1]},${sh[2]})`;
+        fillCell(x, y);
+      }
+      // The rock branch names its states explicitly (WHITE/GREY):
+      // EMPTY is caught by the branch above, so only rock reaches
+      // here — but the explicit check keeps it true even if the
+      // branch order changes (popT is -1 for non-rock, so a bare
+      // popT check would round EMPTY cells, as v211 found).
       else if ((st === WHITE || st === GREY) && S.popT[i] < 0) drawRockCell(x, y); // popped cells draw in the pass below
     }
   }
