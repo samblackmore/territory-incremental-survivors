@@ -1034,7 +1034,57 @@ function bottomOceanExtraRows(seed, cols) {
   }
   return Math.round((BOTTOM_OCEAN_MULT - 1) * maxOcean);
 }
+// v203: region-aware rounded corners (Sam: plain colours, just not
+// the sharp edges). A corner rounds only when BOTH edge neighbours
+// at that corner are a different region than the cell, so solid
+// territory stays solid and only the silhouette softens. Region is
+// the cell's base kind (state + biome flag), ignoring shade, damage
+// tint and pop flash — those are transient, not region identity.
+// Inside notches (concave corners) stay square for now; only the
+// outer (convex) corners round. Radius is the knob (CELL_PX = 16).
+const CELL_CORNER_R = 3;
+function cellRegion(x, y) {
+  if (!S || !S.cells || !cfg.cols || x < 0 || y < 0 || x >= cfg.cols || y >= cfg.rows) return -1;
+  const i = y * cfg.cols + x;
+  const st = S.cells[i];
+  if (st === BLUE) return 1;
+  if (st === RED) return 2;
+  if (st === WHITE) return 3;
+  if (st === GREY) return 4;
+  if (S.ocean && S.ocean[i]) return 5;
+  if (S.beach && S.beach[i]) return 6;
+  if (S.grass && S.grass[i]) return 7;
+  return 8; // EMPTY, no flag: cave interior
+}
 function fillCell(x, y) {
+  const o = TILE_OVERDRAW;
+  const x0 = x * CELL_PX - o, y0 = y * CELL_PX - o, s = CELL_PX + 2 * o;
+  const r = CELL_CORNER_R;
+  const me = cellRegion(x, y);
+  const top = cellRegion(x, y - 1), bottom = cellRegion(x, y + 1);
+  const left = cellRegion(x - 1, y), right = cellRegion(x + 1, y);
+  const tl = top !== me && left !== me;
+  const tr = top !== me && right !== me;
+  const br = bottom !== me && right !== me;
+  const bl = bottom !== me && left !== me;
+  if (!tl && !tr && !br && !bl) { ctx.fillRect(x0, y0, s, s); return; }
+  ctx.beginPath();
+  ctx.moveTo(x0 + (tl ? r : 0), y0);
+  ctx.lineTo(x0 + s - (tr ? r : 0), y0);
+  if (tr) ctx.arc(x0 + s - r, y0 + r, r, -Math.PI / 2, 0);
+  ctx.lineTo(x0 + s, y0 + s - (br ? r : 0));
+  if (br) ctx.arc(x0 + s - r, y0 + s - r, r, 0, Math.PI / 2);
+  ctx.lineTo(x0 + (bl ? r : 0), y0 + s);
+  if (bl) ctx.arc(x0 + r, y0 + s - r, r, Math.PI / 2, Math.PI);
+  ctx.lineTo(x0, y0 + (tl ? r : 0));
+  if (tl) ctx.arc(x0 + r, y0 + r, r, Math.PI, Math.PI * 1.5);
+  ctx.closePath();
+  ctx.fill();
+}
+// v203: square overdrawn fill (the old fillCell) — for the full-fog
+// overlay only, so fog stays a uniform square and the fog tests keep
+// counting fillRects.
+function fillCellFlat(x, y) {
   ctx.fillRect(x * CELL_PX - TILE_OVERDRAW, y * CELL_PX - TILE_OVERDRAW,
                CELL_PX + 2 * TILE_OVERDRAW, CELL_PX + 2 * TILE_OVERDRAW);
 }
@@ -6250,7 +6300,7 @@ function render() {
   if (!fogHidden) for (let y = vy0; y <= vy1; y++) {
     for (let x = vx0; x <= vx1; x++) {
       const f = S.fog[y * cfg.cols + x];
-      if (f === 2) { ctx.fillStyle = '#000'; fillCell(x, y); }
+      if (f === 2) { ctx.fillStyle = '#000'; fillCellFlat(x, y); }
       else if (f === 1) { ctx.fillStyle = 'rgba(0,0,0,0.5)'; fillCellExact(x, y); }
     }
   }
