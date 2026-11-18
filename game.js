@@ -6105,7 +6105,7 @@ function drawRockCell(x, y) {
 // before the fog (so fog still hides them).
 const DECO_ROCK_DENSITY = 0.05; // 1 in 20
 const DECO_SAND_DENSITY = 0.05; // 1 in 20
-const DECO_GRASS_DENSITY = 0.1; // 1 in 10
+const DECO_GRASS_DENSITY = 0.2; // v218: 1 in 5 (was 1 in 10) — denser grass, still max 3 blades per cell
 // v217: every decoration is the colour of the material it's on, just
 // a notch darker — 10% darker (x0.9), same for pebbles and grass
 // blades, so they read as part of the ground, not pasted on top.
@@ -6144,7 +6144,8 @@ function drawDeco(x, y) {
     // Grass blades: 1-3 solid triangles, the cell's own grass colour
     // a notch darker (DECO_DARKEN), tip swaying in the wind. Each
     // cell has its own phase (plus a per-blade offset), so the field
-    // doesn't move in sync.
+    // doesn't move in sync. v218: blades are 2x size (5 wide, 12
+    // tall), base lowered so they still fit inside the cell.
     const n = 1 + Math.floor(decoHash(x, y, 1) * 3);
     const t = performance.now() / 1000;
     const phase = decoHash(x, y, 2) * Math.PI * 2;
@@ -6153,12 +6154,12 @@ function drawDeco(x, y) {
     ctx.fillStyle = 'rgb(' + Math.round(gc[0] * DECO_DARKEN) + ',' + Math.round(gc[1] * DECO_DARKEN) + ',' + Math.round(gc[2] * DECO_DARKEN) + ')';
     for (let j = 0; j < n; j++) {
       const dx = (decoHash(x, y, 10 + j) - 0.5) * 10;
-      const dy = (decoHash(x, y, 20 + j) - 0.5) * 6;
+      const dy = (decoHash(x, y, 20 + j) - 0.5) * 2;
       const cx = x * CELL_PX + CELL_PX / 2 + dx;
-      const baseY = y * CELL_PX + CELL_PX / 2 + 4 + dy;
-      const tipY = baseY - 6;
+      const baseY = y * CELL_PX + CELL_PX / 2 + 6 + dy;
+      const tipY = baseY - 12;
       const sway = Math.sin(t * speed + phase + j * 0.9) * 2;
-      const w = 2.5;
+      const w = 5;
       ctx.beginPath();
       ctx.moveTo(cx - w / 2, baseY);
       ctx.lineTo(cx + w / 2, baseY);
