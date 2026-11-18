@@ -6219,16 +6219,18 @@ function drawRockCell(x, y) {
 // v216: sparse scenic decorations. Deterministic per cell (hash of
 // x, y + map seed), so they never flicker or re-roll between frames.
 // Rock and sand get pebbles (1-2 mini circles, a bit smaller than
-// the gold nugget's r=3); grass gets blades (1-3 solid triangles)
-// that sway in the wind, each cell with its own phase so the field
-// doesn't move in sync. Density: rock/sand 1 in 20, grass 1 in 10
-// (grass is denser). Gated on the cell's CURRENT state, so a
+// the gold nugget's r=3); grass gets one blade per cell (a single
+// solid triangle, 5 wide x 12 tall, centred in the cell) that sways
+// in the wind — one global sway, so the whole field moves in unison
+// (v222). Density: rock/sand 1 in 20, grass 1 in 5 (grass is denser). Gated on the cell's CURRENT state, so a
 // decoration vanishes when its terrain is destroyed or painted over.
 // The pass runs after the terrain (so decorations sit on top) but
 // before the fog (so fog still hides them).
 const DECO_ROCK_DENSITY = 0.05; // 1 in 20
 const DECO_SAND_DENSITY = 0.05; // 1 in 20
-const DECO_GRASS_DENSITY = 0.2; // v218: 1 in 5 (was 1 in 10) — denser grass, still max 3 blades per cell
+const DECO_GRASS_DENSITY = 0.2; // v218: 1 in 5 (was 1 in 10) — denser grass, v222: 1 blade per cell
+const DECO_SWAY_SPEED = 1.5; // v222: grass sway speed (rad/s) — one global sway, every blade in unison
+const DECO_SWAY_AMP = 2; // v222: grass sway amplitude (px), same for every blade
 // v217: every decoration is the colour of the material it's on, just
 // a notch darker — 10% darker (x0.9), same for pebbles and grass
 // blades, so they read as part of the ground, not pasted on top.
@@ -6264,32 +6266,25 @@ function drawDeco(x, y) {
     drawDecoPebbles(x, y, DECO_DARKEN);
   } else if (st === EMPTY && S.grass && S.grass[i]) {
     if (decoHash(x, y, 0) >= DECO_GRASS_DENSITY) return;
-    // Grass blades: 1-3 solid triangles, the cell's own grass colour
-    // a notch darker (DECO_DARKEN), tip swaying in the wind. Each
-    // cell has its own phase (plus a per-blade offset), so the field
-    // doesn't move in sync. v218: blades are 2x size (5 wide, 12
-    // tall), base lowered so they still fit inside the cell.
-    const n = 1 + Math.floor(decoHash(x, y, 1) * 3);
+    // v222: one blade per cell, all the same size (5 wide, 12 tall,
+    // centred in the cell), all swaying in unison — a single global
+    // sway, no per-cell phase or speed, so the whole field moves
+    // together. The blade is still the cell's own grass colour a
+    // notch darker (DECO_DARKEN).
     const t = performance.now() / 1000;
-    const phase = decoHash(x, y, 2) * Math.PI * 2;
-    const speed = 1.2 + decoHash(x, y, 3) * 0.6;
     const gc = cellRGB(x, y);
     ctx.fillStyle = 'rgb(' + Math.round(gc[0] * DECO_DARKEN) + ',' + Math.round(gc[1] * DECO_DARKEN) + ',' + Math.round(gc[2] * DECO_DARKEN) + ')';
-    for (let j = 0; j < n; j++) {
-      const dx = (decoHash(x, y, 10 + j) - 0.5) * 10;
-      const dy = (decoHash(x, y, 20 + j) - 0.5) * 2;
-      const cx = x * CELL_PX + CELL_PX / 2 + dx;
-      const baseY = y * CELL_PX + CELL_PX / 2 + 6 + dy;
-      const tipY = baseY - 12;
-      const sway = Math.sin(t * speed + phase + j * 0.9) * 2;
-      const w = 5;
-      ctx.beginPath();
-      ctx.moveTo(cx - w / 2, baseY);
-      ctx.lineTo(cx + w / 2, baseY);
-      ctx.lineTo(cx + sway, tipY);
-      ctx.closePath();
-      ctx.fill();
-    }
+    const cx = x * CELL_PX + CELL_PX / 2;
+    const baseY = y * CELL_PX + CELL_PX / 2 + 6;
+    const tipY = baseY - 12;
+    const sway = Math.sin(t * DECO_SWAY_SPEED) * DECO_SWAY_AMP;
+    const w = 5;
+    ctx.beginPath();
+    ctx.moveTo(cx - w / 2, baseY);
+    ctx.lineTo(cx + w / 2, baseY);
+    ctx.lineTo(cx + sway, tipY);
+    ctx.closePath();
+    ctx.fill();
   }
 }
 
