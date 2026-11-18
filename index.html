@@ -590,7 +590,10 @@
   .charcard .ability { font-size: 12px; color: #c7cede; line-height: 1.4; }
   .charcard .start { font-size: 11px; color: #8b93a7; margin-top: 6px; line-height: 1.4; }
   .charcard .lock { font-size: 12px; color: #ffd75e; font-weight: bold; margin-top: 6px; }
-  #unlocktoast { border-color: #4ade80; }
+  #unlocktoast { border-color: #4ade80; text-align: center; }
+  #unlocktoast .toast-cond { font-size: 12px; opacity: .8; }
+  #rununlocks { margin: 10px 0 4px; font-size: 14px; line-height: 1.5; color: #4ade80; }
+  #rununlocks.hidden { display: none; }
   /* Price (top-right) and unaffordable dimming apply to any card that
      costs gold — shop cards and the XP-row projectile hybrid alike. */
   .card { position: relative; }
@@ -896,6 +899,7 @@
   <div class="cards">
     <h2>Run over</h2>
     <div id="runstats"></div>
+    <div id="rununlocks" class="hidden"></div>
     <button id="diveagain">Dive again</button>
   </div>
 </div>
@@ -909,6 +913,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=223"></script>
+<script src="game.js?v=224"></script>
 </body>
 </html>

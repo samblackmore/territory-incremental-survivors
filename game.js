@@ -1515,6 +1515,15 @@ const COMMANDERS = [
     start: 'Starts with a Laser placed, Laser unlocked.' },
 ];
 function isUnitUnlocked(type) { return type === 'cannon' || !!(meta.units && meta.units[type]); }
+// v224: in-run unlock check — reads the run-start snapshot
+// (S.runUnits), not live meta, so a unit unlocked mid-run doesn't
+// join this run's XP unlock pool. Falls back to live meta when no
+// run is active (start screen / Armory).
+function isUnitUnlockedInRun(type) {
+  if (type === 'cannon') return true;
+  if (S && S.runUnits) return !!S.runUnits[type];
+  return isUnitUnlocked(type);
+}
 function isCommanderUnlocked(id) { return id === 'scout' || !!(meta.commanders && meta.commanders[id]); }
 // ---- v202: Achievements (meta progression) ----------------------
 // Each unlocks one unit or commander. Conditions are chosen to relate
@@ -1558,6 +1567,10 @@ function checkAchievements() {
       meta.commanders[a.reward.id] = true;
     }
     saveMeta();
+    // v224: record it for the game-over screen (the unlock itself
+    // is already in meta, so it survives a quit — but it only joins
+    // the XP pool next run, via the runUnits snapshot).
+    if (S) { if (!S.runUnlocks) S.runUnlocks = []; S.runUnlocks.push(a); }
     showUnlockToast(a);
   }
 }
@@ -1569,7 +1582,8 @@ function showUnlockToast(a) {
   try {
     const el = document.getElementById('unlocktoast');
     if (!el) return;
-    el.textContent = label + ': ' + name + '!';
+    // v224: the unlock condition on a second line, smaller.
+    el.innerHTML = label + ': ' + name + '!<br><span class="toast-cond">' + a.text + '</span>';
     el.classList.remove('hidden');
     setTimeout(() => { try { el.classList.add('hidden'); } catch (e) {} }, 4000);
   } catch (e) { /* no DOM (harness): the meta unlock still stands */ }
@@ -2714,7 +2728,13 @@ function newGame() {
         // scoutBonusTaken = the Scout bonus Teleport was picked this
         // level-up (so it isn't re-offered in the re-deal); achT
         // throttles the achievement check to once a second.
+        // v224: runUnits snapshots the meta unlocks at run start, so
+        // a unit unlocked mid-run does NOT join this run's XP unlock
+        // pool (Vampire Survivors style — you get it next run).
+        // runUnlocks lists the achievements unlocked this run, for
+        // the game-over screen.
         runXp: 0, runGold: 0, commander: selectedCommander, scoutBonusTaken: false, achT: 0,
+        runUnits: { ...(meta.units || {}) }, runUnlocks: [],
         // XP bar animation: xpShown eases toward xp; level-up cards wait
         // for the bar to finish filling.
         xpShown: 0, awaitingLevel: false,
@@ -3406,6 +3426,22 @@ function checkRunOver() {
         'Excavated <b>' + S.destroyed + '</b> · ' +
         'Red turrets destroyed <b>' + S.redKills + '</b> · ' +
         'Gold <b>' + meta.gold + '</b>';
+    // v224: Vampire Survivors style — the game-over screen lists
+    // what this run unlocked (they join the XP pool next run, not
+    // this one). Hidden when nothing was unlocked.
+    try {
+      const ru = document.getElementById('rununlocks');
+      if (ru) {
+        const list = (S.runUnlocks || []).map(a => {
+          const nm = a.reward.kind === 'unit'
+            ? (CARD_POOL.find(c => c.kind === 'turret' && c.type === a.reward.id)?.title || a.reward.id)
+            : (COMMANDERS.find(c => c.id === a.reward.id)?.name || a.reward.id);
+          return (a.reward.kind === 'unit' ? 'Unit: ' : 'Commander: ') + nm;
+        });
+        ru.innerHTML = list.length ? '<b>Unlocked this run</b><br>' + list.join('<br>') : '';
+        ru.classList.toggle('hidden', !list.length);
+      }
+    } catch (e) {}
     runover.classList.remove('hidden');
   }
 }
@@ -4592,7 +4628,7 @@ function availableCards() {
     // locked units never appear as unlock cards.
     for (const t of UNLOCKABLE) {
       if (S.unlocked && S.unlocked[t]) continue;
-      if (!isUnitUnlocked(t)) continue;
+      if (!isUnitUnlockedInRun(t)) continue;
       if (meta && meta.enabled && meta.enabled[t] === false) continue;
       const entry = CARD_POOL.find(c => c.kind === 'turret' && c.type === t);
       if (entry) pool.push({ kind: 'unlock', type: t, title: entry.title, icon: entry.icon, sub: entry.sub });
