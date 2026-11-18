@@ -1500,7 +1500,7 @@ const COMMANDERS = [
   { id: 'bulwark', name: 'Bulwark', unlocked: false,
     portrait: '<svg viewBox="0 0 48 48" width="48" height="48"><circle cx="24" cy="26" r="16" fill="#9ca3af"/><path d="M8 24 Q8 8 24 8 Q40 8 40 24 L36 24 Q36 12 24 12 Q12 12 12 24 Z" fill="#4b5563"/><rect x="14" y="22" width="20" height="3" fill="#4b5563"/><circle cx="18" cy="28" r="2.2" fill="#1a2138"/><circle cx="30" cy="28" r="2.2" fill="#1a2138"/><path d="M19 35 L29 35" stroke="#1a2138" stroke-width="2" stroke-linecap="round"/></svg>',
     ability: 'Built to hold the line.',
-    start: 'Starts with a Wall placed, Wall unlocked, Reinforce 1 (3x3, 30 HP).' },
+    start: 'Starts with 3 Walls placed below the Cannon, Wall unlocked, Wall Capacity 1 (up to 4 walls).' },
   { id: 'cultivator', name: 'Cultivator', unlocked: false,
     portrait: '<svg viewBox="0 0 48 48" width="48" height="48"><circle cx="24" cy="27" r="16" fill="#d9a05b"/><path d="M24 12 Q18 4 12 6 Q16 12 24 12 Z" fill="#16a34a"/><path d="M24 12 Q30 4 36 6 Q32 12 24 12 Z" fill="#22c55e"/><circle cx="18" cy="27" r="2.2" fill="#1a2138"/><circle cx="30" cy="27" r="2.2" fill="#1a2138"/><circle cx="14" cy="31" r="2.5" fill="#f472b6" opacity="0.6"/><circle cx="34" cy="31" r="2.5" fill="#f472b6" opacity="0.6"/><path d="M18 34 Q24 39 30 34" stroke="#1a2138" stroke-width="2" fill="none" stroke-linecap="round"/></svg>',
     ability: 'Fields grow 25% faster.',
@@ -2431,7 +2431,8 @@ function snapAnchor(a) { // fallback spawn when there are no caves at all
 // v202: commander starting items. Finds open ground near the starter
 // (the beach is open, so this almost always lands 1–2 cells away).
 // A turret spot is a single EMPTY cell; a wall spot is an n×n block
-// of EMPTY cells (the starting wall is 3x3 at Reinforce 1).
+// of EMPTY cells (base 2x2; the Bulwark starting row is placed by
+// findBulwarkRow, not this helper).
 function findEmptyNear(x, y, r) {
   for (let d = 1; d <= r; d++) {
     for (let dy = -d; dy <= d; dy++) {
@@ -2476,22 +2477,87 @@ function findEmptyBlockNear(x, y, n, r, allowRock) {
   }
   return null;
 }
+// v219: finds a y below the cannon where three base 2x2 wall blocks
+// fit side by side, centered on pc.x (the row spans pc.x-3 to
+// pc.x+2). Tries pure EMPTY first, then EMPTY-or-any-rock (the wall
+// replaces it — these are starting walls, the game's setup). Ocean
+// cells are never accepted — the wall row belongs on land. Searches
+// y from just below the cannon down to 10 cells below. Returns the
+// y (top row of the blocks) or null.
+function findBulwarkRow(pc) {
+  const n = 2;
+  const xs = [pc.x - 3, pc.x - 1, pc.x + 1];
+  for (const allowRock of [false, true]) {
+    for (let y = pc.y + 1; y <= pc.y + 10; y++) {
+      let ok = true;
+      for (const bx of xs) {
+        if (bx < 0 || bx + n > cfg.cols || y < 0 || y + n > cfg.rows) { ok = false; break; }
+        for (let wy = y; wy < y + n && ok; wy++) {
+          for (let wx = bx; wx < bx + n && ok; wx++) {
+            const wi = wy * cfg.cols + wx;
+            if ((S.cells[wi] !== EMPTY && !(allowRock && (S.cells[wi] === WHITE || S.cells[wi] === GREY))) ||
+                (S.ocean && S.ocean[wi]) ||
+                turretAt(wx, wy) || civilianAt(wx, wy)) ok = false;
+          }
+        }
+      }
+      if (ok) return y;
+    }
+  }
+  return null;
+}
+// v219 fallback: finds a single 2x2 block below the cannon near a
+// target x (exact x first, then x±1..±5), scanning y from just
+// below the cannon downward. Accepts EMPTY or any rock (the wall
+// replaces it), never ocean, never a turret/civilian cell, and never
+// a cell that's already part of a placed wall (so the three fallback
+// walls can't overlap each other). The wide x range matters because
+// the coastline is often diagonal — the land below the cannon may
+// sit a few cells to one side. Returns {x, y} or null.
+function findBulwarkBlockBelow(pc, targetX) {
+  const n = 2;
+  // Cells already claimed by a placed wall block — the fallback must
+  // not overlap them (they read as GREY, same as natural rock).
+  const wallCells = new Set();
+  if (S.wallBlocks) for (const b of S.wallBlocks) for (const ci of b.cells) wallCells.add(ci);
+  for (let y = pc.y + 1; y <= pc.y + 15; y++) {
+    for (const dx of [0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5]) {
+      const bx = targetX + dx;
+      if (bx < 0 || bx + n > cfg.cols || y < 0 || y + n > cfg.rows) continue;
+      let ok = true;
+      for (let wy = y; wy < y + n && ok; wy++) {
+        for (let wx = bx; wx < bx + n && ok; wx++) {
+          const wi = wy * cfg.cols + wx;
+          if (wallCells.has(wi) ||
+              (S.cells[wi] !== EMPTY && S.cells[wi] !== WHITE && S.cells[wi] !== GREY) ||
+              (S.ocean && S.ocean[wi]) ||
+              turretAt(wx, wy) || civilianAt(wx, wy)) ok = false;
+        }
+      }
+      if (ok) return { x: bx, y };
+    }
+  }
+  return null;
+}
 function applyCommanderStart(pc) {
   const cmd = S.commander || 'scout';
   if (cmd === 'bulwark') {
-    // Wall unlocked from the start, Reinforce 1 (3x3, 30 HP), and
-    // one wall placed next to the starter (the cap of 1).
+    // v219 (Sam): no more Reinforce 1 (stronger walls). Instead,
+    // Bulwark starts with increased Wall capacity (level 1, cap 4,
+    // up from the base cap of 1) and THREE base 2x2 walls (20 HP
+    // each) placed below the starter Cannon, side by side in a
+    // horizontal row centered on the cannon, shielding it from
+    // attacks coming up from below (south). The 3 walls fill most
+    // of the cap of 4, so Bulwark can place 1 more.
     if (S.unlocked) S.unlocked.wall = true;
-    if (S.weapons.wall) S.weapons.wall.stats.reinforce = 1;
-    // Prefer open ground; fall back to rock (the wall replaces it) —
-    // the beach near the starter is often too rocky for a 3×3 of pure
-    // EMPTY. Wider radius on the fallback so the wall always lands.
-    let spot = findEmptyBlockNear(pc.x, pc.y, wallSize(), 8);
-    if (!spot) spot = findEmptyBlockNear(pc.x, pc.y, wallSize(), 12, true);
-    if (spot) {
-      const n = wallSize(), hp = wallHp(), cellsIdx = [];
-      for (let wy = spot.y; wy < spot.y + n; wy++) {
-        for (let wx = spot.x; wx < spot.x + n; wx++) {
+    if (!S.capacity) S.capacity = {};
+    S.capacity.wall = 1;
+    // Base walls: reinforce stays 0 (wallSize 2, wallHp 20).
+    const n = wallSize(), hp = wallHp();
+    const placeOne = (bx, by) => {
+      const cellsIdx = [];
+      for (let wy = by; wy < by + n; wy++) {
+        for (let wx = bx; wx < bx + n; wx++) {
           const wi = wy * cfg.cols + wx;
           S.cells[wi] = GREY;
           S.hp[wi] = hp; S.maxhp[wi] = hp; S.shade[wi] = WALL_SHADE;
@@ -2502,6 +2568,19 @@ function applyCommanderStart(pc) {
       }
       if (!S.wallBlocks) S.wallBlocks = [];
       S.wallBlocks.push({ cells: cellsIdx });
+    };
+    const rowY = findBulwarkRow(pc);
+    if (rowY !== null) {
+      for (const bx of [pc.x - 3, pc.x - 1, pc.x + 1]) placeOne(bx, rowY);
+    } else {
+      // Fallback: the beach below the cannon had no clean row (rocky
+      // or the ocean intrudes) — place each wall at the best spot
+      // below the cannon near its target x, so the three still land
+      // below the cannon, side by side, roughly in a row.
+      for (const tx of [pc.x - 3, pc.x - 1, pc.x + 1]) {
+        const spot = findBulwarkBlockBelow(pc, tx);
+        if (spot) placeOne(spot.x, spot.y);
+      }
     }
   } else if (cmd === 'cultivator') {
     // Field unlocked from the start, one placed next to the starter.
