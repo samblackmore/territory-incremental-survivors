@@ -3006,6 +3006,21 @@ function newGame() {
         }
       }
     }
+    // v223: grass under rock — remember which cells are in the grass
+    // band (rock or open), so when the cannon excavates a rock cell
+    // there it becomes open grass (with a blade) instead of bare cave
+    // ground. S.grassBand is the band marker; S.grass itself stays
+    // "open grass ground" only (rock cells must NOT carry it — the
+    // flood-wave culling and the grass-count tests read S.grass as
+    // open ground). Set here, after the speckle removal (which needs
+    // unflagged rock to find its islands). damageBlock flips
+    // S.grass on when a grass-band rock is destroyed.
+    S.grassBand = new Uint8Array(n);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < cfg.cols; x++) {
+        if (biomeAt(x, y) === 'grass') S.grassBand[y * cfg.cols + x] = 1;
+      }
+    }
   }
 
   // v179: re-stretch the brown HP field over the FINAL white cells.
@@ -4386,6 +4401,10 @@ function damageBlock(idx, dmg, color, sx, sy, vx, vy, crit) {
   const wasGrey = S.cells[idx] === GREY;
   const wasNugget = !!S.goldNug[idx];
   S.cells[idx] = EMPTY; // excavated: the block is gone, not painted over
+  // v223: a rock excavated in the grass band reveals open grass —
+  // flag it so it renders as grass (and grows a blade) instead of
+  // bare cave ground.
+  if (S.grassBand && S.grassBand[idx]) S.grass[idx] = 1;
   if (S.noHarvest) S.noHarvest[idx] = 0;
   S.destroyed++;
   if (color === BLUE) S.destroyedBlue++;
