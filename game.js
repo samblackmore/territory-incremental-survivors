@@ -2514,6 +2514,40 @@ function findBulwarkRow(pc) {
 // walls can't overlap each other). The wide x range matters because
 // the coastline is often diagonal — the land below the cannon may
 // sit a few cells to one side. Returns {x, y} or null.
+// v220: last-resort fallback — finds a single 2x2 block anywhere
+// near the cannon (expanding rings, all directions), for when the
+// beach below the cannon has no room at all (e.g. the starter is
+// on a peninsula tip with ocean on three sides). Accepts EMPTY or
+// any rock (the wall replaces it), never ocean, never a
+// turret/civilian cell, never a cell already part of a placed wall.
+// Returns {x, y} or null. This guarantees Bulwark gets his walls
+// somewhere near the cannon instead of starting with none.
+function findBulwarkBlockNear(pc) {
+  const n = 2;
+  const wallCells = new Set();
+  if (S.wallBlocks) for (const b of S.wallBlocks) for (const ci of b.cells) wallCells.add(ci);
+  for (let d = 1; d <= 12; d++) {
+    for (let dy = -d; dy <= d; dy++) {
+      for (let dx = -d; dx <= d; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== d) continue;
+        const bx = pc.x + dx, by = pc.y + dy;
+        if (bx < 0 || by < 0 || bx + n > cfg.cols || by + n > cfg.rows) continue;
+        let ok = true;
+        for (let wy = by; wy < by + n && ok; wy++) {
+          for (let wx = bx; wx < bx + n && ok; wx++) {
+            const wi = wy * cfg.cols + wx;
+            if (wallCells.has(wi) ||
+                (S.cells[wi] !== EMPTY && S.cells[wi] !== WHITE && S.cells[wi] !== GREY) ||
+                (S.ocean && S.ocean[wi]) ||
+                turretAt(wx, wy) || civilianAt(wx, wy)) ok = false;
+          }
+        }
+        if (ok) return { x: bx, y: by };
+      }
+    }
+  }
+  return null;
+}
 function findBulwarkBlockBelow(pc, targetX) {
   const n = 2;
   // Cells already claimed by a placed wall block — the fallback must
@@ -2581,6 +2615,16 @@ function applyCommanderStart(pc) {
         const spot = findBulwarkBlockBelow(pc, tx);
         if (spot) placeOne(spot.x, spot.y);
       }
+    }
+    // v220: last resort — if the beach below had no room at all
+    // (peninsula tip: ocean on three sides), the three still have
+    // to land somewhere. Place whatever is still missing anywhere
+    // near the cannon (on the peninsula itself if needed), so
+    // Bulwark never starts with zero walls.
+    while (liveWallBlocks().length < 3) {
+      const spot = findBulwarkBlockNear(pc);
+      if (!spot) break;
+      placeOne(spot.x, spot.y);
     }
   } else if (cmd === 'cultivator') {
     // Field unlocked from the start, one placed next to the starter.
