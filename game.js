@@ -4574,7 +4574,10 @@ function offerCards() {
   // v214: draw first, then sort into the deterministic order before
   // placing — the draw is still a weighted random without replacement,
   // but the screen always scans unit upgrades (cannon first), then
-  // Teleport/passive, then Gold Ore last.
+  // Teleport/passive, then Gold Ore last. v215: sortDealtCards
+  // returns a NEW sorted array (slice + sort) — the old code called
+  // it and discarded the result, so the deal stayed in draw order.
+  // The sorted array is what gets placed now.
   const dealt = [];
   for (let k = 0; k < Math.min(els.length, 4) && pool.length; k++) {
     let total = 0;
@@ -4583,9 +4586,9 @@ function offerCards() {
     while (pi < pool.length - 1 && (r -= weight(pool[pi])) > 0) pi++;
     dealt.push(pool.splice(pi, 1)[0]);
   }
-  sortDealtCards(dealt);
-  for (let k = 0; k < dealt.length; k++) {
-    const p = dealt[k];
+  const sorted = sortDealtCards(dealt);
+  for (let k = 0; k < sorted.length; k++) {
+    const p = sorted[k];
     const el = els[k];
     el.style.display = '';
     el.dataset.kind = p.kind;
