@@ -6093,6 +6093,76 @@ function drawRockCell(x, y) {
   }
 }
 
+// v216: sparse scenic decorations. Deterministic per cell (hash of
+// x, y + map seed), so they never flicker or re-roll between frames.
+// Rock and sand get pebbles (1-2 mini circles, a bit smaller than
+// the gold nugget's r=3); grass gets blades (1-3 solid triangles)
+// that sway in the wind, each cell with its own phase so the field
+// doesn't move in sync. Density: rock/sand 1 in 20, grass 1 in 10
+// (grass is denser). Gated on the cell's CURRENT state, so a
+// decoration vanishes when its terrain is destroyed or painted over.
+// The pass runs after the terrain (so decorations sit on top) but
+// before the fog (so fog still hides them).
+const DECO_ROCK_DENSITY = 0.05; // 1 in 20
+const DECO_SAND_DENSITY = 0.05; // 1 in 20
+const DECO_GRASS_DENSITY = 0.1; // 1 in 10
+function decoHash(x, y, salt) {
+  let h = (x * 374761393 + y * 668265263 + ((S.seed || 0) | 0) * 974634 + salt * 2654435761) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  h = h ^ (h >>> 16);
+  return (h >>> 0) / 4294967296;
+}
+function drawDecoPebbles(x, y, darken) {
+  // 1-2 mini circles, solid fill, darker than the cell's own colour.
+  const n = decoHash(x, y, 1) < 0.5 ? 1 : 2;
+  const c = cellRGB(x, y);
+  ctx.fillStyle = 'rgb(' + Math.round(c[0] * darken) + ',' + Math.round(c[1] * darken) + ',' + Math.round(c[2] * darken) + ')';
+  for (let j = 0; j < n; j++) {
+    const dx = (decoHash(x, y, 10 + j) - 0.5) * 8;
+    const dy = (decoHash(x, y, 20 + j) - 0.5) * 8;
+    const r = 1.5 + decoHash(x, y, 30 + j) * 1; // 1.5-2.5, smaller than the nugget's 3
+    ctx.beginPath();
+    ctx.arc(x * CELL_PX + CELL_PX / 2 + dx, y * CELL_PX + CELL_PX / 2 + dy, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+function drawDeco(x, y) {
+  const i = y * cfg.cols + x;
+  const st = S.cells[i];
+  if (st === WHITE || st === GREY) {
+    if (decoHash(x, y, 0) >= DECO_ROCK_DENSITY) return;
+    drawDecoPebbles(x, y, 0.6);
+  } else if (st === EMPTY && S.beach && S.beach[i]) {
+    if (decoHash(x, y, 0) >= DECO_SAND_DENSITY) return;
+    drawDecoPebbles(x, y, 0.75);
+  } else if (st === EMPTY && S.grass && S.grass[i]) {
+    if (decoHash(x, y, 0) >= DECO_GRASS_DENSITY) return;
+    // Grass blades: 1-3 solid triangles, tip swaying in the wind.
+    // Each cell has its own phase (plus a per-blade offset), so the
+    // field doesn't move in sync.
+    const n = 1 + Math.floor(decoHash(x, y, 1) * 3);
+    const t = performance.now() / 1000;
+    const phase = decoHash(x, y, 2) * Math.PI * 2;
+    const speed = 1.2 + decoHash(x, y, 3) * 0.6;
+    ctx.fillStyle = '#9ed84a'; // fresh green, brighter than the grass
+    for (let j = 0; j < n; j++) {
+      const dx = (decoHash(x, y, 10 + j) - 0.5) * 10;
+      const dy = (decoHash(x, y, 20 + j) - 0.5) * 6;
+      const cx = x * CELL_PX + CELL_PX / 2 + dx;
+      const baseY = y * CELL_PX + CELL_PX / 2 + 4 + dy;
+      const tipY = baseY - 6;
+      const sway = Math.sin(t * speed + phase + j * 0.9) * 2;
+      const w = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(cx - w / 2, baseY);
+      ctx.lineTo(cx + w / 2, baseY);
+      ctx.lineTo(cx + sway, tipY);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+}
+
 // ---- Render ----
 function render() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // draw in CSS px: crisp on hidpi
@@ -6216,6 +6286,14 @@ function render() {
         if (pass === 0 ? S.popAmp[i] >= 1 : S.popAmp[i] < 1) continue;
         drawRockCell(x, y);
       }
+    }
+  }
+  // v216: scenic decorations (pebbles on rock/sand, swaying grass
+  // blades) — after the terrain, before the fog, so they sit on the
+  // ground but fog still hides them.
+  for (let y = vy0; y <= vy1; y++) {
+    for (let x = vx0; x <= vx1; x++) {
+      drawDeco(x, y);
     }
   }
   // Territory growth: a single square growing from the cell centre.
