@@ -550,7 +550,7 @@
   #armory-list { text-align: left; margin: 4px auto 0; max-width: 480px; }
   .armory { display: flex; align-items: center; gap: 10px; padding: 5px 10px; border-bottom: 1px solid #1e2536; font-size: 13px; }
   .armory .aicon { flex: 0 0 24px; text-align: center; color: #ffd75e; font-weight: bold; }
-  .armory .aicon svg { width: 22px; height: 22px; vertical-align: middle; }
+  .armory .aicon img { width: 24px; height: auto; vertical-align: middle; image-rendering: pixelated; }
   .armory .aname { flex: 0 0 86px; font-weight: bold; white-space: nowrap; }
   .armory .adesc { flex: 1; opacity: .85; }
   .armory.done .aname { color: #4ade80; }
@@ -572,7 +572,7 @@
   #cmdbonus.hidden { display: none; }
   #cmdbonus .cards { position: relative; z-index: 1; margin: auto; }
   #cmdbonus-portrait { margin-bottom: 8px; }
-  #cmdbonus-portrait svg { width: 64px; height: 64px; }
+  #cmdbonus-portrait img { width: 96px; height: auto; image-rendering: pixelated; }
   #cmdbonus-sub { color: var(--text); opacity: .85; font-size: 15px; margin: 0 0 18px; }
   #charscreen {
     position: fixed; inset: 0;
@@ -585,7 +585,7 @@
   .charcard { width: 150px; background: #121828; border: 1px solid #2a3145; border-radius: 12px; padding: 12px 10px; cursor: pointer; color: var(--text); text-align: center; }
   .charcard:hover { border-color: #3b82f6; }
   .charcard.locked { opacity: 0.45; cursor: default; }
-  .charcard .portrait svg { width: 48px; height: 48px; }
+  .charcard .portrait img { width: 72px; height: auto; image-rendering: pixelated; }
   .charcard b { display: block; font-size: 15px; margin: 6px 0 4px; }
   .charcard .ability { font-size: 12px; color: #c7cede; line-height: 1.4; }
   .charcard .start { font-size: 11px; color: #8b93a7; margin-top: 6px; line-height: 1.4; }
@@ -909,6 +909,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=220"></script>
+<script src="game.js?v=221"></script>
 </body>
 </html>
