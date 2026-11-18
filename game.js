@@ -3332,7 +3332,7 @@ const FLOOD_SWEEP_RATE = Math.PI / 2; // rad/s the sweep rotates (90 deg/s)
 // fire in its column at the cap.
 const FLOOD_WAVE_FIRST_INTERVAL = 5;
 const FLOOD_WAVE_MIN_INTERVAL = 0.01;
-const FLOOD_WAVE_RAMP_HALF_LIFE = 100; // v196: seconds of attack time to halve the interval (was 60 — peak now at ~18:00, not ~12:00)
+const FLOOD_WAVE_RAMP_HALF_LIFE = 181; // v217: seconds of attack time to halve the interval (was 100 in v196 — peak now at ~30:00, not ~18:00). Same peak (0.01s floor, ~100 shots/s), just reached later, matching the slowed progression.
 function floodWaveInterval() {
   const t = Math.max(0, S.time - FLOOD_GRACE_DUR);
   return Math.max(FLOOD_WAVE_MIN_INTERVAL,
@@ -6106,6 +6106,10 @@ function drawRockCell(x, y) {
 const DECO_ROCK_DENSITY = 0.05; // 1 in 20
 const DECO_SAND_DENSITY = 0.05; // 1 in 20
 const DECO_GRASS_DENSITY = 0.1; // 1 in 10
+// v217: every decoration is the colour of the material it's on, just
+// a notch darker — 10% darker (x0.9), same for pebbles and grass
+// blades, so they read as part of the ground, not pasted on top.
+const DECO_DARKEN = 0.9;
 function decoHash(x, y, salt) {
   let h = (x * 374761393 + y * 668265263 + ((S.seed || 0) | 0) * 974634 + salt * 2654435761) | 0;
   h = Math.imul(h ^ (h >>> 13), 1274126177);
@@ -6113,7 +6117,7 @@ function decoHash(x, y, salt) {
   return (h >>> 0) / 4294967296;
 }
 function drawDecoPebbles(x, y, darken) {
-  // 1-2 mini circles, solid fill, darker than the cell's own colour.
+  // 1-2 mini circles, solid fill, a notch darker than the cell's own colour.
   const n = decoHash(x, y, 1) < 0.5 ? 1 : 2;
   const c = cellRGB(x, y);
   ctx.fillStyle = 'rgb(' + Math.round(c[0] * darken) + ',' + Math.round(c[1] * darken) + ',' + Math.round(c[2] * darken) + ')';
@@ -6131,20 +6135,22 @@ function drawDeco(x, y) {
   const st = S.cells[i];
   if (st === WHITE || st === GREY) {
     if (decoHash(x, y, 0) >= DECO_ROCK_DENSITY) return;
-    drawDecoPebbles(x, y, 0.6);
+    drawDecoPebbles(x, y, DECO_DARKEN);
   } else if (st === EMPTY && S.beach && S.beach[i]) {
     if (decoHash(x, y, 0) >= DECO_SAND_DENSITY) return;
-    drawDecoPebbles(x, y, 0.75);
+    drawDecoPebbles(x, y, DECO_DARKEN);
   } else if (st === EMPTY && S.grass && S.grass[i]) {
     if (decoHash(x, y, 0) >= DECO_GRASS_DENSITY) return;
-    // Grass blades: 1-3 solid triangles, tip swaying in the wind.
-    // Each cell has its own phase (plus a per-blade offset), so the
-    // field doesn't move in sync.
+    // Grass blades: 1-3 solid triangles, the cell's own grass colour
+    // a notch darker (DECO_DARKEN), tip swaying in the wind. Each
+    // cell has its own phase (plus a per-blade offset), so the field
+    // doesn't move in sync.
     const n = 1 + Math.floor(decoHash(x, y, 1) * 3);
     const t = performance.now() / 1000;
     const phase = decoHash(x, y, 2) * Math.PI * 2;
     const speed = 1.2 + decoHash(x, y, 3) * 0.6;
-    ctx.fillStyle = '#9ed84a'; // fresh green, brighter than the grass
+    const gc = cellRGB(x, y);
+    ctx.fillStyle = 'rgb(' + Math.round(gc[0] * DECO_DARKEN) + ',' + Math.round(gc[1] * DECO_DARKEN) + ',' + Math.round(gc[2] * DECO_DARKEN) + ')';
     for (let j = 0; j < n; j++) {
       const dx = (decoHash(x, y, 10 + j) - 0.5) * 10;
       const dy = (decoHash(x, y, 20 + j) - 0.5) * 6;
