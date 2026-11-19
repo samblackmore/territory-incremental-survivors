@@ -2499,7 +2499,12 @@ function findEmptyBlockNear(x, y, n, r, allowRock) {
 // y (top row of the blocks) or null.
 function findBulwarkRow(pc) {
   const n = 2;
-  const xs = [pc.x - 3, pc.x - 1, pc.x + 1];
+  // v227: the three blocks sit at pc.x-2, pc.x, pc.x+2, so the row
+  // spans pc.x-2..pc.x+3 (6 cells) whose centre is pc.x+0.5 —
+  // exactly the cannon's centre. (The old -3/-1/+1 put the row's
+  // centre a cell left of the cannon, and Sam's screenshot showed
+  // the wall off-centre.)
+  const xs = [pc.x - 2, pc.x, pc.x + 2];
   for (const allowRock of [false, true]) {
     for (let y = pc.y + 1; y <= pc.y + 10; y++) {
       let ok = true;
@@ -2543,6 +2548,9 @@ function findBulwarkRow(pc) {
 // up into one barrier instead of scattering (Sam: "not all joined
 // up"). The ring scan prefers the southernmost candidates in each
 // ring, then the flanks on the cannon's own row.
+// v227: within each dy, dx runs centred-first (|dx| ascending), so
+// the fallback prefers a spot under the cannon over one off to a
+// side (Sam: the wall sat off-centre on a diagonal coast).
 function findBulwarkBlockNear(pc) {
   const n = 2;
   const wallCells = new Set();
@@ -2573,10 +2581,20 @@ function findBulwarkBlockNear(pc) {
     return true;
   };
   // One ring: dy runs d (south edge) down to 0 (cannon's own row);
-  // dy < 0 (north of the cannon) is never scanned.
+  // dy < 0 (north of the cannon) is never scanned. Within each dy,
+  // dx runs by increasing |dx| (centred first, v227) — so the
+  // fallback prefers a spot under the cannon over one off to a
+  // side, instead of sweeping left-to-right and taking the first
+  // land it meets (Sam: the wall sat off-centre on a diagonal
+  // coast).
+  const dxOrder = (d) => {
+    const out = [0];
+    for (let k = 1; k <= d; k++) { out.push(-k, k); }
+    return out;
+  };
   const scanRing = (d, adjacentOnly) => {
     for (let dy = d; dy >= 0; dy--) {
-      for (let dx = -d; dx <= d; dx++) {
+      for (const dx of dxOrder(d)) {
         if (Math.max(Math.abs(dx), Math.abs(dy)) !== d) continue;
         const bx = pc.x + dx, by = pc.y + dy;
         if (!blockOk(bx, by)) continue;
@@ -2606,6 +2624,15 @@ function findBulwarkBlockBelow(pc, targetX) {
   // not overlap them (they read as GREY, same as natural rock).
   const wallCells = new Set();
   if (S.wallBlocks) for (const b of S.wallBlocks) for (const ci of b.cells) wallCells.add(ci);
+  // v227: the x range is narrow and the candidate is scored, not
+  // first-found — the fallback used to return the shallowest valid
+  // spot (y outer, x inner), which on a diagonal coast clustered
+  // the walls off to one side (Sam: the wall sat off-centre).
+  // Now every valid spot in the band is scored and the most
+  // centred on the target x wins, shallowest first on ties, so
+  // the three walls land as a row centred on the cannon even when
+  // the beach below is diagonal.
+  const cands = [];
   for (let y = pc.y + 1; y <= pc.y + 15; y++) {
     for (const dx of [0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5]) {
       const bx = targetX + dx;
@@ -2620,10 +2647,12 @@ function findBulwarkBlockBelow(pc, targetX) {
               turretAt(wx, wy) || civilianAt(wx, wy)) ok = false;
         }
       }
-      if (ok) return { x: bx, y };
+      if (ok) cands.push({ x: bx, y, off: Math.abs(bx - targetX) });
     }
   }
-  return null;
+  if (!cands.length) return null;
+  cands.sort((a, b) => (a.off - b.off) || (a.y - b.y));
+  return { x: cands[0].x, y: cands[0].y };
 }
 function applyCommanderStart(pc) {
   const cmd = S.commander || 'scout';
@@ -2657,13 +2686,13 @@ function applyCommanderStart(pc) {
     };
     const rowY = findBulwarkRow(pc);
     if (rowY !== null) {
-      for (const bx of [pc.x - 3, pc.x - 1, pc.x + 1]) placeOne(bx, rowY);
+      for (const bx of [pc.x - 2, pc.x, pc.x + 2]) placeOne(bx, rowY);
     } else {
       // Fallback: the beach below the cannon had no clean row (rocky
       // or the ocean intrudes) — place each wall at the best spot
       // below the cannon near its target x, so the three still land
       // below the cannon, side by side, roughly in a row.
-      for (const tx of [pc.x - 3, pc.x - 1, pc.x + 1]) {
+      for (const tx of [pc.x - 2, pc.x, pc.x + 2]) {
         const spot = findBulwarkBlockBelow(pc, tx);
         if (spot) placeOne(spot.x, spot.y);
       }
