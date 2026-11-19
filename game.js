@@ -67,50 +67,49 @@ const GATHER_COOLDOWN = 6;           // seconds between pulls (legacy interval f
 // vacuums, still in the coin update). Level 0 = no pull: Field and
 // Outpost no longer pull by default (Field is purely growth, Outpost
 // purely base expansion + teleport anchor). Each Magnet pick improves
-// all three: +1 radius, -0.5s interval, +1 count every 2 levels.
-// Level 1: radius 3, every 4s, 1 per pull. Level 8 (max): radius 10,
-// every 1s, 4 per pull. Tunable. Harvester speed unchanged — it just
-// pulls while it drives now.
+// v226 (Sam): Magnet has NO radius any more — every living BLUE
+// unit pulls the NEAREST idle pickups from anywhere on the map,
+// one per pull at Lv1, on a slow cooldown. The pacing has slowed
+// right down since the bullet hell moved and the levels stretched,
+// so Magnet starts really slow (1 pickup every 10s) and grows into
+// a field-clearer by Lv8 (8 per pull, every 3s). Cap 8, as before.
+// Level 1: every 10s, 1 per pull. Level 8 (max): every 3s, 8 per
+// pull. Tunable. Harvester speed unchanged — it just pulls while
+// it drives now.
 // v171 note: the pull range ring flash is gone — no circle indicator
 // on any pull. The coins still fly in.
-const MAGNET_RADIUS_BASE = 2;        // pull radius = base + level (3 at Lv1, 10 at Lv8)
-const MAGNET_INTERVAL_BASE = 4.5;    // seconds between pulls at Lv0 (4 at Lv1, 1 at Lv7+, floored)
-const MAGNET_INTERVAL_STEP = 0.5;    // seconds shaved per level
-const MAGNET_INTERVAL_MIN = 1;       // fastest pull interval, in seconds
-const MAGNET_COUNT_STEP = 2;         // +1 pickup per pull every 2 levels (1 at Lv1-2, 4 at Lv7-8)
+const MAGNET_INTERVAL_BASE = 11;    // seconds between pulls at Lv0 (10 at Lv1, 3 at Lv8, floored)
+const MAGNET_INTERVAL_STEP = 1;     // seconds shaved per level
+const MAGNET_INTERVAL_MIN = 2;      // fastest pull interval, in seconds
 function magnetLevel() { return (S.passives && S.passives.magnet) || 0; }
-function magnetRadiusAt(lv) { return MAGNET_RADIUS_BASE + lv; }
 function magnetIntervalAt(lv) { return Math.max(MAGNET_INTERVAL_MIN, MAGNET_INTERVAL_BASE - MAGNET_INTERVAL_STEP * lv); }
-function magnetCountAt(lv) { return 1 + Math.floor((lv - 1) / MAGNET_COUNT_STEP); }
-function magnetRadius() { return magnetRadiusAt(magnetLevel()); }
+function magnetCountAt(lv) { return lv; } // one per pull per level (1 at Lv1, 8 at Lv8)
 function magnetInterval() { return magnetIntervalAt(magnetLevel()); }
 function magnetCount() { return magnetCountAt(magnetLevel()); }
 // What the NEXT Magnet pick (level n+1) gives, in RELATIVE terms
 // (v184, Sam: like the other stat cards — deltas, not absolutes).
-// Radius always +1; the interval drop shows as a % faster pull
-// rate (rounded); count +1 when the pick crosses an even level
-// (count improves every 2 levels). At the interval floor (Lv7->8)
-// the % part drops out — and the Lv7->8 pick is radius-only
-// (count is already 4 at Lv7).
+// The interval drop shows as a % faster pull rate (rounded);
+// count is +1 on every pick (count == level). No radius any more
+// (v226: the pull is global — nearest pickups, from anywhere).
 function magnetNextEffect(n) {
-  const parts = ['+1 radius'];
+  const parts = [];
   const iv0 = magnetIntervalAt(n), iv1 = magnetIntervalAt(n + 1);
   if (iv1 < iv0) parts.push(Math.round((iv0 / iv1 - 1) * 100) + '% faster pulls');
   if (magnetCountAt(n + 1) > magnetCountAt(n)) parts.push('+1 count');
   return parts.join(' · ');
 }
-// Magnet pull: pull up to `count` nearest idle pickups within `radius`
-// cells toward the unit (state 'gather', lerp to the unit, grant on
-// arrival). Fogged coins are not collectible (v166).
-function pullCoinsTo(t, radius, count) {
-  const r2 = radius * radius;
+// Magnet pull (v226): pull up to `count` nearest idle pickups
+// toward the unit (state 'gather', lerp to the unit, grant on
+// arrival), from ANYWHERE on the map — no radius. Fogged coins are
+// not collectible (v166).
+function pullCoinsTo(t, count) {
   const inRange = [];
   for (const c of S.coins) {
     if (c.state !== 'idle') continue;
     if (coinFogged(c)) continue;
     const dx = c.x - (t.x + 0.5), dy = c.y - (t.y + 0.5);
     const d2 = dx * dx + dy * dy;
-    if (d2 <= r2) inRange.push({ c, d2 });
+    inRange.push({ c, d2 });
   }
   inRange.sort((a, b) => a.d2 - b.d2);
   const take = Math.min(count, inRange.length);
@@ -1677,8 +1676,8 @@ function gatherCount() {
   return 1 + (w && w.stats ? (w.stats.count || 0) : 0);
 }
 // v181: the Field pull helpers are gone with the Field pull itself —
-// pull now lives on the global Magnet passive (see magnetRadius /
-// magnetInterval / magnetCount above), and Field is growth only.
+// pull now lives on the global Magnet passive (see magnetInterval /
+// magnetCount above), and Field is growth only.
 // Harvester pathing: BFS (not A* — we just need the nearest reachable
 // pickup, and BFS guarantees it avoids walls). From the Harvester's cell,
 // over open ground (EMPTY or own BLUE territory, never rock/grey/red,
@@ -4588,10 +4587,10 @@ function buildCardPool() { return [
     icon: ICONS[type],
   })),
   // Magnet (v181): the global pull passive. Every living BLUE unit
-  // pulls in nearby pickups; each pick grows the radius, speeds the
-  // pull up, and adds count. Field and Outpost no longer pull by
-  // default — this is the only pull there is.
-  { kind: 'passive', passive: 'magnet', title: 'Magnet', icon: ICONS.magnet, sub: 'All units pull in nearby pickups.' },
+  // pulls in the nearest pickups from anywhere on the map (v226: no
+  // radius); each pick speeds the pull up and adds count. Field and
+  // Outpost no longer pull by default — this is the only pull there is.
+  { kind: 'passive', passive: 'magnet', title: 'Magnet', icon: ICONS.magnet, sub: 'All units pull in the nearest pickups, from anywhere.' },
   // Gold Ore: the XP-for-gold exchange. A free XP-row pick that grants
   // run gold — the bridge to a shop unit you can see but can't afford yet.
   // Amount rolls at deal time (3–5): you see what you get before picking.
@@ -5984,7 +5983,7 @@ function update(dt) {
       t.pullT = (t.pullT || 0) + dt;
       if (t.pullT >= magnetInterval()) {
         t.pullT = 0;
-        pullCoinsTo(t, magnetRadius(), magnetCount());
+        pullCoinsTo(t, magnetCount());
       }
     }
   }
