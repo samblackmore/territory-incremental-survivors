@@ -2528,37 +2528,76 @@ function findBulwarkRow(pc) {
 // walls can't overlap each other). The wide x range matters because
 // the coastline is often diagonal — the land below the cannon may
 // sit a few cells to one side. Returns {x, y} or null.
-// v220: last-resort fallback — finds a single 2x2 block anywhere
-// near the cannon (expanding rings, all directions), for when the
-// beach below the cannon has no room at all (e.g. the starter is
-// on a peninsula tip with ocean on three sides). Accepts EMPTY or
-// any rock (the wall replaces it), never ocean, never a
-// turret/civilian cell, never a cell already part of a placed wall.
-// Returns {x, y} or null. This guarantees Bulwark gets his walls
-// somewhere near the cannon instead of starting with none.
+// v220: last-resort fallback — finds a single 2x2 block near the
+// cannon (expanding rings), for when the beach below the cannon has
+// no room at all (e.g. the starter is on a peninsula tip with ocean
+// on three sides). Accepts EMPTY or any rock (the wall replaces it),
+// never ocean, never a turret/civilian cell, never a cell already
+// part of a placed wall. Returns {x, y} or null. This guarantees
+// Bulwark gets his walls somewhere near the cannon instead of
+// starting with none.
+// v225: NEVER in front of the cannon — the rings are scanned south
+// first and north of the cannon's row is skipped entirely, so a
+// wall can never land where the cannon shoots (Sam: the v220
+// fallback put walls in front). And the second/third walls prefer
+// to sit edge-adjacent to a wall already placed, so the three join
+// up into one barrier instead of scattering (Sam: "not all joined
+// up"). The ring scan prefers the southernmost candidates in each
+// ring, then the flanks on the cannon's own row.
 function findBulwarkBlockNear(pc) {
   const n = 2;
   const wallCells = new Set();
   if (S.wallBlocks) for (const b of S.wallBlocks) for (const ci of b.cells) wallCells.add(ci);
-  for (let d = 1; d <= 12; d++) {
-    for (let dy = -d; dy <= d; dy++) {
+  // Edge-adjacent to a placed wall? The block's 4 neighbours (N/S/E/W
+  // of the 2x2) share an edge with a wall cell.
+  const adjacentToWall = (bx, by) => {
+    if (!wallCells.size) return false;
+    for (let wx = bx; wx < bx + n; wx++) {
+      if (wallCells.has((by - 1) * cfg.cols + wx) || wallCells.has((by + n) * cfg.cols + wx)) return true;
+    }
+    for (let wy = by; wy < by + n; wy++) {
+      if (wallCells.has(wy * cfg.cols + (bx - 1)) || wallCells.has(wy * cfg.cols + (bx + n))) return true;
+    }
+    return false;
+  };
+  const blockOk = (bx, by) => {
+    if (bx < 0 || by < 0 || bx + n > cfg.cols || by + n > cfg.rows) return false;
+    for (let wy = by; wy < by + n; wy++) {
+      for (let wx = bx; wx < bx + n; wx++) {
+        const wi = wy * cfg.cols + wx;
+        if (wallCells.has(wi) ||
+            (S.cells[wi] !== EMPTY && S.cells[wi] !== WHITE && S.cells[wi] !== GREY) ||
+            (S.ocean && S.ocean[wi]) ||
+            turretAt(wx, wy) || civilianAt(wx, wy)) return false;
+      }
+    }
+    return true;
+  };
+  // One ring: dy runs d (south edge) down to 0 (cannon's own row);
+  // dy < 0 (north of the cannon) is never scanned.
+  const scanRing = (d, adjacentOnly) => {
+    for (let dy = d; dy >= 0; dy--) {
       for (let dx = -d; dx <= d; dx++) {
         if (Math.max(Math.abs(dx), Math.abs(dy)) !== d) continue;
         const bx = pc.x + dx, by = pc.y + dy;
-        if (bx < 0 || by < 0 || bx + n > cfg.cols || by + n > cfg.rows) continue;
-        let ok = true;
-        for (let wy = by; wy < by + n && ok; wy++) {
-          for (let wx = bx; wx < bx + n && ok; wx++) {
-            const wi = wy * cfg.cols + wx;
-            if (wallCells.has(wi) ||
-                (S.cells[wi] !== EMPTY && S.cells[wi] !== WHITE && S.cells[wi] !== GREY) ||
-                (S.ocean && S.ocean[wi]) ||
-                turretAt(wx, wy) || civilianAt(wx, wy)) ok = false;
-          }
-        }
-        if (ok) return { x: bx, y: by };
+        if (!blockOk(bx, by)) continue;
+        if (adjacentOnly && !adjacentToWall(bx, by)) continue;
+        return { x: bx, y: by };
       }
     }
+    return null;
+  };
+  // Adjacency wins across ALL rings first: a joined barrier matters
+  // more than shaving a ring off the distance from the cannon. Only
+  // when no edge-adjacent spot exists anywhere do we take the
+  // nearest valid spot (which then starts a new cluster).
+  for (let d = 1; d <= 12; d++) {
+    const joined = scanRing(d, true);
+    if (joined) return joined;
+  }
+  for (let d = 1; d <= 12; d++) {
+    const any = scanRing(d, false);
+    if (any) return any;
   }
   return null;
 }
