@@ -1446,7 +1446,7 @@ const meta = { gold: 0, unlocks: { cannon: true, gather: false, mole: false, blo
   // total-based achievements).
   units: { cannon: true, lantern: false, wall: false, bloom: false, mole: false, gather: false, laser: false, waypoint: false },
   commanders: { scout: true, bulwark: false, cultivator: false, gunner: false, warden: false },
-  stats: { rescuedTotal: 0, shotDownTotal: 0 } };
+  stats: { rescuedTotal: 0, shotDownTotal: 0, xpTotal: 0 } };
 function loadMeta() {
   try {
     const m = JSON.parse(localStorage.getItem('tis_meta'));
@@ -1463,6 +1463,7 @@ function loadMeta() {
     if (m && m.stats) {
       if (typeof m.stats.rescuedTotal === 'number') meta.stats.rescuedTotal = Math.max(0, m.stats.rescuedTotal | 0);
       if (typeof m.stats.shotDownTotal === 'number') meta.stats.shotDownTotal = Math.max(0, m.stats.shotDownTotal | 0);
+      if (typeof m.stats.xpTotal === 'number') meta.stats.xpTotal = Math.max(0, m.stats.xpTotal | 0);
     }
   } catch (e) { /* fresh save */ }
 }
@@ -1481,7 +1482,7 @@ function resetMeta() {
   meta.enabled = {};
   meta.units = { cannon: true, lantern: false, wall: false, bloom: false, mole: false, gather: false, laser: false, waypoint: false };
   meta.commanders = { scout: true, bulwark: false, cultivator: false, gunner: false, warden: false };
-  meta.stats = { rescuedTotal: 0, shotDownTotal: 0 };
+  meta.stats = { rescuedTotal: 0, shotDownTotal: 0, xpTotal: 0 };
   saveMeta();
   renderStartScreen();
 }
@@ -1539,10 +1540,10 @@ const ACHIEVEMENTS = [
   { id: 'gold50', text: 'Collect 50 gold in a single run', reward: { kind: 'unit', id: 'gather' }, check: () => S && (S.runGold || 0) >= 50 },
   { id: 'rock300', text: 'Destroy 300 rock cells in a single run', reward: { kind: 'unit', id: 'mole' }, check: () => S && S.destroyedBlue >= 300 },
   { id: 'survive12', text: 'Survive 12 minutes', reward: { kind: 'unit', id: 'laser' }, check: () => S && S.time >= 720 },
-  { id: 'survive10', text: 'Survive 10 minutes', reward: { kind: 'commander', id: 'bulwark' }, check: () => S && S.time >= 600 },
-  { id: 'rescue10', text: 'Rescue 10 civilians (total)', reward: { kind: 'commander', id: 'cultivator' }, check: () => meta.stats && meta.stats.rescuedTotal >= 10 },
-  { id: 'xp300', text: 'Collect 300 XP in a single run', reward: { kind: 'commander', id: 'gunner' }, check: () => S && (S.runXp || 0) >= 300 },
-  { id: 'shoot50', text: 'Shoot down 50 enemy projectiles with a Laser (total)', reward: { kind: 'commander', id: 'warden' }, check: () => meta.stats && meta.stats.shotDownTotal >= 50 },
+  { id: 'survive15', text: 'Survive 15 minutes', reward: { kind: 'commander', id: 'bulwark' }, check: () => S && S.time >= 900 },
+  { id: 'rescue30', text: 'Rescue 30 civilians (total)', reward: { kind: 'commander', id: 'cultivator' }, check: () => meta.stats && meta.stats.rescuedTotal >= 30 },
+  { id: 'xp2000', text: 'Collect 2,000 XP (total)', reward: { kind: 'commander', id: 'gunner' }, check: () => meta.stats && (meta.stats.xpTotal || 0) >= 2000 },
+  { id: 'shoot150', text: 'Shoot down 150 enemy projectiles with a Laser (total)', reward: { kind: 'commander', id: 'warden' }, check: () => meta.stats && meta.stats.shotDownTotal >= 150 },
 ];
 function achievementUnlocked(a) {
   return a.reward.kind === 'unit' ? isUnitUnlocked(a.reward.id) : isCommanderUnlocked(a.reward.id);
@@ -3484,6 +3485,10 @@ function checkRunOver() {
     // v202: final achievement check at run end (a survive-time
     // threshold crossed in the last second still counts).
     checkAchievements();
+    // v229: persist the lifetime XP total (it only lives in memory
+    // during the run; the unlock path above saves it when Gunner
+    // fires, but a run that ends short of 2,000 still banks its XP).
+    saveMeta();
     S.placing = null;
     placebanner.classList.add('hidden');
     placeswap.classList.add('hidden');
@@ -6204,6 +6209,7 @@ function update(dt) {
           S.floaters.push({ x: CIV_CHIP_CX + 30, y: CIV_CHIP_CY, t: 0 });
         } else {
           S.xp++; S.runXp = (S.runXp || 0) + 1;
+          if (meta.stats) meta.stats.xpTotal = (meta.stats.xpTotal || 0) + 1; // v229: lifetime XP total (Gunner)
           checkLevel();
         }
       }
@@ -6225,6 +6231,7 @@ function update(dt) {
           spawnBurst(px, py, '#f5b301');
         } else {
           S.xp++; S.runXp = (S.runXp || 0) + 1;
+          if (meta.stats) meta.stats.xpTotal = (meta.stats.xpTotal || 0) + 1; // v229: lifetime XP total (Gunner)
           spawnBurst(px, py, '#7dd3fc');
           checkLevel();
         }
@@ -6245,6 +6252,7 @@ function update(dt) {
           spawnBurst(c.gx, c.gy, '#f5b301');
         } else {
           S.xp++; S.runXp = (S.runXp || 0) + 1;
+          if (meta.stats) meta.stats.xpTotal = (meta.stats.xpTotal || 0) + 1; // v229: lifetime XP total (Gunner)
           spawnBurst(c.gx, c.gy, '#7dd3fc');
           checkLevel();
         }
