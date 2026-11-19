@@ -2514,7 +2514,6 @@ function findBulwarkRow(pc) {
           for (let wx = bx; wx < bx + n && ok; wx++) {
             const wi = wy * cfg.cols + wx;
             if ((S.cells[wi] !== EMPTY && !(allowRock && (S.cells[wi] === WHITE || S.cells[wi] === GREY))) ||
-                (S.ocean && S.ocean[wi]) ||
                 turretAt(wx, wy) || civilianAt(wx, wy)) ok = false;
           }
         }
@@ -2527,19 +2526,23 @@ function findBulwarkRow(pc) {
 // v219 fallback: finds a single 2x2 block below the cannon near a
 // target x (exact x first, then x±1..±5), scanning y from just
 // below the cannon downward. Accepts EMPTY or any rock (the wall
-// replaces it), never ocean, never a turret/civilian cell, and never
-// a cell that's already part of a placed wall (so the three fallback
+// replaces it), never a turret/civilian cell, and never a cell
+// that's already part of a placed wall (so the three fallback
 // walls can't overlap each other). The wide x range matters because
 // the coastline is often diagonal — the land below the cannon may
 // sit a few cells to one side. Returns {x, y} or null.
+// v228: ocean is allowed too (Sam: walls in water are fine) —
+// an ocean cell the wall lands on stops being water (placeOne
+// clears the ocean flag), so the row can sit centred under the
+// cannon even when the beach below is sea.
 // v220: last-resort fallback — finds a single 2x2 block near the
 // cannon (expanding rings), for when the beach below the cannon has
 // no room at all (e.g. the starter is on a peninsula tip with ocean
 // on three sides). Accepts EMPTY or any rock (the wall replaces it),
-// never ocean, never a turret/civilian cell, never a cell already
+// never a turret/civilian cell, never a cell already
 // part of a placed wall. Returns {x, y} or null. This guarantees
 // Bulwark gets his walls somewhere near the cannon instead of
-// starting with none.
+// starting with none. (v228: ocean allowed — see above.)
 // v225: NEVER in front of the cannon — the rings are scanned south
 // first and north of the cannon's row is skipped entirely, so a
 // wall can never land where the cannon shoots (Sam: the v220
@@ -2574,7 +2577,6 @@ function findBulwarkBlockNear(pc) {
         const wi = wy * cfg.cols + wx;
         if (wallCells.has(wi) ||
             (S.cells[wi] !== EMPTY && S.cells[wi] !== WHITE && S.cells[wi] !== GREY) ||
-            (S.ocean && S.ocean[wi]) ||
             turretAt(wx, wy) || civilianAt(wx, wy)) return false;
       }
     }
@@ -2643,7 +2645,6 @@ function findBulwarkBlockBelow(pc, targetX) {
           const wi = wy * cfg.cols + wx;
           if (wallCells.has(wi) ||
               (S.cells[wi] !== EMPTY && S.cells[wi] !== WHITE && S.cells[wi] !== GREY) ||
-              (S.ocean && S.ocean[wi]) ||
               turretAt(wx, wy) || civilianAt(wx, wy)) ok = false;
         }
       }
@@ -2677,6 +2678,10 @@ function applyCommanderStart(pc) {
           S.cells[wi] = GREY;
           S.hp[wi] = hp; S.maxhp[wi] = hp; S.shade[wi] = WALL_SHADE;
           S.growN[wi] = 0; S.growBy[wi] = 0; S.harvT[wi] = 0; S.goldNug[wi] = 0; S.popT[wi] = -1;
+          // v228: a wall placed on water stops being water — clear
+          // the ocean flag so the cell is a land wall (meteors can
+          // target it, the flood treats it as solid ground).
+          if (S.ocean) S.ocean[wi] = 0;
           if (S.noHarvest) S.noHarvest[wi] = 0;
           cellsIdx.push(wi);
         }
