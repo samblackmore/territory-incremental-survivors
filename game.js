@@ -389,6 +389,20 @@ const STAT_ICONS = {
   'cannon-rate': '<img src="assets/cards/cannon-rate.png" width="36" height="36" alt="Fire rate">',
   'cannon-pen': '<img src="assets/cards/cannon-pen.png" width="36" height="36" alt="Penetration">',
 };
+// v236: Sam's pixel-art Capacity icons — the doubled-up unit art
+// (two cannons, two fields...) from his CAPACITY UPGRADES sheet.
+// Capacity cards get their own art here, not the unit icon, so a
+// Capacity pick reads as "more of this unit" at a glance.
+const CAP_ICONS = {
+  cannon: '<img src="assets/cards/cap-cannon.png" width="36" height="36" alt="Cannon Capacity">',
+  bloom: '<img src="assets/cards/cap-bloom.png" width="36" height="36" alt="Field Capacity">',
+  gather: '<img src="assets/cards/cap-gather.png" width="36" height="36" alt="Harvester Capacity">',
+  mole: '<img src="assets/cards/cap-mole.png" width="36" height="36" alt="Digger Capacity">',
+  wall: '<img src="assets/cards/cap-wall.png" width="36" height="36" alt="Wall Capacity">',
+  laser: '<img src="assets/cards/cap-laser.png" width="36" height="36" alt="Laser Capacity">',
+  lantern: '<img src="assets/cards/cap-lantern.png" width="36" height="36" alt="Outpost Capacity">',
+  waypoint: '<img src="assets/cards/cap-waypoint.png" width="36" height="36" alt="Waypoint Capacity">',
+};
 const TURRET = {
   cannon: { name: 'Cannon', hp: 8, interval: 1.0, dmg: 1 },
   rocket: { name: 'Rocket', hp: 6, interval: 2.5, dmg: 3 },
@@ -4638,7 +4652,7 @@ function buildCardPool() { return [
   // bar as x/y. The sub names the new cap and is set in offerCards.
   ...['cannon', 'bloom', 'gather', 'wall', 'laser', 'mole', 'lantern', 'waypoint'].map(type => ({
     kind: 'capacity', weapon: type, title: ({ cannon: 'Cannon', bloom: 'Field', gather: 'Harvester', wall: 'Wall', laser: 'Laser', mole: 'Digger', lantern: 'Outpost', waypoint: 'Waypoint' })[type] + ' Capacity',
-    icon: ICONS[type],
+    icon: CAP_ICONS[type],
   })),
   // Magnet (v181): the global pull passive. Every living BLUE unit
   // pulls in the nearest pickups from anywhere on the map (v226: no
