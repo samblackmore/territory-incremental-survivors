@@ -78,19 +78,24 @@ const GATHER_COOLDOWN = 6;           // seconds between pulls (legacy interval f
 // it drives now.
 // v171 note: the pull range ring flash is gone — no circle indicator
 // on any pull. The coins still fly in.
-const MAGNET_INTERVAL_BASE = 11;    // seconds between pulls at Lv0 (10 at Lv1, 3 at Lv8, floored)
-const MAGNET_INTERVAL_STEP = 1;     // seconds shaved per level
+const MAGNET_INTERVAL_BASE = 12;    // seconds between pulls at Lv0 (10 at Lv1, 2 at Lv5+, floored)
+const MAGNET_INTERVAL_STEP = 2;     // seconds shaved per level (v234: was 1 — faster rate, count stays 1 longer)
 const MAGNET_INTERVAL_MIN = 2;      // fastest pull interval, in seconds
 function magnetLevel() { return (S.passives && S.passives.magnet) || 0; }
 function magnetIntervalAt(lv) { return Math.max(MAGNET_INTERVAL_MIN, MAGNET_INTERVAL_BASE - MAGNET_INTERVAL_STEP * lv); }
-function magnetCountAt(lv) { return lv; } // one per pull per level (1 at Lv1, 8 at Lv8)
+// v234 (Sam: 2-in-1-shot pulls came too early): count stays 1 for
+// Lv1–4, then +1 per level (Lv5 = 2, Lv8 = 5, was 8). The faster
+// interval (10s → 2s by Lv5) compensates, so the mid game is single
+// coins arriving more often instead of multi-coin bursts.
+function magnetCountAt(lv) { return lv <= 0 ? 0 : 1 + Math.max(0, lv - 4); }
 function magnetInterval() { return magnetIntervalAt(magnetLevel()); }
 function magnetCount() { return magnetCountAt(magnetLevel()); }
 // What the NEXT Magnet pick (level n+1) gives, in RELATIVE terms
 // (v184, Sam: like the other stat cards — deltas, not absolutes).
 // The interval drop shows as a % faster pull rate (rounded);
-// count is +1 on every pick (count == level). No radius any more
-// (v226: the pull is global — nearest pickups, from anywhere).
+// count is +1 only from Lv5 on (v234: count stays 1 for Lv1–4).
+// No radius any more (v226: the pull is global — nearest pickups,
+// from anywhere).
 function magnetNextEffect(n) {
   const parts = [];
   const iv0 = magnetIntervalAt(n), iv1 = magnetIntervalAt(n + 1);
