@@ -777,30 +777,6 @@ const PLACEBAR_TYPES = ['cannon', 'lantern', 'wall', 'bloom', 'mole', 'gather', 
 // teleporting all pause it for that frame; tapping CAM turns it off
 // again. Default off each first load, preserved across runs in a
 // session (see newGame). This is stage 1 only: no hard edge, no
-// abandonment, no zoom-out — just feel whether a slowly advancing
-// camera creates pressure without fighting the player.
-const AUTO_CAM_SPEED = CELL_PX * 1; // 1 cell/s, deliberately very slow
-const AUTO_CAM_MARGIN_CELLS = 3; // southernmost fixed unit sits this far above the bottom edge
-function updateAutoCam(dt) {
-  if (!S || !S.autoCam) return;
-  if (S.placing || S.teleporting) return;
-  if (typeof panning !== 'undefined' && panning) return;
-  // Fixed units only: Harvesters and Diggers wander for coins/rock and
-  // must not pin the camera south. Cannon, Laser, Field, Outpost are
-  // fixed (lantern = Outpost, bloom = Field, internal names).
-  let southY = -1;
-  for (const t of S.turrets) {
-    if (t.dead || t.color !== BLUE) continue;
-    if (t.type === 'gather' || t.type === 'mole') continue;
-    if (t.y > southY) southY = t.y;
-  }
-  if (southY < 0) return;
-  const hh = view.h / cam.zoom / 2;
-  const targetY = (southY + 0.5) * CELL_PX + AUTO_CAM_MARGIN_CELLS * CELL_PX - hh;
-  if (targetY >= cam.y) return; // north-only: never drift south
-  cam.y = Math.max(targetY, cam.y - AUTO_CAM_SPEED * dt);
-  clampCamera();
-}
 // World border (v120, kept in v122): a subtle translucent white line
 // around the map's edge, so you can tell exactly where the game world
 // stops, even through fog. In v122 the ocean is inside the map, so
@@ -2036,7 +2012,7 @@ function pickRescueSites(rng) {
       const ci = avail[k];
       used.add(ci);
       S.rescue.civilians.push({ x: ci % W, y: Math.floor(ci / W), rx: ci % W, ry: Math.floor(ci / W),
-                               moveT: 1, stepT: 0, state: 'waiting', site: siteIdx,
+                               moveT: 1, stepT: 0, state: 'waiting', site: siteIdx, hp: CIV_HP,
                                counted: false, baseX: -1, baseY: -1 });
     }
     // celebrated: set by newGame after computeFog — a site whose
@@ -2377,6 +2353,18 @@ function collectCivilian(c) {
   spawnBurst(c.x + 0.5, c.y + 0.5, CIV_PINK);
   S.coins.push({ x: c.x + 0.5, y: c.y + 0.5, state: 'fly', kind: 'civ',
                  sx: c.x + 0.5, sy: c.y + 0.5, t: 0, phase: 0, dead: false });
+}
+// v235: civilians can die. An enemy projectile hit deals its damage;
+// at 0 HP the civilian is gone (grey burst) and the run's dead count
+// rises — the HUD tombstone chip appears under the rescued counter.
+// Already-dead civilians ignore further hits (no double count).
+function damageCivilian(c, dmg) {
+  if (!c || c.state === 'dead' || c.state === 'collected') return;
+  c.hp = (c.hp === undefined ? CIV_HP : c.hp) - (dmg || 1);
+  if (c.hp > 0) return;
+  c.state = 'dead';
+  if (S.rescue) S.rescue.dead = (S.rescue.dead || 0) + 1;
+  spawnBurst(c.x + 0.5, c.y + 0.5, '#9ca3af');
 }
 // axis with the larger gap (dirs: 0 up, 1 right, 2 down, 3 left). This is
 // how red moles encroach instead of wandering.
@@ -2770,7 +2758,6 @@ function applyCommanderStart(pc) {
 function newGame() {
   // Bank the previous run's gold into the outer total.
   let banked = 0;
-  const prevAutoCam = !!(S && S.autoCam); // v153: CAM toggle persists across runs in a session
   if (S && S.gold > 0) {
     banked = S.gold;
     meta.gold += banked;
@@ -2806,7 +2793,7 @@ function newGame() {
   const shade = new Uint8Array(n); // Perlin shade index (0..7) for empty cells — visual only
   const goldNug = new Uint8Array(n); // 1 = gold nugget locked in this rock cell
   S = { cells, hp, maxhp, hitBy, popT, popAmp, popCol, popDX, popDY, projs: [], xp: 0, level: 1, pending: 0,
-        freqMult: 1, paused: false, frame: 0, seed, shade, goldNug, autoCam: prevAutoCam,
+        freqMult: 1, paused: false, frame: 0, seed, shade, goldNug,
         // v154: which placement types are in the bottom bar. Start
         // unlocked is Cannon only (v156, if enabled on the start
         // screen); the rest join when an XP unlock card is picked.
@@ -2863,7 +2850,7 @@ function newGame() {
         // rescue (survival only, populated by pickRescueSites below):
         // sites = anchor cells for the minimap ?, civilians walk home.
         // byBiome = spawn totals per biome (for the discovery message).
-        rescue: { sites: [], civilians: [], rescued: 0, total: 0, byBiome: {} },
+        rescue: { sites: [], civilians: [], rescued: 0, dead: 0, total: 0, byBiome: {} },
         // Rescue discovery celebration (v177): camera lerp + overlay
         // while a site is being celebrated; null otherwise.
         rescueCeleb: null,
@@ -3350,7 +3337,6 @@ function newGame() {
   placebanner.classList.add('hidden');
   placeswap.classList.add('hidden');
   wavebanner.classList.add('hidden');
-  if (typeof syncCamBtn === 'function') syncCamBtn(); // v153: CAM button reflects preserved toggle
   updateHud();
 }
 
@@ -3637,6 +3623,7 @@ const BIOME_NAMES = { dirt: 'Dirt', mountain: 'Mountain', grass: 'Grass', desert
 const CIV_MIN = 1;
 const CIV_MAX = 5;
 const CIV_STEP_DUR = 1.0; // seconds per civilian step — slow on purpose, like Harvester
+const CIV_HP = 3; // v235: civilians can die — enemy projectiles hit them, 3 HP each
 const CIV_PINK = '#f472b6'; // civilian blob + minimap ? + rescue burst, one pink everywhere
 const CIV_SETTLE_RADIUS = 2; // Manhattan distance from a base at which a civilian is collected (v113: settle spot; v165: collection trigger — same spot, the civilian flies away instead of staying)
 // Meteor shower (v116, v126 interval doubled in frequency): a periodic reshuffling event to liven up the
@@ -4388,6 +4375,17 @@ function stepProjectile(p, dt) {
       damageTurret(t, p.dmg || 1, p.color);
       spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[p.color]);
       p.dead = true; return;
+    }
+    // Civilians (v235): enemy (RED) projectiles can hit them — a
+    // civilian has CIV_HP (3) and the shot dies on the hit, like a
+    // turret hit. Friendly (BLUE) shots never hurt civilians.
+    if (p.color === RED && SURVIVAL && S.rescue && S.rescue.civilians) {
+      const civ = S.rescue.civilians.find(c => c.state !== 'dead' && c.state !== 'collected' && c.x === cx && c.y === cy);
+      if (civ) {
+        damageCivilian(civ, p.dmg || 1);
+        spawnBurst(cx + 0.5, cy + 0.5, CIV_PINK);
+        p.dead = true; return;
+      }
     }
     const idx = cy * cfg.cols + cx;
     const cell = S.cells[idx];
@@ -5813,7 +5811,6 @@ function updateSparkles(dt) {
   S.sparkles = S.sparkles.filter(s => s.t < s.life);
 }
 function update(dt) {
-  updateAutoCam(dt); // v153 try-it: slow north-only follow, toggleable, never south/zoom/death
   updateUnlockFlies(dt); // v174: card -> bar icon flight after an unlock pick
   // v202: achievements, checked once a second (the survive-time and
   // per-run totals only change on a clock; rescue/laser events call
@@ -6057,9 +6054,11 @@ function update(dt) {
   // settled-block-placement anymore — a collected cell is free ground
   // again. Resource seeking is gone too (v136 reverted): a civilian
   // never goes out of its way for a pickup, it only banks what is on
-  // the cell it happens to stand on. No death.
+  // the cell it happens to stand on. Death (v235): enemy projectiles
+  // can hit them (CIV_HP 3); the dead are filtered out below.
   if (SURVIVAL && S.rescue && S.rescue.civilians) {
     for (const c of S.rescue.civilians) {
+      if (c.state === 'dead') continue; // v235: dead until the filter below removes it — never walks or collects
       if (c.rx !== undefined) c.moveT += dt; // glide clock, like turrets
       c.stepT = (c.stepT || 0) + dt;
       if (c.stepT < CIV_STEP_DUR) continue;
@@ -6086,8 +6085,9 @@ function update(dt) {
       // Arrived on a free spot? Collect immediately (no extra second).
       if (civilianSettleBase(c.x, c.y, c)) collectCivilian(c);
     }
-    // Collected civilians are flying to the counter, not on the map.
-    S.rescue.civilians = S.rescue.civilians.filter(c => c.state !== 'collected');
+    // Collected civilians are flying to the counter, not on the map;
+    // dead civilians (v235) are gone too.
+    S.rescue.civilians = S.rescue.civilians.filter(c => c.state !== 'collected' && c.state !== 'dead');
   }
   for (const p of S.projs) stepProjectile(p, dt);
   if (S.projs.length > 4000) S.projs.splice(0, S.projs.length - 4000); // safety valve
@@ -7046,10 +7046,38 @@ function render() {
     ctx.textBaseline = 'middle';
     ctx.fillText('× ' + (S.rescue ? S.rescue.rescued : 0), CIV_CHIP_CX - chw / 2 + 26, CIV_CHIP_CY + 1);
     ctx.restore();
+    // Dead-civilian counter chip (v235): directly under the rescued
+    // chip, same size and style, grey tombstone instead of a pink
+    // dot. Only appears once a civilian dies (dead > 0) — before
+    // that the space stays empty.
+    if (S.rescue && (S.rescue.dead || 0) > 0) {
+      const dcx = CIV_CHIP_CX, dcy = CIV_CHIP_CY + 32;
+      ctx.fillStyle = 'rgba(10, 13, 22, 0.85)';
+      rr(dcx - chw / 2, dcy - chh / 2, chw, chh, 8); ctx.fill();
+      ctx.lineWidth = 1.5; ctx.strokeStyle = '#2a3145';
+      rr(dcx - chw / 2, dcy - chh / 2, chw, chh, 8); ctx.stroke();
+      // Little grey tombstone: rounded-top headstone, ~10 wide.
+      const tx = dcx - chw / 2 + 14, ty = dcy;
+      ctx.beginPath();
+      ctx.moveTo(tx - 5, ty + 6);
+      ctx.lineTo(tx - 5, ty - 1);
+      ctx.arc(tx, ty - 1, 5, Math.PI, 0);
+      ctx.lineTo(tx + 5, ty + 6);
+      ctx.closePath();
+      ctx.fillStyle = '#9ca3af'; ctx.fill();
+      ctx.lineWidth = 1.5; ctx.strokeStyle = '#4b5563'; ctx.stroke();
+      ctx.fillStyle = '#dfe5f2';
+      ctx.font = 'bold 13px system-ui, sans-serif';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('× ' + S.rescue.dead, dcx - chw / 2 + 26, dcy + 1);
+    }
   }
   // Stat chips start under the gold chip (no passive badges anymore —
   // Bounce removed v106, Penetration is a stat row, not a badge).
-  let ppy = CHIP_CY + 32;
+  // v235: when the dead-civilian chip is showing (directly under the
+  // rescued chip, same row as the first stat row), the stat column
+  // starts one row lower so nothing overlaps.
+  let ppy = CHIP_CY + 32 + ((SURVIVAL && S.rescue && (S.rescue.dead || 0) > 0) ? 32 : 0);
   // Stat chips, top-left: one row per owned weapon stat. Each row: weapon
   // icon + 4-letter stat label + chips (gold filled / dark empty). This
   // is the progress bar you watch climb — one chip per stat pick.
@@ -7529,21 +7557,6 @@ if (fsbtn) {
   fsbtn.addEventListener('click', () => {
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     else document.documentElement.requestFullscreen().catch(() => {});
-  });
-}
-
-// ---- Auto camera toggle (v153 try-it): one tap, gold when on, off again on tap.
-// Persists across runs in a session via S.autoCam in newGame; default off.
-const cambtn = document.getElementById('cambtn');
-function syncCamBtn() {
-  if (!cambtn) return;
-  if (S && S.autoCam) cambtn.classList.add('on'); else cambtn.classList.remove('on');
-}
-if (cambtn) {
-  cambtn.addEventListener('click', () => {
-    if (!S) return;
-    S.autoCam = !S.autoCam;
-    syncCamBtn();
   });
 }
 
