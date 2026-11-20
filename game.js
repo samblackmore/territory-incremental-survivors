@@ -352,8 +352,8 @@ const ICONS_ORIG = {
   wall: '<img src="assets/cards/wall.png" width="36" height="36" alt="Wall">',
   steer: '<svg viewBox="0 0 24 24" width="36" height="36"><polygon points="20,12 12,8 12,16" fill="#ef4444"/><rect x="6" y="9.5" width="7" height="5" fill="#ef4444"/></svg>',
   mole: '<img src="assets/cards/mole.png" width="36" height="36" alt="Digger">',
-  gold: '<svg viewBox="0 0 24 24" width="36" height="36"><path d="M12 9 C8 9 5.5 12 5.5 15.5 C5.5 19 8.5 21.5 12 21.5 C15.5 21.5 18.5 19 18.5 15.5 C18.5 12 16 9 12 9 Z" fill="#f5b301" stroke="#b8860b" stroke-width="1.5"/><rect x="10.5" y="3.5" width="3" height="5.5" rx="1" fill="#b8860b"/></svg>',
-  teleport: '<svg viewBox="0 0 24 24" width="36" height="36"><path d="M4 18 C4 8 20 8 20 18" fill="none" stroke="#ef4444" stroke-width="2.5"/><polygon points="20,18 16.5,15.5 17.5,19.5" fill="#ef4444"/><circle cx="4" cy="18" r="2.5" fill="#ef4444"/></svg>',
+  gold: '<img src="assets/cards/gold.png" width="36" height="36" alt="Gold Ore">',
+  teleport: '<img src="assets/cards/teleport.png" width="36" height="36" alt="Teleport">',
   waypoint: '<img src="assets/cards/waypoint.png" width="36" height="36" alt="Waypoint">',
   // Evo icons (v115): same flat SVG style, player color via buildIcons.
   // Sprayer = spray fan (origin dot + 3 fanning lines); Painter =
@@ -363,8 +363,8 @@ const ICONS_ORIG = {
   // only when you reach the Evo, not on the base stat card).
   evoSpray: '<svg viewBox="0 0 24 24" width="36" height="36"><circle cx="6" cy="12" r="2.5" fill="#ef4444"/><path d="M9 10 L19 5 M9 12 L20 12 M9 14 L19 19" stroke="#ef4444" stroke-width="2.5" stroke-linecap="round" fill="none"/></svg>',
   evoPaint: '<svg viewBox="0 0 24 24" width="36" height="36"><path d="M12 3 L14 7 L19 6 L17 11 L21 13 L16 15 L18 20 L12 17 L6 20 L8 15 L3 13 L7 11 L5 6 L10 7 Z" fill="#ef4444"/><circle cx="20" cy="4" r="1.5" fill="#ef4444"/><circle cx="4" cy="19" r="1.2" fill="#ef4444"/></svg>',
-  // Magnet (v181): horseshoe magnet — U body in team color, pale pole tips.
-  magnet: '<svg viewBox="0 0 24 24" width="36" height="36"><path d="M6 3 h4 v8 a2 2 0 0 0 4 0 V3 h4 v8 a6 6 0 0 1 -12 0 Z" fill="#ef4444"/><rect x="6" y="3" width="4" height="3.5" fill="#f5f5f5"/><rect x="14" y="3" width="4" height="3.5" fill="#f5f5f5"/></svg>',
+  // Magnet (v181): horseshoe magnet — v233: Sam's pixel art replaces the SVG.
+  magnet: '<img src="assets/cards/magnet.png" width="36" height="36" alt="Magnet">',
 };
 function buildIcons(playerHex) {
   const o = {};
