@@ -279,9 +279,11 @@
     }
     /* v214 (Sam): on phones a 4-card deal is always 2x2, never 3+1
        (which flex-wrap gives on wider phones). A 2-column grid
-       guarantees it; desktop keeps the 4-in-a-row flex row. The
-       commander bonus screen (2 cards) is 1 row of 2 either way. */
-    #levelup .cardrow, #cmdbonus .cardrow { display: grid; grid-template-columns: repeat(2, 130px); justify-content: center; }
+       guarantees it; desktop keeps the 4-in-a-row flex row.
+       v232: cmdbonus is a single centred card now, so it stays flex
+       (its own rule below) and is NOT in this grid. */
+    #levelup .cardrow { display: grid; grid-template-columns: repeat(2, 130px); justify-content: center; }
+    #cmdbonus .cardrow { display: flex; justify-content: center; }
     .card { width: 130px; height: 200px; }
   }
   #debug h2 {
@@ -578,6 +580,13 @@
   #cmdbonus-portrait { margin-bottom: 8px; }
   #cmdbonus-portrait img { width: 96px; height: auto; image-rendering: pixelated; }
   #cmdbonus-sub { color: var(--text); opacity: .85; font-size: 15px; margin: 0 0 18px; }
+  /* v232: the bonus screen has one centred Teleport card (the base
+     .cardrow flex already centres a single card). Skip is a small
+     muted text button underneath, not a card — it kept getting tapped
+     by mistake as if it were an upgrade. */
+  #cmdbonus .cardrow { display: flex; justify-content: center; }
+  #cmdbonus-skip { margin-top: 18px; background: none; border: none; color: var(--muted); font-size: 13px; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+  #cmdbonus-skip:hover { color: var(--text); }
   #charscreen {
     position: fixed; inset: 0;
     background: rgba(5, 8, 15, 0.92);
@@ -876,7 +885,9 @@
 
 <!-- v204: commander bonus — dedicated screen after the level-up, for
      the Scout's every-3-levels bonus Teleport. Shows the commander
-     avatar + bonus text, and exactly two cards: Teleport or Skip. -->
+     avatar + bonus text, one centred Teleport card, and a small Skip
+     button underneath (v232: Skip was a full card and Sam kept tapping
+     it by mistake, thinking it was an upgrade). -->
 <div id="cmdbonus" class="hidden">
   <div class="cards">
     <div id="cmdbonus-portrait"></div>
@@ -884,8 +895,8 @@
     <div id="cmdbonus-sub"></div>
     <div class="cardrow">
       <button class="card" id="cmdbonus-teleport"></button>
-      <button class="card" id="cmdbonus-skip"></button>
     </div>
+    <button id="cmdbonus-skip" class="skipbtn">Skip</button>
   </div>
 </div>
 
@@ -917,6 +928,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=231"></script>
+<script src="game.js?v=232"></script>
 </body>
 </html>

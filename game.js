@@ -4999,8 +4999,9 @@ function showCommanderBonus() {
     if (sub) sub.textContent = (cmd ? cmd.name : 'Scout') + ' — gets an extra Teleport every 3 levels.';
     const tp = document.getElementById('cmdbonus-teleport');
     if (tp) { tp.innerHTML = `<div class="icon">${ICONS.teleport}</div><b>Teleport</b><span>Move a Cannon to a new spot.</span>`; tp.classList.add('dealt'); }
-    const sk = document.getElementById('cmdbonus-skip');
-    if (sk) { sk.innerHTML = `<b>Skip</b><span>Skip the bonus and keep playing.</span>`; sk.classList.add('dealt'); }
+    // v232: Skip is a small text button in the HTML now (not a card),
+    // so there is nothing to deal here — its click handler below just
+    // hides the overlay and resumes the game.
     document.getElementById('cmdbonus').classList.remove('hidden');
     return true;
   } catch (e) { return false; }
@@ -7879,7 +7880,8 @@ document.getElementById('resetconfirm-no').addEventListener('click', () => {
 });
 // v204: commander bonus screen — Teleport enters teleport mode (same
 // as the XP-screen Teleport card; the game stays paused until the
-// move completes); Skip closes the screen and resumes the game.
+// move completes); Skip (v232: a small text button under the card,
+// not a card itself) closes the screen and resumes the game.
 document.getElementById('cmdbonus-teleport').addEventListener('click', () => {
   try { document.getElementById('cmdbonus').classList.add('hidden'); } catch (e) {}
   enterTeleport();
