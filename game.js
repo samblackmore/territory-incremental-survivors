@@ -345,16 +345,16 @@ function redMoleCost() {
 const ICONS_ORIG = {
   cannon: '<svg viewBox="0 0 24 24" width="36" height="36"><polygon points="20,6 8,18 20,18" fill="#ef4444"/></svg>',
   rocket: '<svg viewBox="0 0 24 24" width="36" height="36"><polygon points="20,12 12,8 12,16" fill="#ef4444"/><rect x="6" y="9.5" width="7" height="5" fill="#ef4444"/></svg>',
-  laser: '<svg viewBox="0 0 24 24" width="36" height="36"><polygon points="12,5 17,12 12,19 7,12" fill="#ef4444"/></svg>',
-  bloom: '<svg viewBox="0 0 24 24" width="36" height="36"><circle cx="12" cy="12" r="5.5" fill="#ef4444"/></svg>',
-  lantern: '<svg viewBox="0 0 24 24" width="36" height="36"><rect x="7" y="6" width="10" height="12" fill="none" stroke="#ef4444" stroke-width="1.5"/><circle cx="12" cy="12" r="2.5" fill="#fef3c7"/></svg>',
-  gather: '<svg viewBox="0 0 24 24" width="36" height="36"><path d="M7,6 A5,5 0 0,0 17,6" stroke="#ef4444" stroke-width="2.5" fill="none"/><circle cx="7" cy="15.5" r="1.8" fill="#ef4444"/><circle cx="17" cy="15.5" r="1.8" fill="#ef4444"/><circle cx="12" cy="12" r="2" fill="#ef4444"/></svg>',
-  wall: '<svg viewBox="0 0 24 24" width="36" height="36"><rect x="4" y="6" width="16" height="12" fill="#9ca3af" stroke="#4b5563" stroke-width="1.5"/><line x1="12" y1="6" x2="12" y2="18" stroke="#4b5563" stroke-width="1"/><line x1="4" y1="12" x2="20" y2="12" stroke="#4b5563" stroke-width="1"/></svg>',
+  laser: '<img src="assets/cards/laser.png" width="36" height="36" alt="Laser">',
+  bloom: '<img src="assets/cards/bloom.png" width="36" height="36" alt="Field">',
+  lantern: '<img src="assets/cards/lantern.png" width="36" height="36" alt="Outpost">',
+  gather: '<img src="assets/cards/gather.png" width="36" height="36" alt="Harvester">',
+  wall: '<img src="assets/cards/wall.png" width="36" height="36" alt="Wall">',
   steer: '<svg viewBox="0 0 24 24" width="36" height="36"><polygon points="20,12 12,8 12,16" fill="#ef4444"/><rect x="6" y="9.5" width="7" height="5" fill="#ef4444"/></svg>',
-  mole: '<svg viewBox="0 0 24 24" width="36" height="36"><ellipse cx="12" cy="14" rx="7" ry="5" fill="#8b5a2b"/><circle cx="9" cy="12" r="1.2" fill="#1a2138"/><circle cx="15" cy="12" r="1.2" fill="#1a2138"/><polygon points="12,16 10,19 14,19" fill="#d4a574"/></svg>',
+  mole: '<img src="assets/cards/mole.png" width="36" height="36" alt="Digger">',
   gold: '<svg viewBox="0 0 24 24" width="36" height="36"><path d="M12 9 C8 9 5.5 12 5.5 15.5 C5.5 19 8.5 21.5 12 21.5 C15.5 21.5 18.5 19 18.5 15.5 C18.5 12 16 9 12 9 Z" fill="#f5b301" stroke="#b8860b" stroke-width="1.5"/><rect x="10.5" y="3.5" width="3" height="5.5" rx="1" fill="#b8860b"/></svg>',
   teleport: '<svg viewBox="0 0 24 24" width="36" height="36"><path d="M4 18 C4 8 20 8 20 18" fill="none" stroke="#ef4444" stroke-width="2.5"/><polygon points="20,18 16.5,15.5 17.5,19.5" fill="#ef4444"/><circle cx="4" cy="18" r="2.5" fill="#ef4444"/></svg>',
-  waypoint: '<svg viewBox="0 0 24 24" width="36" height="36"><circle cx="12" cy="12" r="8" fill="none" stroke="#ef4444" stroke-width="2"/><circle cx="12" cy="12" r="2.5" fill="#ef4444"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4" stroke="#ef4444" stroke-width="2"/></svg>',
+  waypoint: '<img src="assets/cards/waypoint.png" width="36" height="36" alt="Waypoint">',
   // Evo icons (v115): same flat SVG style, player color via buildIcons.
   // Sprayer = spray fan (origin dot + 3 fanning lines); Painter =
   // paint splash (filled starburst blob + droplets). Used on the Evo
@@ -372,6 +372,18 @@ function buildIcons(playerHex) {
   return o;
 }
 let ICONS = buildIcons('#ef4444');
+// v230: Sam's pixel-art card icons (assets/cards/, cropped from his
+// sheet and padded to a common 266x266 square). The 7 unit icons above
+// live in ICONS_ORIG so they flow everywhere the unit icon is used
+// (level-up cards, place bar, Armory, weapon list). The 4 Cannon stat
+// cards get their own art here — stat cards otherwise reuse the
+// weapon icon (ICONS[weapon]), which is what the other units do.
+const STAT_ICONS = {
+  'cannon-dmg': '<img src="assets/cards/cannon-dmg.png" width="36" height="36" alt="Damage">',
+  'cannon-proj': '<img src="assets/cards/cannon-proj.png" width="36" height="36" alt="Projectiles">',
+  'cannon-rate': '<img src="assets/cards/cannon-rate.png" width="36" height="36" alt="Fire rate">',
+  'cannon-pen': '<img src="assets/cards/cannon-pen.png" width="36" height="36" alt="Penetration">',
+};
 const TURRET = {
   cannon: { name: 'Cannon', hp: 8, interval: 1.0, dmg: 1 },
   rocket: { name: 'Rocket', hp: 6, interval: 2.5, dmg: 3 },
@@ -4613,7 +4625,7 @@ function buildCardPool() { return [
   ...['cannon', 'bloom', 'gather', 'wall', 'laser', 'mole'].flatMap(weapon =>
     STAT_DEFS[weapon].filter(d => !d.shopOnly || SURVIVAL).map(d => ({
       kind: 'stat', weapon, stat: d.key, cap: d.cap,
-      title: d.name, icon: ICONS[weapon], effect: d.effect,
+      title: d.name, icon: STAT_ICONS[weapon + '-' + d.key] || ICONS[weapon], effect: d.effect,
     }))),
   // v201: Capacity cards — one per unit type, raising that type's
   // hard cap (see UNIT_CAP). Gated in availableCards on owning the

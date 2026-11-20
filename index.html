@@ -137,6 +137,7 @@
     padding: 4px 0;
   }
   .placebtn svg { width: 26px; height: 26px; }
+  .placebtn img { width: 26px; height: 26px; image-rendering: pixelated; }
   .placebtn .pcost { font-size: 11px; font-weight: bold; color: #ffd75e; }
   .placebtn .pcount { font-size: 10px; color: #9ca3af; }
   .placebtn.unaffordable { opacity: 0.45; }
@@ -470,6 +471,7 @@
   .weapon.locked { opacity: 0.65; }
   .weapon .wicon { flex-shrink: 0; display: flex; align-items: center; }
   .weapon .wicon svg { width: 36px; height: 36px; }
+  .weapon .wicon img { width: 36px; height: 36px; image-rendering: pixelated; }
   .weapon .winfo { flex: 1; min-width: 0; }
   .weapon .wname { font-weight: bold; font-size: 16px; }
   .weapon .wdesc { color: var(--muted); font-size: 13px; }
@@ -528,6 +530,7 @@
   .card:hover { transform: translateY(-6px); box-shadow: 0 10px 30px rgba(59,130,246,.35); }
   .card .icon { font-size: 28px; line-height: 1; }
   .card .icon svg { width: 28px; height: 28px; }
+  .card .icon img { width: 28px; height: 28px; image-rendering: pixelated; }
   .card b { font-size: 15px; color: #7db4ff; text-align: center; }
   .card b .lv { color: #fff; }
   .card span { color: var(--muted); font-size: 10px; letter-spacing: .05em; text-transform: uppercase; text-align: center; }
@@ -913,6 +916,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=229"></script>
+<script src="game.js?v=230"></script>
 </body>
 </html>
