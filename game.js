@@ -1016,8 +1016,8 @@ const BROWN_GOLD_CHANCE = 0.1; // regular brown rock: 10% gold on break (BLUE on
 // rings are never broken: the ocean ring is a continuous edge loop,
 // so the whole coast is one connected component (the starter's home
 // component for pickRescueSites).
-const COAST_MIN_DEPTH = 10; // fixed border: min total coast depth per edge, in cells
-const COAST_MAX_DEPTH = 20; // fixed border: max total coast depth per edge, in cells
+const COAST_MIN_DEPTH = 6; // v238 (Sam): try wider coast swings — same midpoint (15), so the average beach is unchanged, but jagged variants show up more often
+const COAST_MAX_DEPTH = 24; // v238: was 10–20; bottom ocean is 4 + 3x(depth - 4), so it swings 10–64 rows (was 22–52) at the same 37-row average
 const COAST_SAND_CELLS = 2; // sand layer thickness, fixed (thin)
 const COAST_GRASS_CELLS = 2; // grass layer thickness, fixed (thin)
 const COAST_SEED_OFFSET = 77777; // own RNG stream: island generation (caves/noise/grey/nuggets) is untouched for a given seed
