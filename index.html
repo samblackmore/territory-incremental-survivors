@@ -476,6 +476,38 @@
     background: #ffd75e; color: #1a2138; border: none; border-radius: 8px;
     padding: 12px 36px; font-size: 18px; font-weight: bold; cursor: pointer;
   }
+  /* v237: pause button (fixed pill above the fullscreen button) and
+     pause overlay (same panel as the reset confirm, neutral heading). */
+  #pausebtn {
+    position: fixed;
+    right: 12px; bottom: 104px;
+    z-index: 7;
+    padding: 10px 14px;
+    background: var(--panel);
+    border: 1px solid #2a3145;
+    border-radius: 999px;
+    color: var(--accent);
+    font-size: 16px;
+    cursor: pointer;
+    box-shadow: 0 4px 16px rgba(0,0,0,.4);
+  }
+  #pauseoverlay {
+    position: fixed; inset: 0; z-index: 30;
+    background: rgba(5, 8, 15, 0.8);
+    display: flex; align-items: center; justify-content: center;
+  }
+  #pauseoverlay.hidden { display: none; }
+  #pauseoverlay h3 { color: var(--text); }
+  #pause-resume { background: #3b82f6; color: #fff; border: none; border-radius: 8px; padding: 10px 18px; font-size: 15px; cursor: pointer; }
+  #pause-savequit { background: #232c47; color: var(--text); border: 1px solid #2a3352; border-radius: 8px; padding: 10px 18px; font-size: 15px; cursor: pointer; }
+  /* v237: Continue — same shape as Start Run, secondary colour, only
+     shown when a save exists. */
+  #contbtn {
+    background: #3b82f6; color: #fff; border: none; border-radius: 8px;
+    padding: 12px 36px; font-size: 18px; font-weight: bold; cursor: pointer;
+    margin-right: 10px;
+  }
+  #contbtn.hidden { display: none; }
   #clearbtn {
     position: absolute; top: 14px; right: 16px;
     background: none; color: var(--muted); border: none; cursor: pointer;
@@ -539,6 +571,11 @@
   }
   /* v204: armory list (start screen) and character select. */
   #armory-list { text-align: left; margin: 4px auto 0; max-width: 480px; }
+  /* v237: lifetime totals row under the title — small muted chips,
+     one per total that gates an unlock, so progress is visible
+     before you start a run. */
+  #lifetime-totals { display: flex; flex-wrap: wrap; gap: 6px 14px; justify-content: center; margin: 2px auto 0; max-width: 480px; font-size: 12px; color: #8a93a8; }
+  #lifetime-totals b { color: #dfe5f2; font-weight: 700; }
   .armory { display: flex; align-items: center; gap: 10px; padding: 5px 10px; border-bottom: 1px solid #1e2536; font-size: 13px; }
   .armory .aicon { flex: 0 0 24px; text-align: center; color: #ffd75e; font-weight: bold; }
   .armory .aicon img { width: 24px; height: auto; vertical-align: middle; image-rendering: pixelated; }
@@ -688,6 +725,7 @@
 <div id="layout">
   <button id="debug-toggle">&lt;&gt;</button>
   <button id="fsbtn" title="Fullscreen">⛶</button>
+  <button id="pausebtn" title="Pause">❚❚</button>
   <div id="placebar">
     <button class="placebtn" id="pb-cannon" data-type="cannon" title="Cannon"></button>
     <button class="placebtn" id="pb-lantern" data-type="lantern" title="Outpost"></button>
@@ -791,6 +829,9 @@
   </button>
   <div class="startpanel">
     <h2>Territory</h2>
+    <!-- v237: lifetime totals — every total that gates an unlock, so
+         progress is visible before you start a run. -->
+    <div id="lifetime-totals"></div>
     <!-- v204: Armory — the unlock collection (was "Missions"). Each
          row names the unit/commander; locked rows show the unlock
          condition and ???, unlocked rows show the description and icon. -->
@@ -816,6 +857,7 @@
       <button id="perma-rate" class="permabtn"></button>
     </div>
     <button id="perma-reset">Reset all perma upgrades</button>
+    <button id="contbtn" class="hidden">Continue</button>
     <button id="startbtn">Start Run</button>
     <div id="buildver"></div>
   </div>
@@ -829,6 +871,17 @@
     <div class="row">
       <button id="resetconfirm-yes">Reset</button>
       <button id="resetconfirm-no">Cancel</button>
+    </div>
+  </div>
+</div>
+<!-- v237: pause overlay — Resume, or Save & Quit back to the start screen. -->
+<div id="pauseoverlay" class="hidden">
+  <div class="resetconfirm-panel">
+    <h3>Paused</h3>
+    <p>The run autosaves every 30 seconds. Save &amp; Quit writes it right now and returns to the start screen — Continue picks it back up.</p>
+    <div class="row">
+      <button id="pause-resume">Resume</button>
+      <button id="pause-savequit">Save &amp; Quit</button>
     </div>
   </div>
 </div>
@@ -912,6 +965,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=236"></script>
+<script src="game.js?v=237"></script>
 </body>
 </html>

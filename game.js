@@ -1450,10 +1450,14 @@ const meta = { gold: 0, unlocks: { cannon: true, gather: false, mole: false, blo
   // achievements, persistent across runs. A fresh player has only
   // the Cannon and the Scout; the other 7 units and 4 commanders
   // start locked. stats are cumulative across runs (for the
-  // total-based achievements).
+  // total-based achievements). v237 adds goldTotal + rockTotal
+  // (lifetime earned totals, never spent — meta.gold is the
+  // spendable bank), longestRun (best survival time, for the
+  // survive-condition progress) and bestDirt (most Dirt camps
+  // celebrated in one run, for the Waypoint progress).
   units: { cannon: true, lantern: false, wall: false, bloom: false, mole: false, gather: false, laser: false, waypoint: false },
   commanders: { scout: true, bulwark: false, cultivator: false, gunner: false, warden: false },
-  stats: { rescuedTotal: 0, shotDownTotal: 0, xpTotal: 0 } };
+  stats: { rescuedTotal: 0, shotDownTotal: 0, xpTotal: 0, goldTotal: 0, rockTotal: 0, longestRun: 0, bestDirt: 0 } };
 function loadMeta() {
   try {
     const m = JSON.parse(localStorage.getItem('tis_meta'));
@@ -1471,6 +1475,10 @@ function loadMeta() {
       if (typeof m.stats.rescuedTotal === 'number') meta.stats.rescuedTotal = Math.max(0, m.stats.rescuedTotal | 0);
       if (typeof m.stats.shotDownTotal === 'number') meta.stats.shotDownTotal = Math.max(0, m.stats.shotDownTotal | 0);
       if (typeof m.stats.xpTotal === 'number') meta.stats.xpTotal = Math.max(0, m.stats.xpTotal | 0);
+      if (typeof m.stats.goldTotal === 'number') meta.stats.goldTotal = Math.max(0, m.stats.goldTotal | 0);
+      if (typeof m.stats.rockTotal === 'number') meta.stats.rockTotal = Math.max(0, m.stats.rockTotal | 0);
+      if (typeof m.stats.longestRun === 'number') meta.stats.longestRun = Math.max(0, m.stats.longestRun | 0);
+      if (typeof m.stats.bestDirt === 'number') meta.stats.bestDirt = Math.max(0, Math.min(3, m.stats.bestDirt | 0));
     }
   } catch (e) { /* fresh save */ }
 }
@@ -1489,9 +1497,188 @@ function resetMeta() {
   meta.enabled = {};
   meta.units = { cannon: true, lantern: false, wall: false, bloom: false, mole: false, gather: false, laser: false, waypoint: false };
   meta.commanders = { scout: true, bulwark: false, cultivator: false, gunner: false, warden: false };
-  meta.stats = { rescuedTotal: 0, shotDownTotal: 0, xpTotal: 0 };
+  meta.stats = { rescuedTotal: 0, shotDownTotal: 0, xpTotal: 0, goldTotal: 0, rockTotal: 0, longestRun: 0, bestDirt: 0 };
   saveMeta();
+  deleteSave(); // v237: resetting all progress also wipes the run save
   renderStartScreen();
+}
+// ---- v237: Run saves (one slot, localStorage) --------------------
+// Into the Breach model: one save slot, autosave during clean play,
+// Save & Quit from the pause menu, Continue on the start screen.
+// Saved: the full map (per-cell arrays as base64, ~300KB of the 5MB
+// localStorage limit), turrets, wall blocks, waypoints, gold/XP/
+// level/run time, weapons/capacity/passives, per-run achievement
+// stats, rescue state, meteor + flood timers, the camera. Dropped:
+// projectiles in flight, particles, sparkles, camera momentum —
+// nothing the player can lose progress from. Flying pickups are
+// settled at save time (granted instantly), so nothing is lost —
+// including a 'civ' fly coin, whose rescue counts on arrival. Fog
+// is NOT saved: it is recomputed from turret positions on load.
+// The format carries a version number; a save from another format
+// version is rejected cleanly (Continue simply doesn't appear).
+// Saving is only allowed during clean play — never mid-level-up,
+// mid-placement, mid-teleport, mid-celebration, or after run over.
+const SAVE_KEY = 'tis_save_v1';
+const SAVE_FORMAT = 1;
+const AUTOSAVE_EVERY = 30; // seconds of play between autosaves
+function u8ToB64(u8) {
+  let s = '';
+  for (let i = 0; i < u8.length; i += 8192) s += String.fromCharCode.apply(null, u8.subarray(i, i + 8192));
+  return btoa(s);
+}
+function b64ToU8(b) {
+  const s = atob(b);
+  const u8 = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) u8[i] = s.charCodeAt(i);
+  return u8;
+}
+const f32ToB64 = f32 => u8ToB64(new Uint8Array(f32.buffer, f32.byteOffset, f32.byteLength));
+const b64ToF32 = b => new Float32Array(b64ToU8(b).buffer);
+function canSave() {
+  if (!S || S.runOver || S.awaitingLevel || S.placing || S.teleporting || S.rescueCeleb) return false;
+  try {
+    if (overlay && !overlay.classList.contains('hidden')) return false; // level-up open
+    const cb = document.getElementById('cmdbonus');
+    if (cb && !cb.classList.contains('hidden')) return false; // commander bonus open
+  } catch (e) {}
+  return true;
+}
+// Grant every in-flight pickup now, so a save never loses one: gold
+// and XP tick their run + lifetime totals, a 'civ' coin counts its
+// rescue on the spot (the normal path counts on arrival at the chip).
+// No achievement/level checks here — those run on their own clocks
+// during play and pick up any newly-met condition after resume.
+function settleFlyCoins() {
+  if (!S || !S.coins) return;
+  for (const c of S.coins) {
+    if (c.state === 'idle') continue;
+    if (c.kind === 'gold') {
+      S.gold++; S.runGold = (S.runGold || 0) + 1;
+      if (meta.stats) meta.stats.goldTotal = (meta.stats.goldTotal || 0) + 1;
+    } else if (c.kind === 'civ') {
+      if (S.rescue) { S.rescue.rescued++; if (meta.stats) meta.stats.rescuedTotal++; }
+    } else {
+      S.xp++; S.runXp = (S.runXp || 0) + 1;
+      if (meta.stats) meta.stats.xpTotal = (meta.stats.xpTotal || 0) + 1;
+    }
+    c.dead = true;
+  }
+  S.coins = S.coins.filter(c => !c.dead);
+}
+function serializeRun() {
+  if (!S) return null;
+  settleFlyCoins();
+  noteRunStats();
+  return {
+    v: SAVE_FORMAT, savedAt: Date.now(),
+    cols: cfg.cols, rows: cfg.rows, seed: S.seed,
+    time: S.time, gold: S.gold, xp: S.xp, level: S.level,
+    runXp: S.runXp, runGold: S.runGold,
+    commander: S.commander, scoutBonusTaken: S.scoutBonusTaken,
+    runUnits: S.runUnits,
+    runUnlocks: (S.runUnlocks || []).map(a => a.id),
+    weapons: S.weapons, capacity: S.capacity, passives: S.passives,
+    wallBlocks: S.wallBlocks, redWeapons: S.redWeapons, redGold: S.redGold,
+    destroyed: S.destroyed, destroyedBlue: S.destroyedBlue,
+    turrets: S.turrets, waypoints: S.waypoints, rescue: S.rescue,
+    meteor: S.meteor, flood: S.flood,
+    coins: (S.coins || []).filter(c => c.state === 'idle'),
+    unlocked: S.unlocked, lastBanked: S.lastBanked,
+    wave: S.wave, redQueue: S.redQueue, redTimer: S.redTimer, waveBreak: S.waveBreak, redKills: S.redKills,
+    freqMult: S.freqMult,
+    cam: { x: cam.x, y: cam.y, zoom: cam.zoom },
+    cells: u8ToB64(S.cells), hp: u8ToB64(S.hp), maxhp: u8ToB64(S.maxhp),
+    shade: u8ToB64(S.shade), goldNug: u8ToB64(S.goldNug),
+    growN: u8ToB64(S.growN), growBy: u8ToB64(S.growBy), growT: f32ToB64(S.growT),
+    noHarvest: u8ToB64(S.noHarvest), harvT: f32ToB64(S.harvT),
+    ocean: u8ToB64(S.ocean), beach: u8ToB64(S.beach), grass: u8ToB64(S.grass),
+    grassBand: S.grassBand ? u8ToB64(S.grassBand) : null,
+    fogRevealed: u8ToB64(S.fogRevealed),
+  };
+}
+function saveRun() {
+  if (!canSave()) return false;
+  try {
+    const data = serializeRun();
+    if (!data) return false;
+    localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+    saveMeta(); // persist the lifetime totals + bests banked by this run
+    return true;
+  } catch (e) { return false; }
+}
+function autoSave() { if (canSave()) saveRun(); }
+function hasSave() {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    if (!raw) return false;
+    const d = JSON.parse(raw);
+    return !!(d && d.v === SAVE_FORMAT && d.cells);
+  } catch (e) { return false; }
+}
+function saveInfo() {
+  try {
+    const d = JSON.parse(localStorage.getItem(SAVE_KEY));
+    if (!d || d.v !== SAVE_FORMAT) return null;
+    return d;
+  } catch (e) { return null; }
+}
+function deleteSave() { try { localStorage.removeItem(SAVE_KEY); } catch (e) {} }
+// Rebuild a fresh run with the saved commander, then overwrite
+// everything from the save (newGame regenerates a random map — the
+// save's cell arrays replace it wholesale). Returns false when there
+// is no save or it fails validation.
+function loadRun() {
+  let d;
+  try { d = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch (e) { return false; }
+  if (!d || d.v !== SAVE_FORMAT || !d.cells) return false;
+  const n = d.cols * d.rows;
+  // newGame banks the previous run's gold into meta.gold — zero it
+  // first, or loading would duplicate the run's gold into the bank
+  // AND keep it in the run.
+  if (S) S.gold = 0;
+  selectedCommander = d.commander || 'scout';
+  newGame();
+  try {
+    cfg.cols = d.cols; cfg.rows = d.rows;
+    const putU8 = (key, b) => { if (b) { const u = b64ToU8(b); if (u.length === n) S[key] = u; } };
+    const putF32 = (key, b) => { if (b) { const f = b64ToF32(b); if (f.length === n) S[key] = f; } };
+    putU8('cells', d.cells); putU8('hp', d.hp); putU8('maxhp', d.maxhp);
+    putU8('shade', d.shade); putU8('goldNug', d.goldNug);
+    putU8('growN', d.growN); putU8('growBy', d.growBy); putF32('growT', d.growT);
+    putU8('noHarvest', d.noHarvest); putF32('harvT', d.harvT);
+    putU8('ocean', d.ocean); putU8('beach', d.beach); putU8('grass', d.grass);
+    if (d.grassBand) putU8('grassBand', d.grassBand);
+    putU8('fogRevealed', d.fogRevealed);
+    // Transient per-cell state is rebuilt fresh at the save's size
+    // (the newGame arrays are sized to the panel's map, which may
+    // differ from the save's).
+    S.fog = new Uint8Array(n).fill(2);
+    S.hitBy = new Uint8Array(n);
+    S.popT = new Float32Array(n).fill(-1); S.popAmp = new Float32Array(n);
+    S.popCol = new Uint8Array(n); S.popDX = new Float32Array(n); S.popDY = new Float32Array(n);
+    S.seed = d.seed; S.time = d.time; S.gold = d.gold; S.xp = d.xp; S.xpShown = d.xp; S.level = d.level;
+    S.runXp = d.runXp || 0; S.runGold = d.runGold || 0;
+    S.commander = d.commander; S.scoutBonusTaken = !!d.scoutBonusTaken;
+    S.runUnits = d.runUnits || {}; S.runUnlocks = (d.runUnlocks || []).map(id => ACHIEVEMENTS.find(a => a.id === id)).filter(Boolean);
+    S.weapons = d.weapons || {}; S.capacity = d.capacity || {}; S.passives = d.passives || {};
+    S.wallBlocks = d.wallBlocks || []; S.redWeapons = d.redWeapons || {}; S.redGold = d.redGold || 0;
+    S.destroyed = d.destroyed || 0; S.destroyedBlue = d.destroyedBlue || 0;
+    S.turrets = d.turrets || []; S.waypoints = d.waypoints || []; S.rescue = d.rescue || { sites: [], civilians: [], rescued: 0, dead: 0, total: 0, byBiome: {} };
+    S.meteor = d.meteor || S.meteor; S.flood = d.flood || S.flood;
+    S.coins = (d.coins || []).filter(c => c.state === 'idle');
+    S.unlocked = d.unlocked || S.unlocked; S.lastBanked = d.lastBanked || 0;
+    S.wave = d.wave || 0; S.redQueue = d.redQueue || []; S.redTimer = d.redTimer || 0; S.waveBreak = d.waveBreak || 0; S.redKills = d.redKills || 0;
+    S.freqMult = d.freqMult || 1;
+    S.paused = false; S.runOver = false; S.placing = null; S.teleporting = null; S.awaitingLevel = false; S.pending = 0; S.rescueCeleb = null;
+    S.projs = []; S.missiles = []; S.beams = []; S.particles = []; S.rings = []; S.dmgNums = []; S.floaters = []; S.sparkles = [];
+    S.chipPulse = 0; S.civChipPulse = 0; S.frame = 0; S.achT = 0; S.saveT = AUTOSAVE_EVERY;
+    // Fog is a pure function of turret positions + revealed cells —
+    // recompute it rather than trusting the save.
+    computeFog();
+    if (d.cam) { cam.x = d.cam.x; cam.y = d.cam.y; cam.zoom = d.cam.zoom; clampCamera(); }
+    updatePlaceBar(); updateHud();
+  } catch (e) { return false; }
+  return true;
 }
 // ---- v202: Commanders (meta progression) ------------------------
 // A commander is a stat boost + an ability, Vampire Survivors style.
@@ -1539,18 +1726,26 @@ function isCommanderUnlocked(id) { return id === 'scout' || !!(meta.commanders &
 // survive longer). Thresholds are starting points to tune. Per-run
 // stats live in S (runXp, runGold, destroyedBlue, rescue.rescued,
 // time); totals live in meta.stats (rescuedTotal, shotDownTotal).
+// v237: unit unlocks are lifetime totals (Sam's call, 2026-11-21 —
+// the per-run versions unlocked everything in a single sitting).
+// Wall/Laser keep survive times; Waypoint is wording only (it
+// already counts dirt camps). Each achievement carries a progress()
+// so the Armory can show x/y on locked rows and the start screen
+// can show the lifetime totals: { have, need, time } — time ones
+// format as m:ss (have = longest run so far).
+const fmtMMSS = s => Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
 const ACHIEVEMENTS = [
-  { id: 'survive5', text: 'Survive 5 minutes', reward: { kind: 'unit', id: 'wall' }, check: () => S && S.time >= 300 },
-  { id: 'dirt3', text: 'Discover all 3 civilians in the Dirt biome', reward: { kind: 'unit', id: 'waypoint' }, check: () => S && S.rescue && S.rescue.sites.length > 0 && S.rescue.sites.filter(s => s.biome === 'dirt').length > 0 && S.rescue.sites.filter(s => s.biome === 'dirt').every(s => s.celebrated) },
-  { id: 'rescue5', text: 'Rescue 5 civilians in a single run', reward: { kind: 'unit', id: 'lantern' }, check: () => S && S.rescue && S.rescue.rescued >= 5 },
-  { id: 'xp200', text: 'Collect 200 XP in a single run', reward: { kind: 'unit', id: 'bloom' }, check: () => S && (S.runXp || 0) >= 200 },
-  { id: 'gold50', text: 'Collect 50 gold in a single run', reward: { kind: 'unit', id: 'gather' }, check: () => S && (S.runGold || 0) >= 50 },
-  { id: 'rock300', text: 'Destroy 300 rock cells in a single run', reward: { kind: 'unit', id: 'mole' }, check: () => S && S.destroyedBlue >= 300 },
-  { id: 'survive12', text: 'Survive 12 minutes', reward: { kind: 'unit', id: 'laser' }, check: () => S && S.time >= 720 },
-  { id: 'survive15', text: 'Survive 15 minutes', reward: { kind: 'commander', id: 'bulwark' }, check: () => S && S.time >= 900 },
-  { id: 'rescue30', text: 'Rescue 30 civilians (total)', reward: { kind: 'commander', id: 'cultivator' }, check: () => meta.stats && meta.stats.rescuedTotal >= 30 },
-  { id: 'xp2000', text: 'Collect 2,000 XP (total)', reward: { kind: 'commander', id: 'gunner' }, check: () => meta.stats && (meta.stats.xpTotal || 0) >= 2000 },
-  { id: 'shoot150', text: 'Shoot down 150 enemy projectiles with a Laser (total)', reward: { kind: 'commander', id: 'warden' }, check: () => meta.stats && meta.stats.shotDownTotal >= 150 },
+  { id: 'survive5', text: 'Survive 5 minutes', reward: { kind: 'unit', id: 'wall' }, check: () => S && S.time >= 300, progress: () => ({ have: (meta.stats && meta.stats.longestRun) || 0, need: 300, time: true }) },
+  { id: 'dirt3', text: 'Discover all 3 camps in the Dirt biome', reward: { kind: 'unit', id: 'waypoint' }, check: () => S && S.rescue && S.rescue.sites.length > 0 && S.rescue.sites.filter(s => s.biome === 'dirt').length > 0 && S.rescue.sites.filter(s => s.biome === 'dirt').every(s => s.celebrated), progress: () => ({ have: (meta.stats && meta.stats.bestDirt) || 0, need: 3 }) },
+  { id: 'rescue5', text: 'Rescue 5 civilians (total)', reward: { kind: 'unit', id: 'lantern' }, check: () => meta.stats && meta.stats.rescuedTotal >= 5, progress: () => ({ have: (meta.stats && meta.stats.rescuedTotal) || 0, need: 5 }) },
+  { id: 'xp500', text: 'Collect 500 XP (total)', reward: { kind: 'unit', id: 'bloom' }, check: () => meta.stats && (meta.stats.xpTotal || 0) >= 500, progress: () => ({ have: (meta.stats && meta.stats.xpTotal) || 0, need: 500 }) },
+  { id: 'gold250', text: 'Collect 250 gold (total)', reward: { kind: 'unit', id: 'gather' }, check: () => meta.stats && (meta.stats.goldTotal || 0) >= 250, progress: () => ({ have: (meta.stats && meta.stats.goldTotal) || 0, need: 250 }) },
+  { id: 'rock1000', text: 'Destroy 1,000 rock (total)', reward: { kind: 'unit', id: 'mole' }, check: () => meta.stats && (meta.stats.rockTotal || 0) >= 1000, progress: () => ({ have: (meta.stats && meta.stats.rockTotal) || 0, need: 1000 }) },
+  { id: 'survive12', text: 'Survive 12 minutes', reward: { kind: 'unit', id: 'laser' }, check: () => S && S.time >= 720, progress: () => ({ have: (meta.stats && meta.stats.longestRun) || 0, need: 720, time: true }) },
+  { id: 'survive15', text: 'Survive 15 minutes', reward: { kind: 'commander', id: 'bulwark' }, check: () => S && S.time >= 900, progress: () => ({ have: (meta.stats && meta.stats.longestRun) || 0, need: 900, time: true }) },
+  { id: 'rescue30', text: 'Rescue 30 civilians (total)', reward: { kind: 'commander', id: 'cultivator' }, check: () => meta.stats && meta.stats.rescuedTotal >= 30, progress: () => ({ have: (meta.stats && meta.stats.rescuedTotal) || 0, need: 30 }) },
+  { id: 'xp2000', text: 'Collect 2,000 XP (total)', reward: { kind: 'commander', id: 'gunner' }, check: () => meta.stats && (meta.stats.xpTotal || 0) >= 2000, progress: () => ({ have: (meta.stats && meta.stats.xpTotal) || 0, need: 2000 }) },
+  { id: 'shoot150', text: 'Shoot down 150 enemy projectiles with a Laser (total)', reward: { kind: 'commander', id: 'warden' }, check: () => meta.stats && meta.stats.shotDownTotal >= 150, progress: () => ({ have: (meta.stats && meta.stats.shotDownTotal) || 0, need: 150 }) },
 ];
 function achievementUnlocked(a) {
   return a.reward.kind === 'unit' ? isUnitUnlocked(a.reward.id) : isCommanderUnlocked(a.reward.id);
@@ -3492,6 +3687,18 @@ function checkWaveClear() {
     S.waveBreak = 4; // seconds of breathing room before the next wave
   }
 }
+// v237: fold this run's bests into the lifetime stats — longest
+// survival (for the survive-condition progress) and most Dirt camps
+// celebrated in one run (for the Waypoint progress). Called at run
+// end and at save time, so quitting mid-run still banks them.
+function noteRunStats() {
+  if (!S || !meta.stats) return;
+  meta.stats.longestRun = Math.max(meta.stats.longestRun || 0, Math.floor(S.time || 0));
+  if (S.rescue && S.rescue.sites) {
+    const dirt = S.rescue.sites.filter(s => s.biome === 'dirt' && s.celebrated).length;
+    meta.stats.bestDirt = Math.max(meta.stats.bestDirt || 0, dirt);
+  }
+}
 // Lose condition: your last turret falls -> run over.
 function checkRunOver() {
   if (S.runOver) return;
@@ -3499,12 +3706,16 @@ function checkRunOver() {
   if (!bluesAlive) {
     S.runOver = true;
     S.paused = true;
+    // v237: game over deletes the save — a dead run can't be continued.
+    deleteSave();
     // v202: final achievement check at run end (a survive-time
     // threshold crossed in the last second still counts).
     checkAchievements();
     // v229: persist the lifetime XP total (it only lives in memory
     // during the run; the unlock path above saves it when Gunner
     // fires, but a run that ends short of 2,000 still banks its XP).
+    // v237: same for the other lifetime totals + longest run / best Dirt.
+    noteRunStats();
     saveMeta();
     S.placing = null;
     placebanner.classList.add('hidden');
@@ -3544,7 +3755,7 @@ function checkRunOver() {
 // The asymmetric enemy: not a base, but damage from a direction.
 // A flood controller fires single staggered shots from the south
 // edge (v166: no storms, no lulls, no waves — one continuous
-// attack from 3:00, ramping faster over time), and from 20:00 a
+// attack from 3:00, ramping faster over time), and from 30:00 a
 // sweeping cannon joins, also from the south. Flood shots damage
 // rock and player territory, and claim what they destroy as flood
 // territory (RED internally, blue on screen after the palette
@@ -3554,17 +3765,19 @@ function checkRunOver() {
 // flood is a controller object on S plus these functions.
 const SURVIVAL = true; // survival branch: player renders red, flood is blue, enemy base off
 const FLOOD_GRACE_DUR = 180; // v183: 3 min grace before the attack starts (was 1 min in v167 — Sam then: the immediate threat is good, make it more immediate; now back to 3 min, Sam 2026-11-10). Prepare your base (XP-bar threat countdown gives the ETA; commander dialog disabled v126)
-const FLOOD_SWEEP_START = 1200; // 20 min run time: the sweeping cannon joins the attack (v137, v150: was 10 min, see floodTick)
+const FLOOD_SWEEP_START = 1800; // v237: 30 min run time — the sweeping cannon joins the attack (was 20 min; the flood now seeds itself at 15:00, so the sweep is the endgame)
+const FLOOD_SEED_START = 900; // v237: 15 min run time — the flood seeds itself (random red chunks along the bottom row; floodSpread grows them from there)
 // Phases (v166, Sam, 2026-11-06 — waves/storms/lulls REMOVED):
 // 0–3 min grace, no attack; at 3:00 the attack starts and never
 // stops — no storms, no lulls, no breather. Single staggered shots
 // from the south only (single columns at random x, like rain, not a
 // simultaneous row), at floodWaveInterval(), which ramps from 5s
-// and halves every 90s of attack time, floored at 0.1s. From
-// 20:00 the sweeping cannon joins, also from the south, also
-// continuous. The flood spread still creeps on its own clock the
-// whole time, storm or not — waiting it out never worked, and now
-// there is nothing to wait out.
+// and halves every 90s of attack time, floored at 0.1s. At 15:00
+// the flood seeds itself along the bottom row (v237) and creeps up
+// through the ocean; from 30:00 the sweeping cannon joins, also
+// from the south, also continuous. The flood spread still creeps on
+// its own clock the whole time, storm or not — waiting it out never
+// worked, and now there is nothing to wait out.
 // (History: v137 storms + 60s lulls, v146 first storm at grace end,
 // v150 sweep at 20:00, v151 starter-side waves, v155 bottom-only,
 // v159 staggered waves at 3:00. All of that storm/lull machinery
@@ -3582,8 +3795,8 @@ const FLOOD_SWEEP_RATE = Math.PI / 2; // rad/s the sweep rotates (90 deg/s)
 // at 3:00) and gets gradually faster as attack time grows: it
 // halves every 100 seconds of attack time (v196: was 60s — Sam:
 // the 12:00 peak came while the base was still early/mid strength,
-// so the ramp is slower now; peak at ~18:00, a couple of minutes
-// before the sweep joins at 20:00). 5s at 3:00, 3.3s at 4:00,
+// so the ramp is slower now; peak at ~18:00, well before the sweep
+// joins at 30:00). 5s at 3:00, 3.3s at 4:00,
 // 2.2s at 5:00, 1.4s at 6:00, 0.95s at 7:00, 0.63s at 8:00,
 // 0.41s at 9:00, 0.27s at 10:00, 0.12s at 12:00, 0.034s at 15:00,
 // floored at 0.01s (~100 shots/s) from about 17:57. There is no
@@ -3712,7 +3925,7 @@ function starterSideDir(x, y) {
 }
 function floodInit(seed) {
   const f = { dir: 1, ex: 0, ey: 0, phase: 'grace', timer: FLOOD_GRACE_DUR,
-              sweep: 0, waveT: 0, sweepT: 0, storms: 0, spreadT: FLOOD_SPREAD_EVERY, cycle: 1, starterDir: 1 }; // v155: south, always
+              sweep: 0, waveT: 0, sweepT: 0, storms: 0, spreadT: FLOOD_SPREAD_EVERY, cycle: 1, starterDir: 1, seeded: false }; // v155: south, always
   const rng = mulberry32(seed + 99991);
   floodPickDir(f, rng);
   // Third call on the seeded stream, so the first storm's dir +
@@ -3733,6 +3946,37 @@ function floodInit(seed) {
 // → flood, fresh and weak (HP 1). No pickup — flood never pays.
 // Runs always (storm or lull): the flood creeps even between storms,
 // so waiting it out doesn't work.
+// v237: the flood seeds itself. At 15:00 run time, 4–7 random
+// chunks (3–7 cells wide) of RED are planted along the bottom row,
+// with gaps between them so the shape is interesting as floodSpread
+// grows it upward through the ocean toward the beach. Before this
+// the flood only existed once the sweep started painting (20:00,
+// now 30:00) — there was no red at all before that. Seeding is
+// once per run (f.seeded); the check below uses === false so a
+// flood object without the field (a test double) never seeds.
+function floodSeed() {
+  const W = cfg.cols, H = cfg.rows, y = H - 1;
+  const n = 4 + Math.floor(Math.random() * 4);
+  for (let k = 0; k < n; k++) {
+    const w = 3 + Math.floor(Math.random() * 5);
+    const x0 = Math.floor(Math.random() * (W - w));
+    let seeded = 0;
+    for (let x = x0; x < x0 + w; x++) {
+      const i = y * W + x;
+      if (S.cells[i] !== EMPTY || turretAt(x, y)) continue;
+      S.cells[i] = RED;
+      S.hp[i] = 0; S.maxhp[i] = 0; S.harvT[i] = 0;
+      S.growN[i] = 0; S.growBy[i] = 0;
+      if (S.noHarvest) S.noHarvest[i] = 0;
+      seeded++;
+    }
+    if (seeded > 0) {
+      const cx = x0 + w / 2;
+      spawnBurst(cx, y + 0.5, CELL_COLORS[RED]);
+      S.rings.push({ x: cx, y: y + 0.5, t: 0, css: CELL_COLORS[RED], dead: false });
+    }
+  }
+}
 function floodSpread() {
   const W = cfg.cols, H = cfg.rows;
   for (let y = 0; y < H; y++) {
@@ -3919,12 +4163,15 @@ function floodTick(dt) {
   }
   // Attack (v166): continuous, no phases after this. Staggered
   // single shots from the south at floodWaveInterval() — the ramp
-  // is the pressure now, not a storm cycle. From 20:00 run time
+  // is the pressure now, not a storm cycle. From 30:00 run time
   // the sweeping cannon joins, also continuous, also from the south.
   // No banner and no pulse while it runs: the flood is visible on
   // the minimap as blue territory creeping in. While gated off, the
   // sweep angle and timer are left alone, so the first sweep shot
   // fires as soon as the gate opens.
+  // v237: at 15:00 the flood seeds itself along the bottom row
+  // (floodSeed) — once per run, then floodSpread grows it.
+  if (f.seeded === false && S.time >= FLOOD_SEED_START) { f.seeded = true; floodSeed(); }
   if (S.time >= FLOOD_SWEEP_START) {
     f.sweepT -= dt;
     if (f.sweepT <= 0) { f.sweepT += FLOOD_SWEEP_EVERY; floodFireAt(f.sweep); }
@@ -4549,7 +4796,7 @@ function damageBlock(idx, dmg, color, sx, sy, vx, vy, crit) {
   if (S.grassBand && S.grassBand[idx]) S.grass[idx] = 1;
   if (S.noHarvest) S.noHarvest[idx] = 0;
   S.destroyed++;
-  if (color === BLUE) S.destroyedBlue++;
+  if (color === BLUE) { S.destroyedBlue++; if (meta.stats) meta.stats.rockTotal = (meta.stats.rockTotal || 0) + 1; } // v237: lifetime rock total (Digger)
   computeFog(); // excavation recomputes unit light (fog only clears, so this is a no-op unless a unit moved since the last call)
   spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[color]); // the block cracks: debris + ring
   if (S.goldNug[idx] && (color === BLUE || !SURVIVAL)) {
@@ -5247,6 +5494,7 @@ document.querySelectorAll('#levelup .card').forEach(card => {
 // Run over -> dive again: fresh map, fresh run.
 document.getElementById('diveagain').addEventListener('click', () => {
   runover.classList.add('hidden');
+  deleteSave(); // v237: a new run abandons the old save (one slot)
   newGame();
   if (SURVIVAL) showCommander();
 });
@@ -5825,6 +6073,11 @@ function updateSparkles(dt) {
   S.sparkles = S.sparkles.filter(s => s.t < s.life);
 }
 function update(dt) {
+  // v237: autosave — every 30s of clean play, the run is written to
+  // the one save slot (autoSave checks canSave, so a level-up open,
+  // a placement, or a teleport skips the tick).
+  S.saveT = (S.saveT || AUTOSAVE_EVERY) - dt;
+  if (S.saveT <= 0) { S.saveT = AUTOSAVE_EVERY; autoSave(); }
   updateUnlockFlies(dt); // v174: card -> bar icon flight after an unlock pick
   // v202: achievements, checked once a second (the survive-time and
   // per-run totals only change on a clock; rescue/laser events call
@@ -6231,6 +6484,7 @@ function update(dt) {
         c.dead = true;
         if (c.kind === 'gold') {
           S.gold++; S.runGold = (S.runGold || 0) + 1; // run gold only — banked to the meta total when the run ends
+          if (meta.stats) meta.stats.goldTotal = (meta.stats.goldTotal || 0) + 1; // v237: lifetime gold total (Harvester)
           S.chipPulse = 1; // the "blurp": chip pops
           S.floaters.push({ x: CHIP_CX + 30, y: CHIP_CY, t: 0 });
         } else if (c.kind === 'civ') {
@@ -6259,6 +6513,7 @@ function update(dt) {
         c.dead = true;
         if (c.kind === 'gold') {
           S.gold++; S.runGold = (S.runGold || 0) + 1; // run gold only — banked to the meta total when the run ends
+          if (meta.stats) meta.stats.goldTotal = (meta.stats.goldTotal || 0) + 1; // v237: lifetime gold total (Harvester)
           S.chipPulse = 1;
           spawnBurst(px, py, '#f5b301');
         } else {
@@ -6279,6 +6534,7 @@ function update(dt) {
         c.dead = true;
         if (c.kind === 'gold') {
           S.gold++; S.runGold = (S.runGold || 0) + 1; // run gold only — banked to the meta total when the run ends
+          if (meta.stats) meta.stats.goldTotal = (meta.stats.goldTotal || 0) + 1; // v237: lifetime gold total (Harvester)
           S.chipPulse = 1;
           S.floaters.push({ x: CHIP_CX + 30, y: CHIP_CY, t: 0 });
           spawnBurst(c.gx, c.gy, '#f5b301');
@@ -7404,10 +7660,19 @@ function updateHud() {
 
 // ---- Main loop ----
 let last = performance.now();
+// v237: level-up-close autosave — when a pick drops pending to 0
+// and the game resumes, the run is saved (the moment the build
+// changes is the moment worth banking). Tracked in frame() because
+// update() doesn't run while the level-up overlay has the game
+// paused. Placement/teleport picks don't fire it (the game stays
+// paused in placement mode, so canSave is false there anyway).
+let wasPending = false;
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   if (!S.paused) update(dt);
+  if (wasPending && S.pending === 0 && !S.paused) autoSave();
+  wasPending = S.pending > 0;
   stepRescueCeleb(dt); // camera swoop to a discovered cave (runs while paused)
   checkRescueDiscovery(); // first fog-clear over a waiting site starts one
   render();
@@ -7660,7 +7925,21 @@ function renderStartScreen() {
   renderTeamToggle();
   renderShopToggles();
   renderPerma();
+  renderLifetimeTotals(); // v237: totals first, so progress is visible before the Armory
+  renderContinue(); // v237: Continue shows only when a save exists
   renderArmory();
+}
+// v237: Continue button — shown only when a run save exists, labelled
+// with the saved run's level + time so you can tell it apart from a
+// fresh run at a glance.
+function renderContinue() {
+  let b;
+  try { b = document.getElementById('contbtn'); } catch (e) { b = null; }
+  if (!b) return;
+  const d = saveInfo();
+  if (!d) { b.classList.add('hidden'); return; }
+  b.textContent = 'Continue · Lv ' + (d.level || 1) + ' · ' + fmtMMSS(d.time || 0);
+  b.classList.remove('hidden');
 }
 // v204: Armory — the unlock collection on the start screen (was
 // "Missions"). One row per unlockable (7 units + 4 commanders, same
@@ -7683,7 +7962,10 @@ function renderArmory() {
     if (a.reward.kind === 'unit') {
       const card = CARD_POOL.find(c => c.kind === 'turret' && c.type === a.reward.id);
       name = (card && card.title) || a.reward.id;
-      desc = done ? ((card && card.sub) || '') : a.text;
+      // v237: locked rows show the condition with x/y progress
+      // ("Rescue 5 civilians (total) — 3 / 5"), so the Armory
+      // itself tells you how close you are.
+      desc = done ? ((card && card.sub) || '') : a.text + ' — ' + fmtProgress(a);
       icon = done ? ((card && card.icon) || '') : '???';
     } else {
       const cmd = COMMANDERS.find(c => c.id === a.reward.id);
@@ -7691,12 +7973,37 @@ function renderArmory() {
       // Commanders: ability + starting items, so the row says what
       // the commander actually does (the ability alone is a tagline
       // for Bulwark — "Built to hold the line.").
-      desc = done ? ((cmd ? cmd.ability + ' ' + cmd.start : '')) : a.text;
+      desc = done ? ((cmd ? cmd.ability + ' ' + cmd.start : '')) : a.text + ' — ' + fmtProgress(a);
       icon = done ? ((cmd && cmd.portrait) || '') : '???';
     }
     return `<div class="armory${done ? ' done' : ''}"><span class="aicon">${icon}</span><span class="aname">${name}</span><span class="adesc">${desc}</span></div>`;
   }).join('');
   list.innerHTML = html;
+}
+// v237: format one achievement's x/y progress for a locked Armory
+// row — counts as "have / need", times as "m:ss / m:ss".
+function fmtProgress(a) {
+  if (!a.progress) return '';
+  const p = a.progress();
+  const have = Math.min(p.have, p.need);
+  return p.time ? fmtMMSS(have) + ' / ' + fmtMMSS(p.need) : have.toLocaleString() + ' / ' + p.need.toLocaleString();
+}
+// v237: lifetime totals on the start screen — every total that gates
+// an unlock, so progress is visible before you start a run. One row
+// of small chips under the title; hidden values stay 0, never blank.
+function renderLifetimeTotals() {
+  let el;
+  try { el = document.getElementById('lifetime-totals'); } catch (e) { el = null; }
+  if (!el) return;
+  const st = (meta && meta.stats) || {};
+  const n = v => (v || 0).toLocaleString();
+  el.innerHTML =
+    '<span>XP <b>' + n(st.xpTotal) + '</b></span>' +
+    '<span>Gold <b>' + n(st.goldTotal) + '</b></span>' +
+    '<span>Rock <b>' + n(st.rockTotal) + '</b></span>' +
+    '<span>Rescued <b>' + n(st.rescuedTotal) + '</b></span>' +
+    '<span>Shot down <b>' + n(st.shotDownTotal) + '</b></span>' +
+    '<span>Longest run <b>' + fmtMMSS(st.longestRun || 0) + '</b></span>';
 }
 // v202: character select — one card per commander (portrait, name,
 // ability, starting items). Locked ones are greyed with a lock and
@@ -7731,6 +8038,9 @@ function showCharSelect() {
 }
 function startRunWithCommander(id) {
   selectedCommander = id;
+  // v237: a new run abandons the old save (one slot — the previous
+  // run is gone once this one starts).
+  deleteSave();
   try { document.getElementById('charscreen').classList.add('hidden'); } catch (e) {}
   newGame();
   if (SURVIVAL) showCommander();
@@ -7897,6 +8207,43 @@ document.getElementById('startbtn').addEventListener('click', () => {
   // game). The run starts when a commander card is picked.
   showCharSelect();
 });
+// v237: Continue — load the saved run and drop straight back into
+// it (unpaused). A failed load leaves the start screen up.
+document.getElementById('contbtn').addEventListener('click', () => {
+  if (!loadRun()) return;
+  try {
+    document.getElementById('startscreen').classList.add('hidden');
+    document.getElementById('charscreen').classList.add('hidden');
+  } catch (e) {}
+});
+// v237: pause button + overlay — Resume, or Save & Quit back to the
+// start screen. The button only opens during clean play (never over
+// a level-up, a placement, a teleport, or a celebration).
+const pausebtn = document.getElementById('pausebtn');
+const pauseoverlay = document.getElementById('pauseoverlay');
+if (pausebtn) {
+  pausebtn.addEventListener('click', () => {
+    if (!S || S.runOver || S.placing || S.teleporting || S.awaitingLevel || S.rescueCeleb) return;
+    try { if (overlay && !overlay.classList.contains('hidden')) return; } catch (e) {}
+    S.paused = true;
+    if (pauseoverlay) pauseoverlay.classList.remove('hidden');
+  });
+}
+document.getElementById('pause-resume').addEventListener('click', () => {
+  if (pauseoverlay) pauseoverlay.classList.add('hidden');
+  S.paused = false;
+});
+document.getElementById('pause-savequit').addEventListener('click', () => {
+  saveRun(); // writes the run now (no-op when it can't save cleanly)
+  if (pauseoverlay) pauseoverlay.classList.add('hidden');
+  try { document.getElementById('startscreen').classList.remove('hidden'); } catch (e) {}
+  S.paused = true;
+  renderStartScreen();
+});
+// v237: closing the tab saves the run first — but only when a real
+// run is in progress (S.time > 0), so the fresh run behind the
+// start screen on boot never overwrites an older save.
+window.addEventListener('pagehide', () => { if (S && S.time > 0 && canSave()) saveRun(); });
 // v206: reset-all-progress trash can (top-left of the start screen).
 // The button only opens the confirm overlay; the Reset button inside
 // it does the wipe, Cancel closes it.
