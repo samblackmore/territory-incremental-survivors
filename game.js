@@ -274,7 +274,7 @@ const LANTERN_COST_STEP = 1; // outposts stay cheap so chaining them to extend t
 // S.capacity (a plain map, NOT in S.weapons stats — Sam: capacity
 // is not a top-left stat row, it lives in the place bar as x/y).
 const UNIT_CAP = {
-  cannon: { start: 1, step: 1, max: 4 },   // 1 -> 5
+  cannon: { start: 1, step: 1, max: 2 },   // 1 -> 3 (Gunner: 1 -> 5, see capMaxPicks)
   bloom: { start: 1, step: 1, max: 3 },    // 1 -> 4
   mole: { start: 1, step: 1, max: 4 },     // 1 -> 5
   gather: { start: 1, step: 1, max: 4 },   // 1 -> 5
@@ -288,6 +288,17 @@ function unitCap(type) {
   const cfg = UNIT_CAP[type];
   if (!cfg) return Infinity; // unknown type: no cap
   return cfg.start + capacityLevel(type) * cfg.step;
+}
+// v239 (Sam): the cannon cap is commander-dependent — Gunner is the
+// cannon-army commander (5 cannons is his fantasy), everyone else tops
+// out at 3. The table above holds the default (non-Gunner) max; this
+// is the one place the exception lives, and both the Capacity-card
+// gate and the pick itself read it.
+function capMaxPicks(type) {
+  const cfg = UNIT_CAP[type];
+  if (!cfg) return Infinity;
+  if (type === 'cannon' && S && S.commander === 'gunner') return 4; // 1 -> 5
+  return cfg.max;
 }
 function unitCount(type) {
   if (type === 'wall') return liveWallBlocks().length;
@@ -1743,8 +1754,8 @@ const ACHIEVEMENTS = [
   { id: 'rock1000', text: 'Destroy 1,000 rock (total)', reward: { kind: 'unit', id: 'mole' }, check: () => meta.stats && (meta.stats.rockTotal || 0) >= 1000, progress: () => ({ have: (meta.stats && meta.stats.rockTotal) || 0, need: 1000 }) },
   { id: 'survive12', text: 'Survive 12 minutes', reward: { kind: 'unit', id: 'laser' }, check: () => S && S.time >= 720, progress: () => ({ have: (meta.stats && meta.stats.longestRun) || 0, need: 720, time: true }) },
   { id: 'survive15', text: 'Survive 15 minutes', reward: { kind: 'commander', id: 'bulwark' }, check: () => S && S.time >= 900, progress: () => ({ have: (meta.stats && meta.stats.longestRun) || 0, need: 900, time: true }) },
-  { id: 'rescue30', text: 'Rescue 30 civilians (total)', reward: { kind: 'commander', id: 'cultivator' }, check: () => meta.stats && meta.stats.rescuedTotal >= 30, progress: () => ({ have: (meta.stats && meta.stats.rescuedTotal) || 0, need: 30 }) },
-  { id: 'xp2000', text: 'Collect 2,000 XP (total)', reward: { kind: 'commander', id: 'gunner' }, check: () => meta.stats && (meta.stats.xpTotal || 0) >= 2000, progress: () => ({ have: (meta.stats && meta.stats.xpTotal) || 0, need: 2000 }) },
+  { id: 'xp1000', text: 'Collect 1,000 XP (total)', reward: { kind: 'commander', id: 'cultivator' }, check: () => meta.stats && (meta.stats.xpTotal || 0) >= 1000, progress: () => ({ have: (meta.stats && meta.stats.xpTotal) || 0, need: 1000 }) }, // v239: XP, not rescues — XP is what a Field grows; Field (500) now always unlocks before Cultivator (1,000) on the same counter, so no bundling code is needed
+  { id: 'rock2000', text: 'Destroy 2,000 rock (total)', reward: { kind: 'commander', id: 'gunner' }, check: () => meta.stats && (meta.stats.rockTotal || 0) >= 2000, progress: () => ({ have: (meta.stats && meta.stats.rockTotal) || 0, need: 2000 }) }, // v239: rock, not XP — breaking rock is what cannons do; damage ladder Digger (1,000) -> Gunner (2,000), same effort as the old 2,000 XP
   { id: 'shoot150', text: 'Shoot down 150 enemy projectiles with a Laser (total)', reward: { kind: 'commander', id: 'warden' }, check: () => meta.stats && meta.stats.shotDownTotal >= 150, progress: () => ({ have: (meta.stats && meta.stats.shotDownTotal) || 0, need: 150 }) },
 ];
 function achievementUnlocked(a) {
@@ -4966,7 +4977,7 @@ function availableCards() {
       const w = S.weapons[c.weapon];
       if (!w) return false;
       if (c.weapon === 'wall' && !(S.unlocked && S.unlocked.wall)) return false;
-      return capacityLevel(c.weapon) < UNIT_CAP[c.weapon].max;
+      return capacityLevel(c.weapon) < capMaxPicks(c.weapon);
     }
     if (c.kind === 'teleport') return hasTeleportTarget();
     return (!c.needs || hasTurretTypes(c.needs));
@@ -5467,7 +5478,7 @@ document.querySelectorAll('#levelup .card').forEach(card => {
       // v201: raise this type's hard cap by one Capacity pick.
       const type = card.dataset.weapon;
       const cfg = UNIT_CAP[type];
-      if (cfg && capacityLevel(type) < cfg.max) {
+      if (cfg && capacityLevel(type) < capMaxPicks(type)) {
         if (!S.capacity) S.capacity = {};
         S.capacity[type] = capacityLevel(type) + 1;
         updatePlaceBar();
