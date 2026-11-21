@@ -1740,23 +1740,24 @@ function isCommanderUnlocked(id) { return id === 'scout' || !!(meta.commanders &
 // v237: unit unlocks are lifetime totals (Sam's call, 2026-11-21 —
 // the per-run versions unlocked everything in a single sitting).
 // Wall/Laser keep survive times; Waypoint is wording only (it
-// already counts dirt camps). Each achievement carries a progress()
-// so the Armory can show x/y on locked rows and the start screen
-// can show the lifetime totals: { have, need, time } — time ones
-// format as m:ss (have = longest run so far).
+// already counts dirt camps). v240: the Armory used to show x/y
+// progress on locked rows (each achievement carried a progress()),
+// but Sam removed the per-row counters — the start-screen lifetime
+// totals are the progress display now, and they read meta.stats
+// directly. So the achievements carry no progress() anymore.
 const fmtMMSS = s => Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
 const ACHIEVEMENTS = [
-  { id: 'survive5', text: 'Survive 5 minutes', reward: { kind: 'unit', id: 'wall' }, check: () => S && S.time >= 300, progress: () => ({ have: (meta.stats && meta.stats.longestRun) || 0, need: 300, time: true }) },
-  { id: 'dirt3', text: 'Discover all 3 camps in the Dirt biome', reward: { kind: 'unit', id: 'waypoint' }, check: () => S && S.rescue && S.rescue.sites.length > 0 && S.rescue.sites.filter(s => s.biome === 'dirt').length > 0 && S.rescue.sites.filter(s => s.biome === 'dirt').every(s => s.celebrated), progress: () => ({ have: (meta.stats && meta.stats.bestDirt) || 0, need: 3 }) },
-  { id: 'rescue5', text: 'Rescue 5 civilians (total)', reward: { kind: 'unit', id: 'lantern' }, check: () => meta.stats && meta.stats.rescuedTotal >= 5, progress: () => ({ have: (meta.stats && meta.stats.rescuedTotal) || 0, need: 5 }) },
-  { id: 'xp500', text: 'Collect 500 XP (total)', reward: { kind: 'unit', id: 'bloom' }, check: () => meta.stats && (meta.stats.xpTotal || 0) >= 500, progress: () => ({ have: (meta.stats && meta.stats.xpTotal) || 0, need: 500 }) },
-  { id: 'gold250', text: 'Collect 250 gold (total)', reward: { kind: 'unit', id: 'gather' }, check: () => meta.stats && (meta.stats.goldTotal || 0) >= 250, progress: () => ({ have: (meta.stats && meta.stats.goldTotal) || 0, need: 250 }) },
-  { id: 'rock1000', text: 'Destroy 1,000 rock (total)', reward: { kind: 'unit', id: 'mole' }, check: () => meta.stats && (meta.stats.rockTotal || 0) >= 1000, progress: () => ({ have: (meta.stats && meta.stats.rockTotal) || 0, need: 1000 }) },
-  { id: 'survive12', text: 'Survive 12 minutes', reward: { kind: 'unit', id: 'laser' }, check: () => S && S.time >= 720, progress: () => ({ have: (meta.stats && meta.stats.longestRun) || 0, need: 720, time: true }) },
-  { id: 'survive15', text: 'Survive 15 minutes', reward: { kind: 'commander', id: 'bulwark' }, check: () => S && S.time >= 900, progress: () => ({ have: (meta.stats && meta.stats.longestRun) || 0, need: 900, time: true }) },
-  { id: 'xp1000', text: 'Collect 1,000 XP (total)', reward: { kind: 'commander', id: 'cultivator' }, check: () => meta.stats && (meta.stats.xpTotal || 0) >= 1000, progress: () => ({ have: (meta.stats && meta.stats.xpTotal) || 0, need: 1000 }) }, // v239: XP, not rescues — XP is what a Field grows; Field (500) now always unlocks before Cultivator (1,000) on the same counter, so no bundling code is needed
-  { id: 'rock2000', text: 'Destroy 2,000 rock (total)', reward: { kind: 'commander', id: 'gunner' }, check: () => meta.stats && (meta.stats.rockTotal || 0) >= 2000, progress: () => ({ have: (meta.stats && meta.stats.rockTotal) || 0, need: 2000 }) }, // v239: rock, not XP — breaking rock is what cannons do; damage ladder Digger (1,000) -> Gunner (2,000), same effort as the old 2,000 XP
-  { id: 'shoot150', text: 'Shoot down 150 enemy projectiles with a Laser (total)', reward: { kind: 'commander', id: 'warden' }, check: () => meta.stats && meta.stats.shotDownTotal >= 150, progress: () => ({ have: (meta.stats && meta.stats.shotDownTotal) || 0, need: 150 }) },
+  { id: 'survive5', text: 'Survive 5 minutes', reward: { kind: 'unit', id: 'wall' }, check: () => S && S.time >= 300 },
+  { id: 'dirt3', text: 'Discover all 3 camps in the Dirt biome', reward: { kind: 'unit', id: 'waypoint' }, check: () => S && S.rescue && S.rescue.sites.length > 0 && S.rescue.sites.filter(s => s.biome === 'dirt').length > 0 && S.rescue.sites.filter(s => s.biome === 'dirt').every(s => s.celebrated) },
+  { id: 'rescue5', text: 'Rescue 5 civilians (total)', reward: { kind: 'unit', id: 'lantern' }, check: () => meta.stats && meta.stats.rescuedTotal >= 5 },
+  { id: 'xp500', text: 'Collect 500 XP (total)', reward: { kind: 'unit', id: 'bloom' }, check: () => meta.stats && (meta.stats.xpTotal || 0) >= 500 },
+  { id: 'gold250', text: 'Collect 250 gold (total)', reward: { kind: 'unit', id: 'gather' }, check: () => meta.stats && (meta.stats.goldTotal || 0) >= 250 },
+  { id: 'rock1000', text: 'Destroy 1,000 rock (total)', reward: { kind: 'unit', id: 'mole' }, check: () => meta.stats && (meta.stats.rockTotal || 0) >= 1000 },
+  { id: 'survive12', text: 'Survive 12 minutes', reward: { kind: 'unit', id: 'laser' }, check: () => S && S.time >= 720 },
+  { id: 'survive15', text: 'Survive 15 minutes', reward: { kind: 'commander', id: 'bulwark' }, check: () => S && S.time >= 900 },
+  { id: 'xp1000', text: 'Collect 1,000 XP (total)', reward: { kind: 'commander', id: 'cultivator' }, check: () => meta.stats && (meta.stats.xpTotal || 0) >= 1000 }, // v239: XP, not rescues — XP is what a Field grows; Field (500) now always unlocks before Cultivator (1,000) on the same counter, so no bundling code is needed
+  { id: 'rock2000', text: 'Destroy 2,000 rock (total)', reward: { kind: 'commander', id: 'gunner' }, check: () => meta.stats && (meta.stats.rockTotal || 0) >= 2000 }, // v239: rock, not XP — breaking rock is what cannons do; damage ladder Digger (1,000) -> Gunner (2,000), same effort as the old 2,000 XP
+  { id: 'shoot150', text: 'Shoot down 150 enemy projectiles with a Laser (total)', reward: { kind: 'commander', id: 'warden' }, check: () => meta.stats && meta.stats.shotDownTotal >= 150 },
 ];
 function achievementUnlocked(a) {
   return a.reward.kind === 'unit' ? isUnitUnlocked(a.reward.id) : isCommanderUnlocked(a.reward.id);
@@ -7973,10 +7974,10 @@ function renderArmory() {
     if (a.reward.kind === 'unit') {
       const card = CARD_POOL.find(c => c.kind === 'turret' && c.type === a.reward.id);
       name = (card && card.title) || a.reward.id;
-      // v237: locked rows show the condition with x/y progress
-      // ("Rescue 5 civilians (total) — 3 / 5"), so the Armory
-      // itself tells you how close you are.
-      desc = done ? ((card && card.sub) || '') : a.text + ' — ' + fmtProgress(a);
+      // v240 (Sam): locked rows show just the condition text — no
+      // per-row x/y counter. The start-screen lifetime totals are
+      // the progress display; run-time unlocks are intuitive as-is.
+      desc = done ? ((card && card.sub) || '') : a.text;
       icon = done ? ((card && card.icon) || '') : '???';
     } else {
       const cmd = COMMANDERS.find(c => c.id === a.reward.id);
@@ -7984,20 +7985,12 @@ function renderArmory() {
       // Commanders: ability + starting items, so the row says what
       // the commander actually does (the ability alone is a tagline
       // for Bulwark — "Built to hold the line.").
-      desc = done ? ((cmd ? cmd.ability + ' ' + cmd.start : '')) : a.text + ' — ' + fmtProgress(a);
+      desc = done ? ((cmd ? cmd.ability + ' ' + cmd.start : '')) : a.text;
       icon = done ? ((cmd && cmd.portrait) || '') : '???';
     }
     return `<div class="armory${done ? ' done' : ''}"><span class="aicon">${icon}</span><span class="aname">${name}</span><span class="adesc">${desc}</span></div>`;
   }).join('');
   list.innerHTML = html;
-}
-// v237: format one achievement's x/y progress for a locked Armory
-// row — counts as "have / need", times as "m:ss / m:ss".
-function fmtProgress(a) {
-  if (!a.progress) return '';
-  const p = a.progress();
-  const have = Math.min(p.have, p.need);
-  return p.time ? fmtMMSS(have) + ' / ' + fmtMMSS(p.need) : have.toLocaleString() + ' / ' + p.need.toLocaleString();
 }
 // v237: lifetime totals on the start screen — every total that gates
 // an unlock, so progress is visible before you start a run. One row
