@@ -261,16 +261,14 @@ function cannonDmgMaxed() {
 // (early resources), Digger 4 (early exploration), Waypoint 5 (cannon
 // aiming) — the flood starts at 3 min, so you need cheap options before
 // you can level the cannon.
-const UNIT_COST = { cannon: 10, mole: 4, bloom: 3, gather: 6, lantern: 2, wall: 2, laser: 5, waypoint: 5 };
-// v241 (Sam): each cannon you own adds 10 gold to the next one's price.
-// Gold income snowballs with each cannon (each one doubles your break
-// rate), so a flat cost that gates the 2nd cannon to ~15 min would let
-// the 3rd follow ~3 min later. With the step: 2nd ~25 gold (~16 min),
-// 3rd ~40 (~23 min), 4th ~55, 5th ~70 (plus +1 per Cannon stat
-// level, as before). The 100-gold flat cost Sam floated would gate the
-// 2nd cannon to ~30 min instead. Cannon only — other units keep the
-// v201 level-based cost.
-const CANNON_COST_STEP = 10;
+const UNIT_COST = { cannon: 100, mole: 4, bloom: 3, gather: 6, lantern: 2, wall: 2, laser: 5, waypoint: 5 };
+// v242 (Sam): hardcore — every additional cannon is a flat 100 gold, no
+// stat-level adder, no per-cannon step. He wants to focus on other
+// incremental upgrades before doubling up. The v241 escalation (+10 per
+// cannon owned) is gone. By the gold-drop calculation the 2nd cannon
+// now gates to ~30 min, and that is the point — a deliberate late-game
+// purchase, not a 15-min one. Cannon only: other units keep the v201
+// level-based cost (base + 1 per stat level).
 const UNIT_COST_STEP = 5;
 const LANTERN_COST_STEP = 1; // outposts stay cheap so chaining them to extend the base is affordable
 // v201 (Sam): unit capacity — a hard cap per type, starting at 1
@@ -354,10 +352,9 @@ function unitCost(type) {
   if (w && w.stats) {
     for (const k in w.stats) lv += w.stats[k] || 0;
   }
-  // v241: cannon price climbs with the army — see CANNON_COST_STEP.
-  // unitCount counts living BLUE cannons (the starter is 1), so the
-  // 2nd cannon pays one step, the 3rd two, and so on.
-  if (type === 'cannon') return UNIT_COST[type] + lv + CANNON_COST_STEP * unitCount('cannon');
+  // v242: cannon is a flat 100 gold — see the UNIT_COST comment. No
+  // stat-level adder, no escalation: the place bar shows exactly 100.
+  if (type === 'cannon') return UNIT_COST[type];
   return UNIT_COST[type] + lv;
 }
 // Red mole price: same formula as blue's, counted on living red moles.
@@ -4987,11 +4984,16 @@ function availableCards() {
       // v201: survival only (main is frozen at v85, no Capacity
       // there), gated on owning the type (placed at least once, so
       // S.weapons exists) and below the type's max Capacity picks.
+      // v242 (Sam): also gated on having the current capacity actually
+      // on the board — no levelling up capacity you haven't used yet.
+      // The next Capacity card only shows once the living count has
+      // filled the current cap (e.g. no cap-3 card until 2 are placed).
       if (!SURVIVAL) return false;
       const w = S.weapons[c.weapon];
       if (!w) return false;
       if (c.weapon === 'wall' && !(S.unlocked && S.unlocked.wall)) return false;
-      return capacityLevel(c.weapon) < capMaxPicks(c.weapon);
+      if (capacityLevel(c.weapon) >= capMaxPicks(c.weapon)) return false;
+      return unitCount(c.weapon) >= unitCap(c.weapon);
     }
     if (c.kind === 'teleport') return hasTeleportTarget();
     return (!c.needs || hasTurretTypes(c.needs));
