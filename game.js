@@ -262,6 +262,15 @@ function cannonDmgMaxed() {
 // aiming) — the flood starts at 3 min, so you need cheap options before
 // you can level the cannon.
 const UNIT_COST = { cannon: 10, mole: 4, bloom: 3, gather: 6, lantern: 2, wall: 2, laser: 5, waypoint: 5 };
+// v241 (Sam): each cannon you own adds 10 gold to the next one's price.
+// Gold income snowballs with each cannon (each one doubles your break
+// rate), so a flat cost that gates the 2nd cannon to ~15 min would let
+// the 3rd follow ~3 min later. With the step: 2nd ~25 gold (~16 min),
+// 3rd ~40 (~23 min), 4th ~55, 5th ~70 (plus +1 per Cannon stat
+// level, as before). The 100-gold flat cost Sam floated would gate the
+// 2nd cannon to ~30 min instead. Cannon only — other units keep the
+// v201 level-based cost.
+const CANNON_COST_STEP = 10;
 const UNIT_COST_STEP = 5;
 const LANTERN_COST_STEP = 1; // outposts stay cheap so chaining them to extend the base is affordable
 // v201 (Sam): unit capacity — a hard cap per type, starting at 1
@@ -345,6 +354,10 @@ function unitCost(type) {
   if (w && w.stats) {
     for (const k in w.stats) lv += w.stats[k] || 0;
   }
+  // v241: cannon price climbs with the army — see CANNON_COST_STEP.
+  // unitCount counts living BLUE cannons (the starter is 1), so the
+  // 2nd cannon pays one step, the 3rd two, and so on.
+  if (type === 'cannon') return UNIT_COST[type] + lv + CANNON_COST_STEP * unitCount('cannon');
   return UNIT_COST[type] + lv;
 }
 // Red mole price: same formula as blue's, counted on living red moles.
@@ -5091,6 +5104,25 @@ function sortDealtCards(dealt) {
     return 0;
   });
 }
+// v241 (Sam): cards stay unclickable until they have all finished
+// revealing, plus 0.5s — furious resource-tapping was picking cards
+// by accident. The deal staggers one card every CARD_DEAL_STAGGER ms
+// starting at CARD_DEAL_START, each card's .dealt transition runs
+// CARD_REVEAL_MS; the gate lifts last-deal + reveal + buffer. It is a
+// CSS-only gate (pointer-events on #levelup.revealing), so synthetic
+// clicks in tests still work — only real taps are blocked. The timer
+// is cleared and re-armed on every deal, so a fresh deal re-locks.
+const CARD_DEAL_START = 150;
+const CARD_DEAL_STAGGER = 120;
+const CARD_REVEAL_MS = 250;
+const CARD_PICK_BUFFER_MS = 500;
+let cardPickGateTimer = null;
+function armCardPickGate(lastDealDelayMs) {
+  overlay.classList.add('revealing');
+  if (cardPickGateTimer) clearTimeout(cardPickGateTimer);
+  cardPickGateTimer = setTimeout(() => overlay.classList.remove('revealing'),
+    lastDealDelayMs + CARD_REVEAL_MS + CARD_PICK_BUFFER_MS);
+}
 function offerCards() {
   // v149: a new deal always starts in cards view, not map view — a
   // previous View map toggle must not carry over to the next level.
@@ -5243,13 +5275,16 @@ function offerCards() {
     // 'proj'/'pen' pick-handler branches stay for main's shop card.
     el.innerHTML = priceHtml + icon + newTag + '<b>' + title + '</b><span>' + sub + '</span>' + evoLine;
     // Staggered deal: cards appear one by one (prevents accidental taps).
-    setTimeout(() => el.classList.add('dealt'), 150 + k * 120);
+    setTimeout(() => el.classList.add('dealt'), CARD_DEAL_START + k * CARD_DEAL_STAGGER);
   }
   // v204: the Scout bonus Teleport is NO LONGER a 5th card in the
   // deal — it read as if taking it was the only upgrade. It's a
   // dedicated screen after the level-up now (see
   // maybeShowCommanderBonus, fired when the XP pick finishes).
   // The 5th slot (#xpcard-bonus) is gone; the deal is 4 cards only.
+  // v241: lock the cards until the last one has finished revealing
+  // (plus 0.5s) — see armCardPickGate above.
+  if (sorted.length) armCardPickGate(CARD_DEAL_START + (sorted.length - 1) * CARD_DEAL_STAGGER);
 }
 // v204: commander bonus — a dedicated screen AFTER the level-up,
 // for the Scout's every-3-levels bonus Teleport. The 5th card in
@@ -5354,8 +5389,10 @@ function offerShopCards() {
     el.innerHTML = `<div class="price">${p.cost}<span class="coin"></span></div>` +
       `<div class="icon">${p.icon || ''}</div>` + newTag + '<b>' + title + '</b><span>' + sub + '</span>';
     // Deal after the XP row (cascade continues: slots 3, 4).
-    setTimeout(() => el.classList.add('dealt'), 150 + (3 + j) * 120);
+    setTimeout(() => el.classList.add('dealt'), CARD_DEAL_START + (3 + j) * CARD_DEAL_STAGGER);
   }
+  // v241: same reveal gate as the XP row (see armCardPickGate).
+  if (picks.length) armCardPickGate(CARD_DEAL_START + (3 + picks.length - 1) * CARD_DEAL_STAGGER);
 }
 
 document.querySelectorAll('#levelup .card').forEach(card => {

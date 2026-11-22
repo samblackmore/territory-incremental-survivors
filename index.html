@@ -547,6 +547,11 @@
     pointer-events: auto;
     transition: opacity 250ms ease, transform 250ms ease;
   }
+  /* v241: while a deal is still revealing (plus 0.5s), no card is
+     tappable — the .dealt rule above would otherwise make each card
+     clickable the moment its slide-in starts. The class is added by
+     armCardPickGate in game.js and removed by its timer. */
+  #levelup.revealing .card { pointer-events: none !important; }
   .card:hover { transform: translateY(-6px); box-shadow: 0 10px 30px rgba(59,130,246,.35); }
   .card .icon { font-size: 56px; line-height: 1; }
   .card .icon svg { width: 56px; height: 56px; }
@@ -965,6 +970,6 @@
 </div>
 
 <!-- bump ?v= on every game.js change: fresh URL busts the Pages/mobile cache -->
-<script src="game.js?v=240"></script>
+<script src="game.js?v=241"></script>
 </body>
 </html>
