@@ -1710,7 +1710,7 @@ function loadRun() {
 const COMMANDERS = [
   { id: 'scout', name: 'Scout', unlocked: true,
     portrait: '<img src="assets/commanders/scout.png" alt="Scout">',
-    ability: 'Every 3 levels, a commander bonus offers a free Teleport — on its own screen, after the level-up.',
+    ability: 'Every level, a commander bonus offers a free Teleport — on its own screen, after the level-up.',
     start: 'Starts with a Waypoint placed, Waypoint unlocked.' },
   { id: 'bulwark', name: 'Bulwark', unlocked: false,
     portrait: '<img src="assets/commanders/bulwark.png" alt="Bulwark">',
@@ -2316,7 +2316,11 @@ function isBaseAdjacent(cx, cy) {
 // a site counts as undiscovered while it still has civilians and its
 // anchor cell is fogged. Once the fog clears you can see the blobs on
 // the main map, so no ? is needed anywhere.
-function rescueSiteUndiscovered(si) {
+// v243 (Sam): ? marks (and the arrow) only for camps in the CURRENT
+// biome — the first biome bottom-up (dirt, mountain, grass, desert)
+// that still has a fogged site with civilians — so the player focuses
+// on short-term objectives, not camps three biomes away.
+function rescueSiteFogged(si) {
   if (!SURVIVAL || !S.rescue || !S.rescue.sites || !S.rescue.sites[si]) return false;
   const site = S.rescue.sites[si];
   const remaining = (S.rescue.civilians || []).some(c => c.site === si);
@@ -2324,15 +2328,31 @@ function rescueSiteUndiscovered(si) {
   if (fogHidden) return false; // x-ray debug: everything reads as clear
   return S.fog[site.y * cfg.cols + site.x] !== 0;
 }
+function currentRescueBiome() {
+  if (!SURVIVAL || !S.rescue || !S.rescue.sites) return null;
+  for (const biome of RESCUE_BIOMES) {
+    for (let si = 0; si < S.rescue.sites.length; si++) {
+      if (siteBiome(si) === biome && rescueSiteFogged(si)) return biome;
+    }
+  }
+  return null;
+}
+function rescueSiteUndiscovered(si) {
+  if (!rescueSiteFogged(si)) return false;
+  const cur = currentRescueBiome();
+  return cur !== null && siteBiome(si) === cur;
+}
 // Nearest cave with civilians still waiting there, measured to the
 // player's base (nearest living BLUE Cannon/Outpost — the same base
 // definition rescue uses). Moving civilians don't count: they're
 // already walking home. Null when no cave has waiting civilians.
 function nearestRescueSite() {
   if (!SURVIVAL || !S.rescue || !S.rescue.sites) return null;
+  const cur = currentRescueBiome(); // v243: the arrow follows the ? marks
   let best = null, bestD = Infinity;
   for (let si = 0; si < S.rescue.sites.length; si++) {
     const site = S.rescue.sites[si];
+    if (cur !== null && siteBiome(si) !== cur) continue; // not the current biome
     const waiting = (S.rescue.civilians || []).some(c => c.site === si && c.state === 'waiting');
     if (!waiting) continue;
     let d = Infinity;
@@ -2983,7 +3003,7 @@ function applyCommanderStart(pc) {
     // marker — the player buys one from the bar (5 gold) when wanted.
     if (S.unlocked) S.unlocked.waypoint = true;
   }
-  // The ability (bonus Teleport every 3 levels) is the rest of the character.
+  // The ability (bonus Teleport every level) is the rest of the character.
 }
 
 function newGame() {
@@ -4223,23 +4243,27 @@ function meteorTargets() {
   // are now ~12k cells, not the 3750-cell 75x50 the old density
   // was tuned for, so showers had grown to 20–45 meteors; Sam:
   // reduce a bit, keep it density-based so it scales with map
-  // size). Now ~7–13 on a current map. Positions are uniform —
-  // anywhere, including fog, starter area, and flood territory —
-  // except the ocean (v166, Sam: a meteor ADD in the ocean drops
+  // size). Now ~7–13 on a current map. Positions are uniform over
+  // the DISCOVERED area only (v243, Sam: no point doing meteors in
+  // fog — the shower should change the terrain you can actually see).
+  // Same density and count as before, just no fog targets; the ocean
+  // is still excluded (v166, Sam: a meteor ADD in the ocean drops
   // a rock that blocks the flood shots coming from the south,
   // gutting the threat — and meteors are strong early).
-  // Retry up to 20 times for a non-ocean cell; if the map is
-  // (nearly) all ocean, that target is skipped.
+  // Retry up to 100 times for a clear non-ocean cell (the discovered
+  // area is a small fraction of the map early on); if the map is
+  // (nearly) all fog or ocean, that target is skipped.
   const area = cfg.cols * cfg.rows;
   const base = 1 + Math.floor(Math.random() * 2) * 0.5; // 1 or 1.5 (half of the old 2 or 3)
   const n = Math.max(1, Math.round(area / 1728 * base));
   const out = [];
   for (let k = 0; k < n; k++) {
     let tx = -1, ty = -1;
-    for (let tries = 0; tries < 20; tries++) {
+    for (let tries = 0; tries < 100; tries++) {
       const x = Math.floor(Math.random() * cfg.cols);
       const y = Math.floor(Math.random() * cfg.rows);
       if (S.ocean && S.ocean[y * cfg.cols + x]) continue;
+      if (S.fog && S.fog[y * cfg.cols + x] !== 0) continue; // v243: fog-clear only
       tx = x; ty = y; break;
     }
     if (tx < 0) continue;
@@ -5298,7 +5322,7 @@ function offerCards() {
 // Fires once per qualifying level-up: scoutBonusTaken is reset at
 // the level-up and set here when the screen shows.
 function maybeShowCommanderBonus() {
-  if (!S || S.commander !== 'scout' || S.level % 3 !== 0 || S.scoutBonusTaken) return false;
+  if (!S || S.commander !== 'scout' || S.scoutBonusTaken) return false;
   if (!hasTeleportTarget()) return false;
   S.scoutBonusTaken = true;
   return showCommanderBonus();
@@ -5309,7 +5333,7 @@ function showCommanderBonus() {
     const p = document.getElementById('cmdbonus-portrait');
     if (p) p.innerHTML = cmd ? cmd.portrait : '';
     const sub = document.getElementById('cmdbonus-sub');
-    if (sub) sub.textContent = (cmd ? cmd.name : 'Scout') + ' — gets an extra Teleport every 3 levels.';
+    if (sub) sub.textContent = (cmd ? cmd.name : 'Scout') + ' — gets an extra Teleport every level.';
     const tp = document.getElementById('cmdbonus-teleport');
     if (tp) { tp.innerHTML = `<div class="icon">${ICONS.teleport}</div><b>Teleport</b><span>Move a Cannon to a new spot.</span>`; tp.classList.add('dealt'); }
     // v232: Skip is a small text button in the HTML now (not a card),
@@ -5542,12 +5566,14 @@ document.querySelectorAll('#levelup .card').forEach(card => {
   });
 });
 
-// Run over -> dive again: fresh map, fresh run.
+// Run over -> dive again: back to the start screen (v243, Sam), not
+// a fresh run — pick a commander (or the same one) from the Armory.
 document.getElementById('diveagain').addEventListener('click', () => {
   runover.classList.add('hidden');
   deleteSave(); // v237: a new run abandons the old save (one slot)
-  newGame();
-  if (SURVIVAL) showCommander();
+  try { document.getElementById('startscreen').classList.remove('hidden'); } catch (e) {}
+  S.paused = true;
+  renderStartScreen();
 });
 
 // Placement: the chosen turret clears its own 1-cell pad and goes live.
@@ -6154,13 +6180,15 @@ function update(dt) {
     // XP stays full while the cards show (so you see what caused the
     // level-up); it resets to zero only when you pick a card.
     S.pending++;
-    // v204 (Scout): every 3rd level grants a BONUS Teleport — no
+    // v204 (Scout): every level grants a BONUS Teleport — no
     // longer a 5th card in the deal (that read as the only pick) and
     // no longer a second pending pick. It's a dedicated screen after
     // the level-up (see maybeShowCommanderBonus); the flag just
     // resets here so the screen can fire once when the XP pick
-    // finishes.
-    if (S.commander === 'scout' && S.level % 3 === 0) {
+    // finishes. v243: every level, not every 3rd — between teleports
+    // you clear so much ground that one hop no longer reaches the
+    // next wall.
+    if (S.commander === 'scout') {
       S.scoutBonusTaken = false;
     }
     S.paused = true;
@@ -7746,20 +7774,34 @@ document.getElementById('d-jumpflood').addEventListener('click', debugJumpToFloo
 
 // ---- Camera controls: 1-finger drag pans, 2-finger pinch zooms, tap hits coins ----
 // touch-action:none on the canvas stops the page scrolling/zooming underneath.
+// v243 (Sam): a tap that lands on a coin also collects every idle
+// coin within TAP_COLLECT_RADIUS of the tap — without Magnet the
+// manual pickup chore hit 25+ taps for one level-up by ~15 min.
+// Magnet still wins: it pulls from anywhere, automatically, while
+// you fight. Fogged coins stay untappable (v166).
+const TAP_COLLECT_RADIUS = 2;
 function tapCoin(sx, sy) {
   const wpt = screenToWorld(sx, sy);
   const cx = wpt.x / CELL_PX, cy = wpt.y / CELL_PX;
+  let hit = false;
   for (let i = S.coins.length - 1; i >= 0; i--) {
     const c = S.coins[i];
     if (c.state !== 'idle') continue;
     if (coinFogged(c)) continue; // v166: fogged coins cannot be tapped
     const dx = c.x - cx, dy = c.y - cy;
-    if (dx * dx + dy * dy < 0.81) { // 0.9-cell tap radius
+    if (dx * dx + dy * dy < 0.81) { hit = true; break; } // 0.9-cell tap radius
+  }
+  if (!hit) return false;
+  for (let i = S.coins.length - 1; i >= 0; i--) {
+    const c = S.coins[i];
+    if (c.state !== 'idle') continue;
+    if (coinFogged(c)) continue;
+    const dx = c.x - cx, dy = c.y - cy;
+    if (dx * dx + dy * dy <= TAP_COLLECT_RADIUS * TAP_COLLECT_RADIUS) {
       c.state = 'fly'; c.sx = c.x; c.sy = c.y; c.t = 0;
-      return true;
     }
   }
-  return false;
+  return true;
 }
 // Waypoint removal (not requested, but a misplaced waypoint would
 // otherwise hijack a cannon's aim for the whole run): tap the exact
