@@ -1710,7 +1710,7 @@ function loadRun() {
 const COMMANDERS = [
   { id: 'scout', name: 'Scout', unlocked: true,
     portrait: '<img src="assets/commanders/scout.png" alt="Scout">',
-    ability: 'Every level, a commander bonus offers a free Teleport — on its own screen, after the level-up.',
+    ability: 'Every 3 levels, a commander bonus offers a free Teleport — on its own screen, after the level-up.',
     start: 'Starts with a Waypoint placed, Waypoint unlocked.' },
   { id: 'bulwark', name: 'Bulwark', unlocked: false,
     portrait: '<img src="assets/commanders/bulwark.png" alt="Bulwark">',
@@ -3003,7 +3003,7 @@ function applyCommanderStart(pc) {
     // marker — the player buys one from the bar (5 gold) when wanted.
     if (S.unlocked) S.unlocked.waypoint = true;
   }
-  // The ability (bonus Teleport every level) is the rest of the character.
+  // The ability (bonus Teleport every 3 levels) is the rest of the character.
 }
 
 function newGame() {
@@ -5322,7 +5322,7 @@ function offerCards() {
 // Fires once per qualifying level-up: scoutBonusTaken is reset at
 // the level-up and set here when the screen shows.
 function maybeShowCommanderBonus() {
-  if (!S || S.commander !== 'scout' || S.scoutBonusTaken) return false;
+  if (!S || S.commander !== 'scout' || S.level % 3 !== 0 || S.scoutBonusTaken) return false;
   if (!hasTeleportTarget()) return false;
   S.scoutBonusTaken = true;
   return showCommanderBonus();
@@ -5333,7 +5333,7 @@ function showCommanderBonus() {
     const p = document.getElementById('cmdbonus-portrait');
     if (p) p.innerHTML = cmd ? cmd.portrait : '';
     const sub = document.getElementById('cmdbonus-sub');
-    if (sub) sub.textContent = (cmd ? cmd.name : 'Scout') + ' — gets an extra Teleport every level.';
+    if (sub) sub.textContent = (cmd ? cmd.name : 'Scout') + ' — gets an extra Teleport every 3 levels.';
     const tp = document.getElementById('cmdbonus-teleport');
     if (tp) { tp.innerHTML = `<div class="icon">${ICONS.teleport}</div><b>Teleport</b><span>Move a Cannon to a new spot.</span>`; tp.classList.add('dealt'); }
     // v232: Skip is a small text button in the HTML now (not a card),
@@ -6180,15 +6180,13 @@ function update(dt) {
     // XP stays full while the cards show (so you see what caused the
     // level-up); it resets to zero only when you pick a card.
     S.pending++;
-    // v204 (Scout): every level grants a BONUS Teleport — no
+    // v204 (Scout): every 3rd level grants a BONUS Teleport — no
     // longer a 5th card in the deal (that read as the only pick) and
     // no longer a second pending pick. It's a dedicated screen after
     // the level-up (see maybeShowCommanderBonus); the flag just
     // resets here so the screen can fire once when the XP pick
-    // finishes. v243: every level, not every 3rd — between teleports
-    // you clear so much ground that one hop no longer reaches the
-    // next wall.
-    if (S.commander === 'scout') {
+    // finishes. v243 tried every level; reverted v244 (felt wrong).
+    if (S.commander === 'scout' && S.level % 3 === 0) {
       S.scoutBonusTaken = false;
     }
     S.paused = true;
@@ -7774,34 +7772,26 @@ document.getElementById('d-jumpflood').addEventListener('click', debugJumpToFloo
 
 // ---- Camera controls: 1-finger drag pans, 2-finger pinch zooms, tap hits coins ----
 // touch-action:none on the canvas stops the page scrolling/zooming underneath.
-// v243 (Sam): a tap that lands on a coin also collects every idle
-// coin within TAP_COLLECT_RADIUS of the tap — without Magnet the
-// manual pickup chore hit 25+ taps for one level-up by ~15 min.
-// Magnet still wins: it pulls from anywhere, automatically, while
-// you fight. Fogged coins stay untappable (v166).
-const TAP_COLLECT_RADIUS = 2;
+// v244: tap radius reverted — v243's 2-cell radius felt wrong early
+// on (too generous before Magnet exists). Back to one coin per tap;
+// a radius as a future upgrade is an open idea, not built.
 function tapCoin(sx, sy) {
   const wpt = screenToWorld(sx, sy);
   const cx = wpt.x / CELL_PX, cy = wpt.y / CELL_PX;
-  let hit = false;
+  // Tap collects the TOP coin at that spot (scan reverse, so a stack
+  // of two coins at one cell centre — e.g. a brown break dropping
+  // both XP and gold — flies the later one, not the first idle one).
   for (let i = S.coins.length - 1; i >= 0; i--) {
     const c = S.coins[i];
     if (c.state !== 'idle') continue;
     if (coinFogged(c)) continue; // v166: fogged coins cannot be tapped
     const dx = c.x - cx, dy = c.y - cy;
-    if (dx * dx + dy * dy < 0.81) { hit = true; break; } // 0.9-cell tap radius
-  }
-  if (!hit) return false;
-  for (let i = S.coins.length - 1; i >= 0; i--) {
-    const c = S.coins[i];
-    if (c.state !== 'idle') continue;
-    if (coinFogged(c)) continue;
-    const dx = c.x - cx, dy = c.y - cy;
-    if (dx * dx + dy * dy <= TAP_COLLECT_RADIUS * TAP_COLLECT_RADIUS) {
+    if (dx * dx + dy * dy < 0.81) { // 0.9-cell tap radius
       c.state = 'fly'; c.sx = c.x; c.sy = c.y; c.t = 0;
+      return true;
     }
   }
-  return true;
+  return false;
 }
 // Waypoint removal (not requested, but a misplaced waypoint would
 // otherwise hijack a cannon's aim for the whole run): tap the exact
