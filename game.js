@@ -7140,6 +7140,16 @@ function render() {
       ctx.beginPath(); ctx.arc(px, py, 5, 0, Math.PI * 2);
       ctx.fillStyle = CIV_PINK; ctx.fill();
       ctx.lineWidth = 1.5; ctx.strokeStyle = '#0b0e16'; ctx.stroke();
+      // HP bar above damaged civilians (v246, Sam: just like the
+      // cannon bar) — only when hurt, own values (CIV_HP = 3).
+      const chp = (c.hp === undefined ? CIV_HP : c.hp);
+      if (chp < CIV_HP) {
+        const w = 24, k = Math.max(0, chp / CIV_HP);
+        ctx.fillStyle = 'rgba(11,14,22,0.8)';
+        ctx.fillRect(px - w / 2, py - 18, w, 5);
+        ctx.fillStyle = k > 0.5 ? '#4ade80' : k > 0.25 ? '#f5b301' : '#ef4444';
+        ctx.fillRect(px - w / 2, py - 18, w * k, 5);
+      }
     }
   }
   // Waypoints (survival only): gold crosshairs, before fog (waypoints
