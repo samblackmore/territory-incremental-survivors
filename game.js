@@ -4236,24 +4236,40 @@ function floodTick(dt) {
 function meteorNextInterval() {
   return METEOR_INTERVAL_MIN + Math.random() * (METEOR_INTERVAL_MAX - METEOR_INTERVAL_MIN);
 }
+// v245: the targetable area — fog-clear, non-ocean cells. The
+// meteor count scales to this, not the whole map, so early showers
+// (small discovered patch) stay sparse. Falls back to the whole
+// map if fog isn't allocated yet.
+function meteorTargetableArea() {
+  if (!S || !S.fog) return cfg.cols * cfg.rows;
+  let n = 0;
+  for (let i = 0; i < cfg.cols * cfg.rows; i++) {
+    if (S.fog[i] === 0 && !(S.ocean && S.ocean[i])) n++;
+  }
+  return n;
+}
 function meteorTargets() {
-  // Count scales with map area: 1–1.5 per 1728 cells (v199: was
-  // 2–3 — Sam: half the density, the showers were leaving too
-  // many holes/walls over time. v171 was 3–5 since v129 — but maps
+  // Count scales with the DISCOVERED area: 1–1.5 per 1728 cells
+  // (v199: was 2–3 — Sam: half the density, the showers were leaving
+  // too many holes/walls over time. v171 was 3–5 since v129 — but maps
   // are now ~12k cells, not the 3750-cell 75x50 the old density
   // was tuned for, so showers had grown to 20–45 meteors; Sam:
   // reduce a bit, keep it density-based so it scales with map
-  // size). Now ~7–13 on a current map. Positions are uniform over
-  // the DISCOVERED area only (v243, Sam: no point doing meteors in
+  // size). v243 restricted targets to fog-clear cells but kept the
+  // count scaled to the WHOLE map, so all 7–11 targets crammed into
+  // the small discovered patch and overlapped (Sam's screenshot,
+  // 2026-11-24). v245: the count is scaled to the targetable area
+  // (fog-clear, non-ocean) instead, so the density feels the same
+  // as before — ~1–2 per shower early, growing to ~7–11 once most
+  // of the map is discovered. Positions are uniform over the
+  // DISCOVERED area only (v243, Sam: no point doing meteors in
   // fog — the shower should change the terrain you can actually see).
-  // Same density and count as before, just no fog targets; the ocean
-  // is still excluded (v166, Sam: a meteor ADD in the ocean drops
-  // a rock that blocks the flood shots coming from the south,
+  // The ocean is still excluded (v166, Sam: a meteor ADD in the ocean
+  // drops a rock that blocks the flood shots coming from the south,
   // gutting the threat — and meteors are strong early).
-  // Retry up to 100 times for a clear non-ocean cell (the discovered
-  // area is a small fraction of the map early on); if the map is
+  // Retry up to 100 times for a clear non-ocean cell; if the map is
   // (nearly) all fog or ocean, that target is skipped.
-  const area = cfg.cols * cfg.rows;
+  const area = meteorTargetableArea();
   const base = 1 + Math.floor(Math.random() * 2) * 0.5; // 1 or 1.5 (half of the old 2 or 3)
   const n = Math.max(1, Math.round(area / 1728 * base));
   const out = [];
