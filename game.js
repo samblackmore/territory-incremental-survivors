@@ -766,6 +766,7 @@ const inFogDist = document.getElementById('d-fogdist');
 const inPopHold = document.getElementById('d-pophold');
 const inPopDur  = document.getElementById('d-popdur');
 const inPopPush = document.getElementById('d-poppush');
+const inPopWhite = document.getElementById('d-popwhite'); // v248: white flash time (s)
 const inRipple  = document.getElementById('d-ripple');
 const inTrail   = document.getElementById('d-trail');
 const inGravity = document.getElementById('d-gravity');
@@ -978,6 +979,7 @@ function rebuildColors() {
 }
 let BLUE_RGB = [239, 68, 68]; // player render color (set by applyTeamColors; default = branch look)
 let RED_RGB = [59, 130, 246]; // enemy render color (set by applyTeamColors; default = branch look)
+const WHITE_RGB = [255, 255, 255]; // hit-flash white (v248)
 // Team colors (switchable, start screen): internal BLUE is always the
 // player, internal RED always the enemy — only the RENDER hues swap.
 // PLAYER_RED true = player red / enemy blue (current survival look);
@@ -1371,11 +1373,16 @@ function cellRGB(x, y) {
     b = Math.round(b + (ac[2] - b) * k);
   }
   const f = popFactor(i);
-  if (f > 0) { // hit flash in the attacker's color, lerping back with the scale
+  if (f > 0) { // hit flash: white at impact, blending to the attacker's
+               // color over popWhite, then lerping back with the scale (v248)
     const fc = S.popCol[i] === RED ? RED_RGB : BLUE_RGB;
-    r = Math.round(r + (fc[0] - r) * f);
-    g = Math.round(g + (fc[1] - g) * f);
-    b = Math.round(b + (fc[2] - b) * f);
+    const w = cfg.popWhite > 0 ? Math.max(0, 1 - S.popT[i] / cfg.popWhite) : 0;
+    const fr = Math.round(fc[0] + (WHITE_RGB[0] - fc[0]) * w);
+    const fg = Math.round(fc[1] + (WHITE_RGB[1] - fc[1]) * w);
+    const fb = Math.round(fc[2] + (WHITE_RGB[2] - fc[2]) * w);
+    r = Math.round(r + (fr - r) * f);
+    g = Math.round(g + (fg - g) * f);
+    b = Math.round(b + (fb - b) * f);
   }
   return [r, g, b];
 }
@@ -1440,6 +1447,7 @@ function readDebug() {
     popHold: clampNum(inPopHold.value, 0, 0.5, 0.03),        // big square hold time (s)
     popDur: clampNum(inPopDur.value, 0.05, 1, 0.1),          // pop shrink time (s)
     popPush: clampNum(inPopPush.value, 0, 1.5, 0.2),         // knockback push (cells)
+    popWhite: clampNum(inPopWhite.value, 0, 0.5, 0.05),      // white flash at impact (s; v248)
     rippleAmp: clampNum(inRipple.value, 0, 1, 0.1),          // neighbor shockwave strength
     trailT: clampNum(inTrail.value, 0, 1, 0.1),               // projectile trail (s)
     gravity: clampNum(inGravity.value, 0, 40, 9),            // particle gravity (cells/s^2)
@@ -1452,7 +1460,7 @@ function readDebug() {
   inTurn.value = cfg.turnRate;
   inCoin.value = cfg.coinChance;
   inPopHold.value = cfg.popHold; inPopDur.value = cfg.popDur;
-  inPopPush.value = cfg.popPush; inRipple.value = cfg.rippleAmp;
+  inPopPush.value = cfg.popPush; inPopWhite.value = cfg.popWhite; inRipple.value = cfg.rippleAmp;
   inTrail.value = cfg.trailT;
   inGravity.value = cfg.gravity;
   inFogDist.value = cfg.fogDist;
@@ -7886,7 +7894,7 @@ function frame(now) {
 
 // ---- Debug wiring: any change restarts the game ----
 [inCols, inRows, inSpeed, inFreq, inArc, inTurn, inCave, inCoin, inSeed,
- inPopHold, inPopDur, inPopPush, inRipple, inTrail, inGravity].forEach(el => {
+ inPopHold, inPopDur, inPopPush, inPopWhite, inRipple, inTrail, inGravity].forEach(el => {
   el.addEventListener('change', newGame);
 });
 document.getElementById('d-restart').addEventListener('click', newGame);
@@ -8072,7 +8080,7 @@ function applyUrlParams() {
   const q = new URLSearchParams(location.search);
   const map = { cols: inCols, rows: inRows, speed: inSpeed, freq: inFreq, arc: inArc,
     turn: inTurn, cave: inCave, seed: inSeed, coin: inCoin,
-    pophold: inPopHold, popdur: inPopDur,
+    pophold: inPopHold, popdur: inPopDur, popwhite: inPopWhite,
     poppush: inPopPush, ripple: inRipple, trail: inTrail, gravity: inGravity,
     terrain: inTerrain, empty: inEmpty, fogdist: inFogDist };
   for (const k of Object.keys(map)) if (q.has(k)) map[k].value = q.get(k);
