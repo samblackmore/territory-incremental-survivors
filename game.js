@@ -6227,10 +6227,10 @@ function spawnSparkle() {
 // both set it, so Continue resumes the same clouds, no jump.
 // The cloud clock is S.time (already saved, frozen when paused).
 const SHADE_SEED_OFFSET = 424242;
-const CLOUD_DRIFT_X = 0.02; // noise-units/sec, mostly horizontal
-const CLOUD_DRIFT_Y = 0.008;
+const CLOUD_DRIFT_X = 0.01; // noise-units/sec, mostly horizontal (v251: halved)
+const CLOUD_DRIFT_Y = 0.004;
 const CLOUD_BREATHE_AMP = 0.08; // slow grow/shrink pulse on the value
-const CLOUD_BREATHE_PERIOD = 90; // seconds
+const CLOUD_BREATHE_PERIOD = 180; // seconds (v251: doubled, half speed)
 const CLOUD_RECOMPUTE_EVERY = 0.25; // seconds between re-samples
 function recomputeShade() {
   if (!S || !S.shade || !S.shadeNoise) return;
