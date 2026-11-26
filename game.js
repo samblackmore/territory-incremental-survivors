@@ -82,6 +82,16 @@ const MAGNET_INTERVAL_BASE = 12;    // seconds between pulls at Lv0 (10 at Lv1, 
 const MAGNET_INTERVAL_STEP = 2;     // seconds shaved per level (v234: was 1 — faster rate, count stays 1 longer)
 const MAGNET_INTERVAL_MIN = 2;      // fastest pull interval, in seconds
 function magnetLevel() { return (S.passives && S.passives.magnet) || 0; }
+// v247: Teleport is a place-bar action (gold button) with 3 radius
+// levels, upgraded by the XP Teleport card. Level 1 = base radius 6,
+// level 2 = 9, level 3 = 12. S.passives.teleport holds the level
+// (unset = 1, the base — a fresh run can already teleport). The
+// level persists in the save via S.passives, like Magnet.
+const TELEPORT_RADII = [6, 9, 12];
+const TELEPORT_MAX_LEVEL = 3;
+const TELEPORT_COST = 5; // gold per move from the place bar (v247)
+function teleportLevel() { return (S.passives && S.passives.teleport) || 1; }
+function teleportRadius() { return TELEPORT_RADII[Math.min(TELEPORT_MAX_LEVEL, teleportLevel()) - 1]; }
 function magnetIntervalAt(lv) { return Math.max(MAGNET_INTERVAL_MIN, MAGNET_INTERVAL_BASE - MAGNET_INTERVAL_STEP * lv); }
 // v234 (Sam: 2-in-1-shot pulls came too early): count stays 1 for
 // Lv1–4, then +1 per level (Lv5 = 2, Lv8 = 5, was 8). The faster
@@ -4972,13 +4982,13 @@ function buildCardPool() { return [
   // run gold — the bridge to a shop unit you can see but can't afford yet.
   // Amount rolls at deal time (3–5): you see what you get before picking.
   { kind: 'gold', title: 'Gold Ore', icon: ICONS.gold },
-  // Teleport: one-time XP-row pick. Pick it, tap a Cannon, tap
-  // inside a gold base circle to move it there (stats kept — the
-  // point is moving an upgraded weapon, not buying a base one).
-  // Gated in availableCards on a living BLUE cannon existing, so
-  // picking it can never leave you with nothing to move.
-  // v139: Cannon only (was Cannon or Laser).
-  { kind: 'teleport', title: 'Teleport', icon: ICONS.teleport, sub: 'Move a Cannon to a new spot.' },
+  // Teleport: v247 — no longer a one-time XP pick. The move itself
+  // is a gold button in the place bar; this card upgrades the
+  // Teleport radius (Lv 1→2→3, radius 6→9→12). Gated in
+  // availableCards on a living BLUE cannon existing and the level
+  // being below max. The sub is overridden at deal time with the
+  // actual radius jump (see offerCards).
+  { kind: 'teleport', title: 'Teleport', icon: ICONS.teleport, sub: 'Teleport further with each move.' },
   { kind: 'steer', mult: 1.3, title: '+30%', icon: ICONS.steer, sub: 'Missile steering', needs: ['rocket'] },
 ]; }
 let CARD_POOL = buildCardPool();
@@ -5035,7 +5045,7 @@ function availableCards() {
       if (capacityLevel(c.weapon) >= capMaxPicks(c.weapon)) return false;
       return unitCount(c.weapon) >= unitCap(c.weapon);
     }
-    if (c.kind === 'teleport') return hasTeleportTarget();
+    if (c.kind === 'teleport') return hasTeleportTarget() && teleportLevel() < TELEPORT_MAX_LEVEL;
     return (!c.needs || hasTurretTypes(c.needs));
   });
   if (SURVIVAL) {
@@ -5240,6 +5250,15 @@ function offerCards() {
     // generic this way; Magnet was the only NEW! card overriding
     // its sub with a stat delta.
     if (p.kind === 'passive' && p.passive === 'magnet' && lv > 0) sub = magnetNextEffect(lv);
+    else if (p.kind === 'teleport') {
+      // v247: radius upgrade — title is the NEW level, sub the radius
+      // jump. First upgrade (Lv 1→2) gets the New! tag, like a first
+      // stat pick (v210).
+      const curLv = teleportLevel();
+      title = `${p.title} <span class="lv">Lv${curLv + 1}</span>`;
+      sub = `Teleport radius ${teleportRadius()} → ${TELEPORT_RADII[curLv]}`;
+      if (curLv === 1) newTag = '<span class="newtag">New!</span>';
+    }
     else if (p.kind === 'stat') {
       // One stat, one chip: title is the stat + its NEW level, sub the effect.
       // The weapon icon says which weapon it belongs to.
@@ -5502,18 +5521,16 @@ document.querySelectorAll('#levelup .card').forEach(card => {
       return;
     }
     if (kind === 'teleport') {
-      // One-time move: like a placement, this returns early — the
-      // pending-- here replaces the generic one at the end, the overlay
-      // hides, and the game stays paused while you pick a weapon, then
-      // a destination. Completion (completeTeleport) re-offers cards
-      // if picks remain, else unpauses (or shows the commander bonus).
-      S.pending--;
-      overlay.classList.add('hidden');
-      updateHud();
-      enterTeleport();
-      return;
-    }
-    if (kind === 'stat') {
+      // v247: Teleport is a place-bar gold button now — this card
+      // upgrades its radius (Lv 1→2→3, radius 6→9→12). No early
+      // return: it falls through to the generic pending-- / resume
+      // below, like a stat pick.
+      if (teleportLevel() < TELEPORT_MAX_LEVEL) {
+        if (!S.passives) S.passives = {};
+        S.passives.teleport = teleportLevel() + 1;
+        updatePlaceBar(); // the bar button shows the new level
+      }
+    } else if (kind === 'stat') {
       // One stat, one chip: fill the next chip on that track (capped).
       const w = S.weapons[card.dataset.weapon];
       const st = card.dataset.stat;
@@ -5652,12 +5669,15 @@ function nearBase(cx, cy, r) {
 // placement (Sam: a Field can't be placed next to a Digger either).
 // Placement's nearBase still counts any living unit for everything
 // else.
-function nearTeleportBase(cx, cy) {
+function nearTeleportBase(cx, cy, r) {
+  // v247: optional radius — Field placement passes none (base
+  // PLACE_RADIUS), teleport destinations pass teleportRadius().
+  const rr = r || PLACE_RADIUS;
   for (const t of S.turrets) {
     if (t.dead || t.color !== BLUE) continue;
     if (t.type !== 'cannon' && t.type !== 'lantern') continue;
     const dx = t.x - cx, dy = t.y - cy;
-    if (dx * dx + dy * dy <= PLACE_RADIUS * PLACE_RADIUS) return true;
+    if (dx * dx + dy * dy <= rr * rr) return true;
   }
   return false;
 }
@@ -5996,8 +6016,12 @@ function placeTurretAt(sx, sy) {
 // selected Cannon itself keeps it; any other occupied cell or invalid
 // ground shows a red ring and stays in the current stage.
 // v139: Cannon only — Lasers are no longer selectable, in pick or dest.
-function enterTeleport() {
-  S.teleporting = { stage: 'pick', unit: null };
+function enterTeleport(fromBar, cost) {
+  // v247: fromBar = the place-bar gold button (cost charged on a
+  // completed move, never on cancel); no args = the Scout bonus
+  // (free) or the old XP card path. The game stays paused only for
+  // the bonus — a bar teleport runs live, like a placement.
+  S.teleporting = { stage: 'pick', unit: null, fromBar: !!fromBar, cost: cost || 0 };
   S.placing = null;
   placeswap.classList.add('hidden'); // swap is for placements, not teleport
   placebanner.innerHTML = 'Tap a Cannon to teleport';
@@ -6037,11 +6061,14 @@ function handleTeleportTap(sx, sy) {
   if (civilianAt(cx, cy)) { teleportRedRing(cx, cy); return; } // civilian crowd: can't land on them
   const pi = cy * cfg.cols + cx;
   const okGround = S.cells[pi] === EMPTY &&
-    (SURVIVAL ? nearTeleportBase(cx, cy) : S.fog[pi] === 0);
+    (SURVIVAL ? nearTeleportBase(cx, cy, teleportRadius()) : S.fog[pi] === 0);
   if (!okGround) { teleportRedRing(cx, cy); return; }
   completeTeleport(tp.unit, cx, cy);
 }
 function completeTeleport(t, cx, cy) {
+  // t is the Cannon being moved; the teleport state (fromBar/cost)
+  // lives on S.teleporting — capture it before clearing.
+  const tp = S.teleporting || {};
   const ox = t.x, oy = t.y;
   spawnBurst(ox + 0.5, oy + 0.5, CELL_COLORS[BLUE]); // leave: burst at origin
   t.x = cx; t.y = cy; t.rx = cx; t.ry = cy; t.moveT = 1; // instant, no glide
@@ -6055,11 +6082,21 @@ function completeTeleport(t, cx, cy) {
   t.isStarter = false;
   spawnBurst(cx + 0.5, cy + 0.5, CELL_COLORS[BLUE]); // arrive: burst at destination
   computeFog(); // unit moved, so its disc reveals at the new spot, like placement
+  // v247: a place-bar teleport charges its gold here, only on a
+  // completed move — cancelling costs nothing. The move was validated
+  // affordable at the button tap, and placements are blocked while
+  // teleporting, so gold can't have dropped below the cost meanwhile.
+  if (tp.fromBar && tp.cost) S.gold = Math.max(0, S.gold - tp.cost);
+  updatePlaceBar();
   S.teleporting = null;
   placebanner.classList.add('hidden');
   placeswap.classList.add('hidden');
   if (!S.runOver) {
-    if (S.pending > 0) {
+    if (tp.fromBar) {
+      // Live-play teleport: the game never paused, so there is no
+      // pending pick to re-offer and nothing to resume — just carry on.
+      // (The bar isn't reachable during a level-up, so pending is 0.)
+    } else if (S.pending > 0) {
       offerCards(); // v154: shop removed from level-up, placements live in the place bar // more picks: fresh XP + shop rows, stays paused
       overlay.classList.remove('hidden');
     } else if (!maybeShowCommanderBonus()) {
@@ -7177,7 +7214,7 @@ function render() {
   if (SURVIVAL && S.placing) {
     discR = S.placing.type === 'lantern' ? OUTPOST_PLACE_RADIUS : PLACE_RADIUS;
     discBases = S.placing.type === 'bloom';
-  } else if (SURVIVAL && S.teleporting && S.teleporting.stage === 'dest') { discR = PLACE_RADIUS; discBases = true; }
+  } else if (SURVIVAL && S.teleporting && S.teleporting.stage === 'dest') { discR = teleportRadius(); discBases = true; }
   if (discR > 0) {
     ctx.save();
     ctx.fillStyle = 'rgba(250, 204, 21, 0.07)';
@@ -7569,6 +7606,7 @@ function render() {
 // (pb-<type>) so the harness stub can provide them; a missing button
 // is skipped, never thrown on.
 const placeBtns = {};
+let teleportPlaceBtn = null; // v247: the place-bar Teleport button (a gold action, not a unit)
 function initPlaceBar() {
   for (const t of PLACEBAR_TYPES) {
     try { placeBtns[t] = document.getElementById('pb-' + t); } catch (e) { placeBtns[t] = null; }
@@ -7605,6 +7643,31 @@ function initPlaceBar() {
     btn._costNum = costNum;
     btn._count = pcount;
     btn.addEventListener('click', () => onPlaceBtn(t));
+  }
+  // v247: Teleport button — a gold action, not a unit, so it is not
+  // in PLACEBAR_TYPES. Same spans built once (v175: never rewrite
+  // innerHTML in updatePlaceBar), same click-to-toggle behaviour.
+  try { teleportPlaceBtn = document.getElementById('pb-teleport'); } catch (e) { teleportPlaceBtn = null; }
+  if (teleportPlaceBtn) {
+    const picon = document.createElement('span');
+    picon.className = 'picon';
+    picon.innerHTML = ICONS.teleport;
+    const pcost = document.createElement('span');
+    pcost.className = 'pcost';
+    const costNum = document.createElement('span');
+    costNum.className = 'pcost-num';
+    const coin = document.createElement('span');
+    coin.className = 'coin';
+    pcost.appendChild(costNum);
+    pcost.appendChild(coin);
+    const pcount = document.createElement('span');
+    pcount.className = 'pcount';
+    teleportPlaceBtn.appendChild(picon);
+    teleportPlaceBtn.appendChild(pcost);
+    teleportPlaceBtn.appendChild(pcount);
+    teleportPlaceBtn._costNum = costNum;
+    teleportPlaceBtn._count = pcount;
+    teleportPlaceBtn.addEventListener('click', () => onTeleportBtn());
   }
   updatePlaceBar();
 }
@@ -7690,6 +7753,19 @@ function updatePlaceBar() {
     btn.classList.toggle('atcap', SURVIVAL && unitCount(t) >= unitCap(t));
     btn.classList.toggle('active', !!(S.placing && S.placing.type === t));
   }
+  // v247: Teleport button — no unlock (always in the bar), hidden
+  // only when there is no living Cannon to move; cost is flat gold,
+  // the count shows the radius level (Lv1/2/3).
+  if (teleportPlaceBtn) {
+    const tpOk = hasTeleportTarget();
+    teleportPlaceBtn.classList.toggle('hidden', !tpOk);
+    if (tpOk) {
+      if (teleportPlaceBtn._costNum) teleportPlaceBtn._costNum.textContent = String(TELEPORT_COST);
+      if (teleportPlaceBtn._count) teleportPlaceBtn._count.textContent = 'Lv' + teleportLevel();
+      teleportPlaceBtn.classList.toggle('unaffordable', S.gold < TELEPORT_COST);
+      teleportPlaceBtn.classList.toggle('active', !!(S.teleporting && S.teleporting.fromBar));
+    }
+  }
 }
 // Tap a place-bar button: if its placement mode is already active,
 // cancel it; if another type is active, switch to this one; if you
@@ -7709,6 +7785,26 @@ function onPlaceBtn(type) {
   // handler has nothing to undo.
   S.placing.moleBundle = false;
   S.placing.cost = unitCost(type);
+  updatePlaceBar();
+}
+// v247: the place-bar Teleport button — a gold action, not a unit.
+// Tap to enter teleport mode (pick a Cannon, then a destination
+// within the Teleport radius); tap again to cancel (free — gold is
+// charged only on a completed move). The game keeps running while
+// you pick, like a placement.
+function onTeleportBtn() {
+  if (!S || !hasTeleportTarget()) return;
+  if (S.teleporting && S.teleporting.fromBar) { cancelTeleport(); return; }
+  if (S.teleporting) return; // a card/bonus teleport is already running
+  if (S.placing) cancelPlacement();
+  if (S.gold < TELEPORT_COST) return;
+  enterTeleport(true, TELEPORT_COST);
+  updatePlaceBar();
+}
+function cancelTeleport() {
+  if (!S || !S.teleporting) return;
+  S.teleporting = null;
+  placebanner.classList.add('hidden');
   updatePlaceBar();
 }
 function updateHud() {
