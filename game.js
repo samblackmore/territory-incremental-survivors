@@ -1239,6 +1239,27 @@ if (typeof Image !== 'undefined') {
   }
 }
 function tileReady(img) { return !!(img && img.complete && img.naturalWidth > 0); }
+// v254: unit sprites — the card icons reused as board sprites (pixel
+// art, transparent backgrounds). Only BLUE non-cannon turrets use them;
+// cannon stays drawn (it rotates), RED stays drawn (team readability),
+// walls are terrain (not turrets). Same URL as the DOM card icons, so
+// the browser reuses the cached image.
+const UNIT_SPRITE_TYPES = ['bloom', 'gather', 'laser', 'mole', 'lantern', 'waypoint'];
+const UNIT_SPRITES = {};
+if (typeof Image !== 'undefined') {
+  for (const type of UNIT_SPRITE_TYPES) {
+    const img = new Image();
+    img.src = 'assets/cards/' + type + '.png';
+    UNIT_SPRITES[type] = img;
+  }
+}
+// The sprite for a turret, or null to keep the drawn shape. BLUE
+// sprite types only; cannon (rotates) and RED (team readability) stay drawn.
+function turretSprite(t) {
+  if (!t || t.color !== BLUE) return null;
+  const img = UNIT_SPRITES[t.type];
+  return (img && tileReady(img)) ? img : null;
+}
 function drawCellTile(img, x, y, shade, tint) {
   if (!TILES_ENABLED) return false; // v162: tiles shelved, flat squares
   if (!tileReady(img)) return false;
@@ -7160,7 +7181,13 @@ function render() {
     ctx.beginPath(); ctx.arc(0, 0, 10, 0, Math.PI * 2); ctx.stroke();
     ctx.fillStyle = col;
     ctx.strokeStyle = '#0b0e16';
-    if (t.type === 'cannon') {
+    // v254: unit sprite — BLUE sprite types use their card icon instead
+    // of the drawn shape. The dark base + team ring stay.
+    const unitSprite = turretSprite(t);
+    if (unitSprite) {
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(unitSprite, -10, -10, 20, 20);
+    } else if (t.type === 'cannon') {
       ctx.rotate(t.angle);
       ctx.beginPath(); ctx.rect(-4, -6, 26, 12); ctx.fill(); ctx.stroke();
     } else if (t.type === 'rocket') {
@@ -7266,10 +7293,18 @@ function render() {
   if (SURVIVAL && S.waypoints) {
     for (const w of S.waypoints) {
       const px = (w.x + 0.5) * CELL_PX, py = (w.y + 0.5) * CELL_PX;
-      ctx.strokeStyle = '#ffd75e'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(px, py, 6, 0, Math.PI * 2); ctx.stroke();
-      ctx.fillStyle = '#ffd75e';
-      ctx.beginPath(); ctx.arc(px, py, 2, 0, Math.PI * 2); ctx.fill();
+      // v254: waypoint sprite — the card icon instead of the gold ring,
+      // falling back to the ring if the image is not ready.
+      const wpSprite = UNIT_SPRITES['waypoint'];
+      if (wpSprite && tileReady(wpSprite)) {
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(wpSprite, px - 8, py - 8, 16, 16);
+      } else {
+        ctx.strokeStyle = '#ffd75e'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(px, py, 6, 0, Math.PI * 2); ctx.stroke();
+        ctx.fillStyle = '#ffd75e';
+        ctx.beginPath(); ctx.arc(px, py, 2, 0, Math.PI * 2); ctx.fill();
+      }
     }
   }
   // Build range (survival, proximity-gated units): while placing, show
