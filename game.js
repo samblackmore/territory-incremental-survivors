@@ -280,7 +280,7 @@ function cannonDmgMaxed() {
 // costs extra, and the price climbs as your army grows. Tunable.
 // Early game is cheap on purpose: Outpost 2 (base expansion), Field 3
 // (early resources), Digger 4 (early exploration), Waypoint 5 (cannon
-// aiming) — the flood starts at 3 min, so you need cheap options before
+// aiming) — the flood starts at 10 min, so you need cheap options before
 // you can level the cannon.
 const UNIT_COST = { cannon: 100, mole: 4, bloom: 3, gather: 6, lantern: 2, wall: 2, laser: 5, waypoint: 5 };
 // v242 (Sam): hardcore — every additional cannon is a flat 100 gold, no
@@ -3865,7 +3865,7 @@ function checkRunOver() {
 // The asymmetric enemy: not a base, but damage from a direction.
 // A flood controller fires single staggered shots from the south
 // edge (v166: no storms, no lulls, no waves — one continuous
-// attack from 3:00, ramping faster over time), and from 30:00 a
+// attack from 10:00, ramping faster over time), and from 30:00 a
 // sweeping cannon joins, also from the south. Flood shots damage
 // rock and player territory, and claim what they destroy as flood
 // territory (RED internally, blue on screen after the palette
@@ -3874,15 +3874,15 @@ function checkRunOver() {
 // No classes in this codebase (plain functions + S state), so the
 // flood is a controller object on S plus these functions.
 const SURVIVAL = true; // survival branch: player renders red, flood is blue, enemy base off
-const FLOOD_GRACE_DUR = 180; // v183: 3 min grace before the attack starts (was 1 min in v167 — Sam then: the immediate threat is good, make it more immediate; now back to 3 min, Sam 2026-11-10). Prepare your base (XP-bar threat countdown gives the ETA; commander dialog disabled v126)
-const FLOOD_SWEEP_START = 1800; // v237: 30 min run time — the sweeping cannon joins the attack (was 20 min; the flood now seeds itself at 15:00, so the sweep is the endgame)
-const FLOOD_SEED_START = 900; // v237: 15 min run time — the flood seeds itself (random red chunks along the bottom row; floodSpread grows them from there)
+const FLOOD_GRACE_DUR = 600; // v256: 10 min grace before the attack starts (was 3 min — Sam 2026-11-25: the first minutes of complete fog, just expanding the base, feel very nice). Prepare your base (XP-bar threat countdown gives the ETA; commander dialog disabled v126)
+const FLOOD_SWEEP_START = 1800; // v237: 30 min run time — the sweeping cannon joins the attack (was 20 min; the flood now seeds itself at 20:00, so the sweep is the endgame)
+const FLOOD_SEED_START = 1200; // v256: 20 min run time — the flood seeds itself (random red chunks along the bottom row; floodSpread grows them from there)
 // Phases (v166, Sam, 2026-11-06 — waves/storms/lulls REMOVED):
-// 0–3 min grace, no attack; at 3:00 the attack starts and never
+// 0–10 min grace, no attack; at 10:00 the attack starts and never
 // stops — no storms, no lulls, no breather. Single staggered shots
 // from the south only (single columns at random x, like rain, not a
 // simultaneous row), at floodWaveInterval(), which ramps from 5s
-// and halves every 90s of attack time, floored at 0.1s. At 15:00
+// and halves every 90s of attack time, floored at 0.1s. At 20:00
 // the flood seeds itself along the bottom row (v237) and creeps up
 // through the ocean; from 30:00 the sweeping cannon joins, also
 // from the south, also continuous. The flood spread still creeps on
@@ -3902,21 +3902,21 @@ const FLOOD_SWEEP_RATE = Math.PI / 2; // rad/s the sweep rotates (90 deg/s)
 // are single columns at random south x positions, staggered like rain
 // going bottom-up — not a simultaneous row across the whole border.
 // Interval starts long (one shot every 5s when the attack starts
-// at 3:00) and gets gradually faster as attack time grows: it
+// at 10:00) and gets gradually faster as attack time grows: it
 // halves every 100 seconds of attack time (v196: was 60s — Sam:
 // the 12:00 peak came while the base was still early/mid strength,
 // so the ramp is slower now; peak at ~18:00, well before the sweep
-// joins at 30:00). 5s at 3:00, 3.3s at 4:00,
-// 2.2s at 5:00, 1.4s at 6:00, 0.95s at 7:00, 0.63s at 8:00,
-// 0.41s at 9:00, 0.27s at 10:00, 0.12s at 12:00, 0.034s at 15:00,
-// floored at 0.01s (~100 shots/s) from about 17:57. There is no
+// joins at 30:00). 5s at 10:00, 3.3s at 11:00,
+// 2.2s at 12:00, 1.4s at 13:00, 0.95s at 14:00, 0.63s at 15:00,
+// 0.41s at 16:00, 0.27s at 17:00, 0.12s at 19:00, 0.034s at 22:00,
+// floored at 0.01s (~100 shots/s) from about 24:57. There is no
 // breather anymore — the ramp is the pressure.
 // Napkin math (75-col board): a shot flies north at 8 cells/s and
 // dies on the first rock/turret/territory it hits — early on that
 // is the cliff after ~40 cells of open ocean/beach, so a shot lives
-// ~5s. Concurrent shots ≈ rate × lifetime: ~1 on screen at 3:00,
-// ~2 at 5:00, ~3 at 6:00, ~5 at 7:00, ~8 at 8:00, ~12 at 9:00,
-// ~18 at 10:00, ~42 at 12:00, ~150 at 15:00, ~500 at 18:00 (and
+// ~5s. Concurrent shots ≈ rate × lifetime: ~1 on screen at 10:00,
+// ~2 at 12:00, ~3 at 13:00, ~5 at 14:00, ~8 at 15:00, ~12 at 16:00,
+// ~18 at 17:00, ~42 at 19:00, ~150 at 22:00, ~500 at 25:00 (and
 // more later, as dug channels and flood-painted ground let shots
 // fly further). At 100 shots/s over 75 columns, each column takes
 // a shot about every 0.75s, so a 20-HP wall cell lasts ~15s of
@@ -4056,7 +4056,7 @@ function floodInit(seed) {
 // → flood, fresh and weak (HP 1). No pickup — flood never pays.
 // Runs always (storm or lull): the flood creeps even between storms,
 // so waiting it out doesn't work.
-// v237: the flood seeds itself. At 15:00 run time, 4–7 random
+// v237: the flood seeds itself. At 20:00 run time, 4–7 random
 // chunks (3–7 cells wide) of RED are planted along the bottom row,
 // with gaps between them so the shape is interesting as floodSpread
 // grows it upward through the ocean toward the beach. Before this
@@ -4279,7 +4279,7 @@ function floodTick(dt) {
   // the minimap as blue territory creeping in. While gated off, the
   // sweep angle and timer are left alone, so the first sweep shot
   // fires as soon as the gate opens.
-  // v237: at 15:00 the flood seeds itself along the bottom row
+  // v237: at 20:00 the flood seeds itself along the bottom row
   // (floodSeed) — once per run, then floodSpread grows it.
   if (f.seeded === false && S.time >= FLOOD_SEED_START) { f.seeded = true; floodSeed(); }
   if (S.time >= FLOOD_SWEEP_START) {
@@ -4524,7 +4524,7 @@ function meteorImpact(tx, ty) {
   if (changed) computeFog();
 }
 
-// Debug only: jump the run clock to the end of grace (3:00) and start
+// Debug only: jump the run clock to the end of grace (10:00) and start
 // the attack immediately (v166: no storms anymore — fire at once,
 // toast hidden, attack counted once). Run time only moves forward,
 // never backwards, so clicking mid-attack restarts it without
