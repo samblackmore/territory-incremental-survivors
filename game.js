@@ -7174,16 +7174,19 @@ function render() {
     const col = CELL_COLORS[t.color];
     ctx.save();
     ctx.translate(px, py);
-    // base
-    ctx.fillStyle = '#10141f';
-    ctx.beginPath(); ctx.arc(0, 0, 10, 0, Math.PI * 2); ctx.fill();
-    ctx.lineWidth = 2; ctx.strokeStyle = col;
-    ctx.beginPath(); ctx.arc(0, 0, 10, 0, Math.PI * 2); ctx.stroke();
+    // v255: the sprite alone — no dark base or team ring behind it (Sam:
+    // it is clear enough the sprites belong to the player). The base +
+    // ring stay for drawn units (cannon, RED, fallback).
+    const unitSprite = turretSprite(t);
+    if (!unitSprite) {
+      // base
+      ctx.fillStyle = '#10141f';
+      ctx.beginPath(); ctx.arc(0, 0, 10, 0, Math.PI * 2); ctx.fill();
+      ctx.lineWidth = 2; ctx.strokeStyle = col;
+      ctx.beginPath(); ctx.arc(0, 0, 10, 0, Math.PI * 2); ctx.stroke();
+    }
     ctx.fillStyle = col;
     ctx.strokeStyle = '#0b0e16';
-    // v254: unit sprite — BLUE sprite types use their card icon instead
-    // of the drawn shape. The dark base + team ring stay.
-    const unitSprite = turretSprite(t);
     if (unitSprite) {
       ctx.imageSmoothingEnabled = false;
       ctx.drawImage(unitSprite, -10, -10, 20, 20);
