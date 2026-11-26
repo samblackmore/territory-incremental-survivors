@@ -22,18 +22,27 @@ const PENETRATE_CHANCE = 0.5;       // per-cell chance a piercing shot keeps goi
 // grows +25% per level after that, capping at 100% — so the chances
 // are staggered: early slots become reliable while later ones are
 // still a gamble. Base 1 projectile always fires, never rolls.
-// Expected count: ~1.25 at Lv1, ~2.2 at Lv3, ~4.2 at Lv5 (was a
-// guaranteed 2 / 4 / 6), with a max of 6 and a min of 1.
+// v249: the same progression stretched over 8 levels (was 5) — the
+// level is scaled to the old 5-level curve (effLv = lv*5/8), so
+// level 8 lands exactly on the old level 5 (max 6 projectiles,
+// expected ~4.2) and each pick is worth less. Expected count:
+// ~1.16 at Lv1, ~1.86 at Lv4, ~4.2 at Lv8, with a max of 6 and a min of 1.
+const PROJ_STRETCH = 5 / 8; // 8-level track replays the old 5-level curve
 function projChanceAt(slot, lv) {
   // slot = the projectile number (2, 3, ...); it unlocks at level
-  // slot-1, at 25%, then +25% per level (25/50/75/100%).
-  return Math.min(1, 0.25 * (lv - slot + 2));
+  // slot-1, at 25%, then +25% per level (25/50/75/100%) — on the
+  // stretched scale, so the same chances arrive at level 8.
+  const effLv = lv * PROJ_STRETCH;
+  return Math.min(1, 0.25 * (effLv - slot + 2));
 }
 // v193: how many projectiles this volley fires — 1 plus a chain of
 // chance rolls, one per extra slot the proj level unlocks.
 function rollProjCount(lv) {
   let n = 1;
-  for (let slot = 2; slot <= lv + 1; slot++) {
+  // Max slot follows the stretched scale (floor(effLv)+1), but never
+  // below 2 — the first pick always at least rolls for a 2nd shot.
+  const maxSlot = Math.max(2, Math.floor(lv * PROJ_STRETCH) + 1);
+  for (let slot = 2; slot <= maxSlot; slot++) {
     if (Math.random() < projChanceAt(slot, lv)) n++;
     else break;
   }
@@ -150,13 +159,15 @@ const STAT_DEFS = {
     { key: 'dmg', name: 'Damage', cap: 5, effect: '+1 max damage, +5% crit' },
     // Projectiles: v193, chance-based like Penetration (Sam: the
     // guaranteed extra projectile per level was ridiculously
-    // overpowered). Each level adds one more MAX projectile, but
-    // every extra one is a chance roll in a chain (projChanceAt /
-    // rollProjCount) — the nerf is the chance, not gold. shopOnly
-    // stays set, but on survival shopOnly stats are free XP stat
-    // cards (see the CARD_POOL filter); on main it still means the
-    // shop-only gold card (v75, unchanged).
-    { key: 'proj', name: 'Projectiles', cap: 5, effect: '+1 projectile (chance of firing)', shopOnly: true },
+    // overpowered). Each level raises the chance of one more
+    // projectile, but every extra one is a chance roll in a chain
+    // (projChanceAt / rollProjCount) — the nerf is the chance, not
+    // gold. v249: stretched 5→8 levels (same endpoint, slower ramp;
+    // same pattern as Rate's v209 stretch). shopOnly stays set, but
+    // on survival shopOnly stats are free XP stat cards (see the
+    // CARD_POOL filter); on main it still means the shop-only gold
+    // card (v75, unchanged).
+    { key: 'proj', name: 'Projectiles', cap: 8, effect: '+1 projectile (chance of firing)', shopOnly: true },
     { key: 'rate', name: 'Fire rate', cap: 8, effect: '+15% fire rate' },
     // Penetration: how many cells one shot pierces (VS pass-through).
     // Base depth 1 (just the first cell); each level adds one more
@@ -5111,14 +5122,14 @@ function availableShopCards() {
     ...c, cost: unitCost(c.type), owned: !!S.weapons[c.type],
   }));
   const cw = S.weapons.cannon;
-  if (cw && cw.stats && (cw.stats.proj || 0) < 5) {
+  if (cw && cw.stats && (cw.stats.proj || 0) < 8) {
     pool.push({ kind: 'proj', weapon: 'cannon', stat: 'proj',
       title: 'Projectiles', icon: ICONS.cannon, cost: projCost(), owned: true });
   }
   return pool;
 }
 // Projectile upgrade price: starts at 10 gold, +5 per level already owned
-// (the shop's unit step) — 10, 15, 20, 25, 30 for the 5 levels.
+// (the shop's unit step) — 10, 15, 20, 25, 30, 35, 40, 45 for the 8 levels (v249).
 function projCost() {
   const w = S.weapons.cannon;
   const lv = w && w.stats ? (w.stats.proj || 0) : 0;
@@ -5558,7 +5569,7 @@ document.querySelectorAll('#levelup .card').forEach(card => {
       // (Affordability was already guarded above; no placement follows.)
       const w = S.weapons.cannon;
       const cost = parseInt(card.dataset.cost || '0', 10);
-      if (w && w.stats && (w.stats.proj || 0) < 5) {
+      if (w && w.stats && (w.stats.proj || 0) < 8) {
         S.gold -= cost;
         w.stats.proj++;
         applyStat(w, 'cannon', 'proj');
