@@ -1707,6 +1707,10 @@ function loadRun() {
     S.popT = new Float32Array(n).fill(-1); S.popAmp = new Float32Array(n);
     S.popCol = new Uint8Array(n); S.popDX = new Float32Array(n); S.popDY = new Float32Array(n);
     S.seed = d.seed; S.time = d.time; S.gold = d.gold; S.xp = d.xp; S.xpShown = d.xp; S.level = d.level;
+    // v250: rebuild the cloud noise from the save's seed (newGame built
+    // it from a random seed) so Continue resumes the same clouds.
+    S.shadeNoise = makeNoise2D(mulberry32(S.seed + SHADE_SEED_OFFSET));
+    S.cloudReT = 0; // re-sample on the next tick
     S.runXp = d.runXp || 0; S.runGold = d.runGold || 0;
     S.commander = d.commander; S.scoutBonusTaken = !!d.scoutBonusTaken;
     S.runUnits = d.runUnits || {}; S.runUnlocks = (d.runUnlocks || []).map(id => ACHIEVEMENTS.find(a => a.id === id)).filter(Boolean);
@@ -3191,6 +3195,11 @@ function newGame() {
   // white ~3 hits ... dark grey ~10 hits
   const cave = genCaves(cfg.cols, cfg.rows, cfg.caveChance, rng);
   const noise = makeNoise2D(rng);
+  // v250: the shade field gets its own dedicated noise stream (seed +
+  // offset), so it can be rebuilt from S.seed on load — the clouds
+  // resume instead of jumping. Rock HP keeps the rng-stream noise.
+  S.shadeNoise = makeNoise2D(mulberry32(seed + SHADE_SEED_OFFSET));
+  S.cloudReT = 0;
   // Raw fbm clusters in the middle (0.16–0.89 on a typical map), so the
   // lightest and darkest rock never appeared. Normalize per map: stretch
   // the observed range to 0–1, so all 8 HP levels show up every seed.
@@ -3216,7 +3225,8 @@ function newGame() {
     for (let x = 0; x < cfg.cols; x++) {
       const i = y * cfg.cols + x;
       // Visual shade for empty cells (Perlin, no gameplay effect).
-      shade[i] = Math.round(noise((x / cfg.cols) * 4.5 + 10, (y / cfg.rows) * 4.5 + 10) * 7);
+      // v250: sampled from the dedicated shade stream (drifts over time).
+      shade[i] = Math.round(S.shadeNoise((x / cfg.cols) * 4.5 + 10, (y / cfg.rows) * 4.5 + 10) * 7);
       if (cave[i]) { cells[i] = EMPTY; continue; }
       cells[i] = WHITE;
       const m = 3 + Math.round(norm(raw[i]) * 7);
@@ -6209,6 +6219,37 @@ function spawnSparkle() {
     }
   }
 }
+// v250: drifting clouds — the Perlin shade field re-samples over time,
+// so the dark patches drift and grow/shrink like cloud shadows. The
+// shade is purely visual (rock HP uses a different field), and the
+// noise lives on its own dedicated stream (seed + SHADE_SEED_OFFSET)
+// so it can be rebuilt from S.seed anywhere — newGame and loadRun
+// both set it, so Continue resumes the same clouds, no jump.
+// The cloud clock is S.time (already saved, frozen when paused).
+const SHADE_SEED_OFFSET = 424242;
+const CLOUD_DRIFT_X = 0.02; // noise-units/sec, mostly horizontal
+const CLOUD_DRIFT_Y = 0.008;
+const CLOUD_BREATHE_AMP = 0.08; // slow grow/shrink pulse on the value
+const CLOUD_BREATHE_PERIOD = 90; // seconds
+const CLOUD_RECOMPUTE_EVERY = 0.25; // seconds between re-samples
+function recomputeShade() {
+  if (!S || !S.shade || !S.shadeNoise) return;
+  const cols = cfg.cols, rows = cfg.rows;
+  const t = S.time || 0;
+  const breathe = CLOUD_BREATHE_AMP * Math.sin((2 * Math.PI * t) / CLOUD_BREATHE_PERIOD);
+  const ox = t * CLOUD_DRIFT_X, oy = t * CLOUD_DRIFT_Y;
+  // Wall cells keep WALL_SHADE (3) — never re-sampled.
+  const wallCells = new Set();
+  for (const b of liveWallBlocks()) for (const ci of (b.cells || [])) wallCells.add(ci);
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      const i = y * cols + x;
+      if (wallCells.has(i)) continue;
+      const v = S.shadeNoise((x / cols) * 4.5 + 10 + ox, (y / rows) * 4.5 + 10 + oy) + breathe;
+      S.shade[i] = Math.round(Math.max(0, Math.min(1, v)) * 7);
+    }
+  }
+}
 function updateSparkles(dt) {
   if (!S) return;
   if (!S.sparkles) S.sparkles = [];
@@ -6227,6 +6268,10 @@ function update(dt) {
   // a placement, or a teleport skips the tick).
   S.saveT = (S.saveT || AUTOSAVE_EVERY) - dt;
   if (S.saveT <= 0) { S.saveT = AUTOSAVE_EVERY; autoSave(); }
+  // v250: drifting clouds — re-sample the shade field a few times a
+  // second; the clock is S.time, so it freezes when paused.
+  S.cloudReT = (S.cloudReT || 0) - dt;
+  if (S.cloudReT <= 0) { S.cloudReT = CLOUD_RECOMPUTE_EVERY; recomputeShade(); }
   updateUnlockFlies(dt); // v174: card -> bar icon flight after an unlock pick
   // v202: achievements, checked once a second (the survive-time and
   // per-run totals only change on a clock; rescue/laser events call
