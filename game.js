@@ -6256,8 +6256,8 @@ function spawnSparkle() {
 // both set it, so Continue resumes the same clouds, no jump.
 // The cloud clock is S.time (already saved, frozen when paused).
 const SHADE_SEED_OFFSET = 424242;
-const CLOUD_DRIFT_X = 0.005; // noise-units/sec, mostly horizontal (v252: halved again)
-const CLOUD_DRIFT_Y = 0.002;
+const CLOUD_DRIFT_X = 0.03; // noise-units/sec — directional clouds (v257): faster lateral slide so the patches blow sideways across the land; the slow breathe underneath is the undulation
+const CLOUD_DRIFT_Y = 0.002; // stays small, so the motion is mostly horizontal
 const CLOUD_BREATHE_AMP = 0.08; // slow grow/shrink pulse on the value
 const CLOUD_BREATHE_PERIOD = 360; // seconds (v252: doubled again, half speed)
 const CLOUD_RECOMPUTE_EVERY = 0.25; // seconds between re-samples
