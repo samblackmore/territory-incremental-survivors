@@ -967,10 +967,14 @@ function rebuildColors() {
   CAVE_CSS = inEmpty.value || '#4caf50';
   CAVE_RGB = hexToRgb(CAVE_CSS);
   // Empty caves get Perlin shades too (purely visual — no gameplay effect).
+  // v253: the darkest shade is now the old 2nd-darkest — the old shade 7
+  // was too dark against dirt. The 8 levels re-space evenly between the
+  // lightest and the new darkest (t runs to 6/7, not 1), so each step is
+  // a bit smaller and every shade sits closer to its neighbours.
   const caveDark = CAVE_RGB.map(v => Math.round(v * 0.55));
   CAVE_SHADES = [];
   for (let s = 0; s < 8; s++) {
-    const t = s / 7;
+    const t = (s / 7) * (6 / 7);
     CAVE_SHADES[s] = [0, 1, 2].map(j => Math.round(CAVE_RGB[j] + (caveDark[j] - CAVE_RGB[j]) * t));
   }
   // Painterly territory shades: player and flood each get 8 elevation
@@ -983,7 +987,7 @@ function rebuildColors() {
   const floodDark = RED_RGB.map(v => Math.round(v * 0.55));
   PLAYER_SHADES = []; FLOOD_SHADES = [];
   for (let s = 0; s < 8; s++) {
-    const t = s / 7;
+    const t = (s / 7) * (6 / 7); // v253: darkest is the old 2nd-darkest (see cave above)
     PLAYER_SHADES[s] = [0, 1, 2].map(j => Math.round(BLUE_RGB[j] + (playerDark[j] - BLUE_RGB[j]) * t));
     FLOOD_SHADES[s] = [0, 1, 2].map(j => Math.round(RED_RGB[j] + (floodDark[j] - RED_RGB[j]) * t));
   }
@@ -1017,9 +1021,10 @@ function applyTeamColors() {
 // Grey rock: the mid-map hard rock. Same Perlin gradient as brown, ~10x the
 // HP (30–100), in cellular-automata chunks. Fixed grey shades (light = soft,
 // charcoal = tough) — no debug picker, grey should always read as grey.
+// v253: darkest is the old 2nd-darkest; the 8 levels re-space evenly.
 const GREY_SHADES = [
-  [229, 231, 235], [209, 213, 219], [156, 163, 175], [107, 114, 128],
-  [75, 85, 99], [55, 65, 81], [31, 41, 55], [17, 24, 39],
+  [229, 231, 235], [201, 204, 209], [172, 177, 184], [144, 150, 158],
+  [116, 122, 132], [88, 95, 106], [59, 68, 81], [31, 41, 55],
 ];
 const MOUNTAIN_BROWN_FILL = 0.42; // v197: CA seed fill for the brown islands left in the mountain biome (grey everywhere else) — ~15% brown, small scattered islands that break the grey up (measured: fill 0.42 -> ~15% coverage, 0.45 -> ~26%)
 const GREY_MIN_DIST = 12;      // v198: cells from the starter with no grey — the central-grey pass that used this is gone, but the rule still holds: the v152 safety net converts any cliff grey within this radius back to easy brown, so the opening is never a 30–100 HP wall (SPAWN_EASY_RADIUS is the same 12)
@@ -1254,19 +1259,22 @@ function drawCellTile(img, x, y, shade, tint) {
 }
 const OCEAN_SHADES = [ // v123: lighter sky blue, centred on the XP orb
   // color (#7dd3fc, shade 2) — light -> dark, so water reads as water,
-  // not as the player's deeper blue or the flood's blue
-  [224, 242, 254], [186, 230, 253], [125, 211, 252], [56, 189, 248],
-  [14, 165, 233], [2, 132, 199], [3, 105, 161], [12, 74, 110],
+  // not as the player's deeper blue or the flood's blue.
+  // v253: darkest is the old 2nd-darkest; the 8 levels re-space evenly.
+  [224, 242, 254], [192, 222, 241], [161, 203, 227], [129, 183, 214],
+  [98, 164, 201], [66, 144, 188], [35, 125, 174], [3, 105, 161],
 ];
 const OCEAN_MINIMAP = '#7dd3fc'; // middle ocean shade = XP orb color, for the minimap
 const BEACH_SHADES = [ // fixed sand yellow, light -> dark (not tied to the empty-color debug picker)
-  [232, 213, 124], [226, 205, 110], [217, 196, 106], [205, 183, 94],
-  [190, 168, 82], [172, 151, 70], [150, 131, 58], [128, 111, 48],
+  // v253: darkest is the old 2nd-darkest; the 8 levels re-space evenly.
+  [232, 213, 124], [220, 201, 115], [209, 190, 105], [197, 178, 96],
+  [185, 166, 86], [173, 154, 77], [162, 143, 67], [150, 131, 58],
 ];
 const BEACH_MINIMAP = '#d9c46a'; // middle beach shade, for the minimap
 const GRASS_SHADES = [ // fixed grass green, light -> dark (distinct from cave green, so the grass layer reads on its own)
-  [139, 195, 74], [130, 182, 69], [121, 170, 65], [112, 157, 60],
-  [103, 145, 55], [94, 132, 51], [85, 120, 46], [76, 107, 41],
+  // v253: darkest is the old 2nd-darkest; the 8 levels re-space evenly.
+  [139, 195, 74], [131, 184, 70], [124, 174, 66], [116, 163, 62],
+  [108, 152, 58], [100, 141, 54], [93, 131, 50], [85, 120, 46],
 ];
 const GRASS_MINIMAP = '#79aa41'; // middle grass shade, for the minimap
 function coastDepths(n, noise, u0) {
